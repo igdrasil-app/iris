@@ -7,6 +7,6 @@ iris is a macOS binary that gives coding agents (Claude Code, Cursor, Codex, Ope
 - No documents beyond README.md and this file. No tests unless a behaviour could break silently and running it by hand would not catch it.
 - `make app` builds and signs `build/Iris.app`; the CLI is the binary inside it. Signing with the Developer ID is not optional: macOS binds permission grants to the bundle id and the signing identity.
 - The binary must never depend on the current directory; agents run it from anywhere.
-- CLI contract: JSON on stdout, errors on stderr with exit code 1, dates in ISO 8601 with the Mac's offset. `--help` is the documentation agents read; keep it complete.
+- CLI contract: JSON on stdout; errors on stderr, exit 1 at runtime and 64 for usage; dates in ISO 8601 with the Mac's offset. `--help` is the documentation agents read; keep it complete.
 - A calendar name that matches nothing is an error, never a silent widening to every calendar.
 - Plain, readable Swift over clever Swift. Comment only what the code does not already say.

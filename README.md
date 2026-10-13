@@ -21,7 +21,7 @@ Agents can already script Apple apps with osascript: hundreds of tokens of Apple
     iris status                                                     # permission state, never prompts
     iris calendar calendars                                         # id, title, writable, source
     iris calendar events                                            # next 7 days, every calendar
-    iris calendar events --from 2026-10-13 --to 2026-10-20 --calendar Jandos
+    iris calendar events --from 2026-10-13 --to 2026-10-20 --calendar Work
 
 Dates in are `2026-10-13`, `2026-10-13T09:00` (local time) or ISO 8601 with an offset; dates out are ISO 8601 in the Mac's zone.
 
