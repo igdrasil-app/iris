@@ -18,7 +18,8 @@ func becomeResponsible() {
     var attr: posix_spawnattr_t? = nil
     posix_spawnattr_init(&attr)
     defer { posix_spawnattr_destroy(&attr) }
-    _ = disclaim(&attr, 1)
+    let rc = disclaim(&attr, 1)
+    guard rc == 0 else { setenv("IRIS_DISCLAIM_FAILED", String(rc), 1); return }
     // SETEXEC replaces this process instead of forking: same pid, same stdin/stdout.
     posix_spawnattr_setflags(&attr, Int16(POSIX_SPAWN_SETEXEC))
 
@@ -46,8 +47,14 @@ func describe(_ status: EKAuthorizationStatus) -> String {
 
 becomeResponsible()
 
-let selfResponsible = ProcessInfo.processInfo.environment["IRIS_RESPONSIBLE"] == "1"
-print("responsible: \(selfResponsible ? "iris" : "host process")")
+// What the process asked for, not what macOS decided; the Privacy pane is the ground truth.
+if getenv("IRIS_RESPONSIBLE") != nil {
+    print("responsible: iris (disclaim requested)")
+} else if let rc = getenv("IRIS_DISCLAIM_FAILED") {
+    print("responsible: host process (disclaim failed, code \(String(cString: rc)))")
+} else {
+    print("responsible: host process")
+}
 print("status: \(describe(EKEventStore.authorizationStatus(for: .event)))")
 if CommandLine.arguments.dropFirst().first == "status" { exit(0) }
 
