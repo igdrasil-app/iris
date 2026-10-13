@@ -8,8 +8,7 @@ import Foundation
 // this for their children with a private spawn attribute; we apply it to ourselves by
 // re-executing in place, so the grant belongs to iris and is shared by every host.
 func becomeResponsible() {
-    let env = ProcessInfo.processInfo.environment
-    if env["IRIS_RESPONSIBLE"] == "1" || env["IRIS_NO_DISCLAIM"] == "1" { return }
+    if getenv("IRIS_RESPONSIBLE") != nil { return }
 
     guard let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "responsibility_spawnattrs_setdisclaim") else { return }
     typealias Disclaim = @convention(c) (UnsafeMutablePointer<posix_spawnattr_t?>, Int32) -> Int32
