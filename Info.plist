@@ -9,7 +9,7 @@
 	<key>CFBundleShortVersionString</key>
 	<string>0.0.1</string>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>2</string>
 	<key>NSCalendarsFullAccessUsageDescription</key>
 	<string>iris reads and writes your calendar on behalf of the agents you run.</string>
 	<key>NSHumanReadableCopyright</key>
