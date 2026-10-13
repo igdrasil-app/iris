@@ -3,7 +3,7 @@ BIN = .build/release/iris
 
 build:
 	swift build -c release
-	codesign --force --options runtime --identifier app.igdrasil.iris --sign "$(IDENTITY)" $(BIN)
+	codesign --force --options runtime --entitlements iris.entitlements --identifier app.igdrasil.iris --sign "$(IDENTITY)" $(BIN)
 	codesign --verify --verbose=1 $(BIN)
 
 clean:
