@@ -31,6 +31,7 @@ func becomeResponsible() {
     argv.append(nil)
     posix_spawn(nil, path, nil, &attr, argv, environ)
     // Only reached if the spawn failed; carry on as an ordinary child process.
+    unsetenv("IRIS_RESPONSIBLE")
 }
 
 func describe(_ status: EKAuthorizationStatus) -> String {
