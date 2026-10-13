@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1a1a1c"/>
+      <stop offset="45%" stop-color="#0b0b0d"/>
+      <stop offset="100%" stop-color="#2a2a2e"/>
+    </linearGradient>
+    <linearGradient id="chrome" gradientUnits="userSpaceOnUse" x1="12" y1="2" x2="12" y2="22">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="22%" stop-color="#e8e8ec"/>
+      <stop offset="48%" stop-color="#c4c4ca"/>
+      <stop offset="72%" stop-color="#a8a8b0"/>
+      <stop offset="100%" stop-color="#9a9aa2"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+  <g transform="translate(80 80) scale(36.0)" stroke="url(#chrome)" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M12 8V4H8" fill="none"/>
+    <rect width="16" height="12" x="4" y="8" rx="2" fill="url(#chrome)"/>
+    <path d="M9 13v2" fill="none" stroke="#0b0b0d"/>
+    <circle cx="15" cy="14" r="1.05" fill="#0b0b0d" stroke="none"/>
+  </g>
+</svg>
