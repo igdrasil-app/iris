@@ -9,4 +9,5 @@ iris is a macOS binary that gives coding agents (Claude Code, Cursor, Codex, Ope
 - The binary must never depend on the current directory; agents run it from anywhere.
 - CLI contract: JSON on stdout; errors on stderr, exit 1 at runtime and 64 for usage; dates in ISO 8601 with the Mac's offset. `--help` is the documentation agents read; keep it complete.
 - A calendar name that matches nothing is an error, never a silent widening to every calendar.
+- Writes change one event per call and print the result. A recurring event needs `--occurrence` or `--span future`; placeholder ids and read-only calendars are refused.
 - Plain, readable Swift over clever Swift. Comment only what the code does not already say.
