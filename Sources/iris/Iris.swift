@@ -20,10 +20,15 @@ struct Iris: AsyncParsableCommand {
 struct Status: ParsableCommand {
     static let configuration = CommandConfiguration(abstract: "Show the calendar permission state. Never prompts.")
 
-    func run() {
-        print("responsible: \(responsibleDescription())")
-        print("status: \(describe(EKEventStore.authorizationStatus(for: .event)))")
+    func run() throws {
+        try emit(StatusInfo(responsible: responsibleDescription(),
+                            calendars: describe(EKEventStore.authorizationStatus(for: .event))))
     }
+}
+
+struct StatusInfo: Encodable {
+    let responsible: String
+    let calendars: String
 }
 
 func describe(_ status: EKAuthorizationStatus) -> String {
