@@ -26,7 +26,7 @@ struct Calendars: AsyncParsableCommand {
 struct Events: AsyncParsableCommand {
     static let configuration = CommandConfiguration(abstract: "List events in a date range, earliest first.")
 
-    @Option(help: "Range start: 2026-10-13, 2026-10-13T09:00 (local time), or ISO 8601 with offset. Default: start of today.")
+    @Option(help: "Range start: 2026-10-13, 2026-10-13T09:00 (local time), or ISO 8601 with an offset or Z, seconds and fractions optional. Default: start of today.")
     var from: String?
 
     @Option(help: "Range end, same formats; a bare date includes that whole day. Default: 7 days after --from.")
@@ -43,8 +43,7 @@ struct Events: AsyncParsableCommand {
         let store = try await grantedStore()
         let (start, end) = try range()
         let scope = try resolveCalendars(calendars, in: store)
-        let predicate = store.predicateForEvents(withStart: start, end: end, calendars: scope)
-        let events = store.events(matching: predicate)
+        let events = fetchEvents(in: store, from: start, to: end, calendars: scope)
             .sorted { $0.startDate < $1.startDate }
             .map(EventInfo.init)
         try emit(events)
@@ -56,6 +55,23 @@ struct Events: AsyncParsableCommand {
         guard start < end else { throw ValidationError("--to must be after --from") }
         return (start, end)
     }
+}
+
+/// EventKit silently caps one predicate at four years, so walk the range in three-year windows.
+/// An event is taken from the window it starts in, so one spanning a boundary is not counted twice;
+/// the first window also keeps events already running at `start`, as a single query would.
+func fetchEvents(in store: EKEventStore, from start: Date, to end: Date, calendars: [EKCalendar]?) -> [EKEvent] {
+    var events: [EKEvent] = []
+    var cursor = start
+    while cursor < end {
+        let next = min(Calendar.current.date(byAdding: .year, value: 3, to: cursor) ?? end, end)
+        let predicate = store.predicateForEvents(withStart: cursor, end: next, calendars: calendars)
+        events += store.events(matching: predicate).filter { event in
+            (cursor == start || event.startDate >= cursor) && (next == end || event.startDate < next)
+        }
+        cursor = next
+    }
+    return events
 }
 
 struct CalendarInfo: Encodable {
@@ -101,7 +117,8 @@ struct IrisError: Error, CustomStringConvertible {
 func grantedStore() async throws -> EKEventStore {
     let store = EKEventStore()
     guard try await store.requestFullAccessToEvents() else {
-        throw IrisError("calendar access denied; allow Iris under System Settings › Privacy & Security › Calendars")
+        let fix = EKEventStore.authorizationStatus(for: .event) == .writeOnly ? "give Iris Full Access" : "allow Iris"
+        throw IrisError("calendar access denied; \(fix) under System Settings › Privacy & Security › Calendars")
     }
     return store
 }
@@ -122,13 +139,13 @@ func resolveCalendars(_ tokens: [String], in store: EKEventStore) throws -> [EKC
     return found
 }
 
-/// A value without an offset is read as local wall-clock time.
+/// ISO 8601 with an offset or Z, seconds and fractions optional; a value without an offset is read as local wall-clock time.
 func parseDate(_ text: String) throws -> Date {
-    let iso = ISO8601DateFormatter()
-    if let date = iso.date(from: text) { return date }
-    iso.formatOptions.insert(.withFractionalSeconds)
-    if let date = iso.date(from: text) { return date }
-    for format in ["yyyy-MM-dd'T'HH:mmXXX", "yyyy-MM-dd'T'HH:mm:ss", "yyyy-MM-dd'T'HH:mm", "yyyy-MM-dd HH:mm", "yyyy-MM-dd"] {
+    let formats = [
+        "yyyy-MM-dd'T'HH:mm:ss.SSSSSSXXXXX", "yyyy-MM-dd'T'HH:mm:ssXXXXX", "yyyy-MM-dd'T'HH:mmXXXXX",
+        "yyyy-MM-dd'T'HH:mm:ss.SSSSSS", "yyyy-MM-dd'T'HH:mm:ss", "yyyy-MM-dd'T'HH:mm", "yyyy-MM-dd",
+    ]
+    for format in formats {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = format
