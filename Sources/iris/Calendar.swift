@@ -41,12 +41,28 @@ struct Events: AsyncParsableCommand {
         guard start < end else { throw ValidationError("--to must be after --from") }
         let store = try await grantedStore()
         let scope = try resolveCalendars(calendars, in: store)
-        let predicate = store.predicateForEvents(withStart: start, end: end, calendars: scope)
-        let events = store.events(matching: predicate)
+        let events = fetchEvents(in: store, from: start, to: end, calendars: scope)
             .sorted { $0.startDate < $1.startDate }
             .map(EventInfo.init)
         try emit(events)
     }
+}
+
+/// EventKit silently caps one predicate at four years, so walk the range in three-year windows.
+/// An event is taken from the window it starts in, so one spanning a boundary is not counted twice;
+/// the first window also keeps events already running at `start`, as a single query would.
+func fetchEvents(in store: EKEventStore, from start: Date, to end: Date, calendars: [EKCalendar]?) -> [EKEvent] {
+    var events: [EKEvent] = []
+    var cursor = start
+    while cursor < end {
+        let next = min(Calendar.current.date(byAdding: .year, value: 3, to: cursor) ?? end, end)
+        let predicate = store.predicateForEvents(withStart: cursor, end: next, calendars: calendars)
+        events += store.events(matching: predicate).filter { event in
+            (cursor == start || event.startDate >= cursor) && (next == end || event.startDate < next)
+        }
+        cursor = next
+    }
+    return events
 }
 
 struct CalendarInfo: Encodable {
