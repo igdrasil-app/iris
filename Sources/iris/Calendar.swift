@@ -134,7 +134,7 @@ func resolveCalendars(_ tokens: [String], in store: EKEventStore) throws -> [EKC
 func parseDate(_ text: String) throws -> Date {
     let formats = [
         "yyyy-MM-dd'T'HH:mm:ss.SSSSSSXXXXX", "yyyy-MM-dd'T'HH:mm:ssXXXXX", "yyyy-MM-dd'T'HH:mmXXXXX",
-        "yyyy-MM-dd'T'HH:mm:ss", "yyyy-MM-dd'T'HH:mm", "yyyy-MM-dd",
+        "yyyy-MM-dd'T'HH:mm:ss.SSSSSS", "yyyy-MM-dd'T'HH:mm:ss", "yyyy-MM-dd'T'HH:mm", "yyyy-MM-dd",
     ]
     for format in formats {
         let formatter = DateFormatter()
