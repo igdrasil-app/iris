@@ -5,8 +5,8 @@ import Foundation
 struct CalendarCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "calendar",
-        abstract: "Read Apple Calendar.",
-        subcommands: [Calendars.self, Events.self]
+        abstract: "Read and write Apple Calendar.",
+        subcommands: [Calendars.self, Events.self, AddEvent.self, UpdateEvent.self, DeleteEvent.self]
     )
 }
 
@@ -29,23 +29,32 @@ struct Events: AsyncParsableCommand {
     @Option(help: "Range start: 2026-10-13, 2026-10-13T09:00 (local time), or ISO 8601 with offset. Default: start of today.")
     var from: String?
 
-    @Option(help: "Range end, same formats. Default: 7 days after --from.")
+    @Option(help: "Range end, same formats; a bare date includes that whole day. Default: 7 days after --from.")
     var to: String?
 
     @Option(name: .customLong("calendar"), help: "Calendar id or title; repeat for several. Default: every calendar.")
     var calendars: [String] = []
 
+    func validate() throws {
+        _ = try range()
+    }
+
     func run() async throws {
         let store = try await grantedStore()
-        let start = try from.map(parseDate) ?? Calendar.current.startOfDay(for: Date())
-        let end = try to.map(parseDate) ?? start.addingTimeInterval(7 * 86400)
-        guard start < end else { throw IrisError("--to must be after --from") }
+        let (start, end) = try range()
         let scope = try resolveCalendars(calendars, in: store)
         let predicate = store.predicateForEvents(withStart: start, end: end, calendars: scope)
         let events = store.events(matching: predicate)
             .sorted { $0.startDate < $1.startDate }
             .map(EventInfo.init)
         try emit(events)
+    }
+
+    private func range() throws -> (Date, Date) {
+        let start = try from.map(parseDate) ?? Calendar.current.startOfDay(for: Date())
+        let end = try to.map(parseEnd) ?? Calendar.current.date(byAdding: .day, value: 7, to: start) ?? start
+        guard start < end else { throw ValidationError("--to must be after --from") }
+        return (start, end)
     }
 }
 
@@ -97,7 +106,7 @@ func grantedStore() async throws -> EKEventStore {
     return store
 }
 
-/// Id first, title second. A name that matches nothing is an error, never a silent widening to every calendar.
+/// Match by id or title. A name that matches nothing is an error, never a silent widening to every calendar.
 func resolveCalendars(_ tokens: [String], in store: EKEventStore) throws -> [EKCalendar]? {
     if tokens.isEmpty { return nil }
     let all = store.calendars(for: .event)
@@ -113,16 +122,42 @@ func resolveCalendars(_ tokens: [String], in store: EKEventStore) throws -> [EKC
     return found
 }
 
-/// ISO 8601 with offset, or a local wall-clock time without one.
+/// A value without an offset is read as local wall-clock time.
 func parseDate(_ text: String) throws -> Date {
-    if let date = ISO8601DateFormatter().date(from: text) { return date }
-    for format in ["yyyy-MM-dd'T'HH:mm:ss", "yyyy-MM-dd'T'HH:mm", "yyyy-MM-dd HH:mm", "yyyy-MM-dd"] {
+    let iso = ISO8601DateFormatter()
+    if let date = iso.date(from: text) { return date }
+    iso.formatOptions.insert(.withFractionalSeconds)
+    if let date = iso.date(from: text) { return date }
+    for format in ["yyyy-MM-dd'T'HH:mmXXX", "yyyy-MM-dd'T'HH:mm:ss", "yyyy-MM-dd'T'HH:mm", "yyyy-MM-dd HH:mm", "yyyy-MM-dd"] {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = format
         if let date = formatter.date(from: text) { return date }
     }
-    throw IrisError("unrecognised date '\(text)'; use 2026-10-13, 2026-10-13T09:00, or ISO 8601 with offset")
+    throw ValidationError("unrecognised date '\(text)'; use 2026-10-13, 2026-10-13T09:00, or ISO 8601 with offset")
+}
+
+/// A bare date such as 2026-10-13, at local midnight; nil for anything with a time.
+func parseDay(_ text: String) -> Date? {
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.dateFormat = "yyyy-MM-dd"
+    return formatter.date(from: text)
+}
+
+/// An end of a range: a bare date includes that whole day.
+func parseEnd(_ text: String) throws -> Date {
+    try parseDay(text).map(endOfDay) ?? parseDate(text)
+}
+
+/// All-day events end at 23:59:59 of their last day.
+func endOfDay(_ date: Date) -> Date {
+    Calendar.current.date(bySettingHour: 23, minute: 59, second: 59, of: date) ?? date
+}
+
+/// All-day events run from the start of their first day to the end of their last.
+func allDayBounds(_ start: Date, _ end: Date) -> (Date, Date) {
+    (Calendar.current.startOfDay(for: start), endOfDay(end))
 }
 
 private let isoFormatter: ISO8601DateFormatter = {
