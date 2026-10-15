@@ -29,7 +29,7 @@ struct Events: AsyncParsableCommand {
     @Option(help: "Range start: 2026-10-13, 2026-10-13T09:00 (local time), or ISO 8601 with offset. Default: start of today.")
     var from: String?
 
-    @Option(help: "Range end, same formats. Default: 7 days after --from.")
+    @Option(help: "Range end, same formats; a bare date includes that whole day. Default: 7 days after --from.")
     var to: String?
 
     @Option(name: .customLong("calendar"), help: "Calendar id or title; repeat for several. Default: every calendar.")
@@ -52,7 +52,7 @@ struct Events: AsyncParsableCommand {
 
     private func range() throws -> (Date, Date) {
         let start = try from.map(parseDate) ?? Calendar.current.startOfDay(for: Date())
-        let end = try to.map(parseDate) ?? start.addingTimeInterval(7 * 86400)
+        let end = try to.map(parseEnd) ?? Calendar.current.date(byAdding: .day, value: 7, to: start) ?? start
         guard start < end else { throw ValidationError("--to must be after --from") }
         return (start, end)
     }
@@ -124,8 +124,11 @@ func resolveCalendars(_ tokens: [String], in store: EKEventStore) throws -> [EKC
 
 /// A value without an offset is read as local wall-clock time.
 func parseDate(_ text: String) throws -> Date {
-    if let date = ISO8601DateFormatter().date(from: text) { return date }
-    for format in ["yyyy-MM-dd'T'HH:mm:ss", "yyyy-MM-dd'T'HH:mm", "yyyy-MM-dd HH:mm", "yyyy-MM-dd"] {
+    let iso = ISO8601DateFormatter()
+    if let date = iso.date(from: text) { return date }
+    iso.formatOptions.insert(.withFractionalSeconds)
+    if let date = iso.date(from: text) { return date }
+    for format in ["yyyy-MM-dd'T'HH:mmXXX", "yyyy-MM-dd'T'HH:mm:ss", "yyyy-MM-dd'T'HH:mm", "yyyy-MM-dd HH:mm", "yyyy-MM-dd"] {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = format
@@ -136,11 +139,25 @@ func parseDate(_ text: String) throws -> Date {
 
 /// A bare date such as 2026-10-13, at local midnight; nil for anything with a time.
 func parseDay(_ text: String) -> Date? {
-    guard text.count == 10 else { return nil }
     let formatter = DateFormatter()
     formatter.locale = Locale(identifier: "en_US_POSIX")
     formatter.dateFormat = "yyyy-MM-dd"
     return formatter.date(from: text)
+}
+
+/// An end of a range: a bare date includes that whole day.
+func parseEnd(_ text: String) throws -> Date {
+    try parseDay(text).map(endOfDay) ?? parseDate(text)
+}
+
+/// All-day events end at 23:59:59 of their last day.
+func endOfDay(_ date: Date) -> Date {
+    Calendar.current.date(bySettingHour: 23, minute: 59, second: 59, of: date) ?? date
+}
+
+/// All-day events run from the start of their first day to the end of their last.
+func allDayBounds(_ start: Date, _ end: Date) -> (Date, Date) {
+    (Calendar.current.startOfDay(for: start), endOfDay(end))
 }
 
 private let isoFormatter: ISO8601DateFormatter = {

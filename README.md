@@ -26,6 +26,6 @@ Agents can already script Apple apps with osascript: hundreds of tokens of Apple
     iris calendar update <id> --occurrence 2026-10-21T09:30 --start 2026-10-21T10:00   # one occurrence; it gets its own id
     iris calendar delete <id>                                       # --occurrence <date> for one, --span future for the rest
 
-Dates in are `2026-10-13`, `2026-10-13T09:00` (local time) or ISO 8601 with an offset; dates out are ISO 8601 in the Mac's zone.
+Dates in are `2026-10-13`, `2026-10-13T09:00` (local time) or ISO 8601 with an offset; a bare date given as an end (`--to`, `--end`, `--until`) includes that whole day. Dates out are ISO 8601 in the Mac's zone.
 
 Copyright © 2026 Zhandos Ombayev. All rights reserved.
