@@ -26,7 +26,7 @@ struct Calendars: AsyncParsableCommand {
 struct Events: AsyncParsableCommand {
     static let configuration = CommandConfiguration(abstract: "List events in a date range, earliest first.")
 
-    @Option(help: "Range start: 2026-10-13, 2026-10-13T09:00 (local time), or ISO 8601 with offset. Default: start of today.")
+    @Option(help: "Range start: 2026-10-13, 2026-10-13T09:00 or 2026-10-13T09:00:00 (local time), or ISO 8601 with an offset or Z, seconds and fractions optional. Default: start of today.")
     var from: String?
 
     @Option(help: "Range end, same formats. Default: 7 days after --from.")
@@ -113,10 +113,13 @@ func resolveCalendars(_ tokens: [String], in store: EKEventStore) throws -> [EKC
     return found
 }
 
-/// ISO 8601 with offset, or a local wall-clock time without one.
+/// ISO 8601 with an offset or Z, with or without seconds and fractions; or a local wall-clock time without one.
 func parseDate(_ text: String) throws -> Date {
-    if let date = ISO8601DateFormatter().date(from: text) { return date }
-    for format in ["yyyy-MM-dd'T'HH:mm:ss", "yyyy-MM-dd'T'HH:mm", "yyyy-MM-dd HH:mm", "yyyy-MM-dd"] {
+    let formats = [
+        "yyyy-MM-dd'T'HH:mm:ss.SSSSSSXXXXX", "yyyy-MM-dd'T'HH:mm:ssXXXXX", "yyyy-MM-dd'T'HH:mmXXXXX",
+        "yyyy-MM-dd'T'HH:mm:ss", "yyyy-MM-dd'T'HH:mm", "yyyy-MM-dd",
+    ]
+    for format in formats {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = format
