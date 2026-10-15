@@ -35,17 +35,26 @@ struct Events: AsyncParsableCommand {
     @Option(name: .customLong("calendar"), help: "Calendar id or title; repeat for several. Default: every calendar.")
     var calendars: [String] = []
 
+    func validate() throws {
+        _ = try range()
+    }
+
     func run() async throws {
         let store = try await grantedStore()
-        let start = try from.map(parseDate) ?? Calendar.current.startOfDay(for: Date())
-        let end = try to.map(parseDate) ?? start.addingTimeInterval(7 * 86400)
-        guard start < end else { throw IrisError("--to must be after --from") }
+        let (start, end) = try range()
         let scope = try resolveCalendars(calendars, in: store)
         let predicate = store.predicateForEvents(withStart: start, end: end, calendars: scope)
         let events = store.events(matching: predicate)
             .sorted { $0.startDate < $1.startDate }
             .map(EventInfo.init)
         try emit(events)
+    }
+
+    private func range() throws -> (Date, Date) {
+        let start = try from.map(parseDate) ?? Calendar.current.startOfDay(for: Date())
+        let end = try to.map(parseDate) ?? start.addingTimeInterval(7 * 86400)
+        guard start < end else { throw ValidationError("--to must be after --from") }
+        return (start, end)
     }
 }
 
@@ -122,7 +131,16 @@ func parseDate(_ text: String) throws -> Date {
         formatter.dateFormat = format
         if let date = formatter.date(from: text) { return date }
     }
-    throw IrisError("unrecognised date '\(text)'; use 2026-10-13, 2026-10-13T09:00, or ISO 8601 with offset")
+    throw ValidationError("unrecognised date '\(text)'; use 2026-10-13, 2026-10-13T09:00, or ISO 8601 with offset")
+}
+
+/// A bare date such as 2026-10-13, at local midnight; nil for anything with a time.
+func parseDay(_ text: String) -> Date? {
+    guard text.count == 10 else { return nil }
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.dateFormat = "yyyy-MM-dd"
+    return formatter.date(from: text)
 }
 
 private let isoFormatter: ISO8601DateFormatter = {

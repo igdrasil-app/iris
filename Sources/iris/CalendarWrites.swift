@@ -66,20 +66,14 @@ struct AddEvent: AsyncParsableCommand {
         if on != nil, repeatFrequency != "weekly" { throw ValidationError("--on only works with --repeat weekly") }
         _ = try repeatFrequency.map(parseFrequency)
         _ = try on.map(parseWeekdays)
+        _ = try until.map(parseDate)
+        _ = try dates()
     }
 
     func run() async throws {
         let store = try await grantedStore()
         let target = try writableCalendar(calendar, in: store)
-        var startDate = try parseDate(start)
-        var endDate: Date
-        if allDay {
-            startDate = Calendar.current.startOfDay(for: startDate)
-            endDate = endOfDay(try end.map(parseDate) ?? startDate)
-        } else {
-            endDate = try end.map(parseDate) ?? startDate.addingTimeInterval(3600)
-        }
-        guard startDate < endDate else { throw IrisError("--end must be after --start") }
+        let (startDate, endDate) = try dates()
 
         let event = EKEvent(eventStore: store)
         event.calendar = target
@@ -101,11 +95,24 @@ struct AddEvent: AsyncParsableCommand {
         try emit(EventInfo(event))
     }
 
+    private func dates() throws -> (Date, Date) {
+        var startDate = try parseDate(start)
+        let endDate: Date
+        if allDay {
+            startDate = Calendar.current.startOfDay(for: startDate)
+            endDate = endOfDay(try end.map(parseDate) ?? startDate)
+        } else {
+            endDate = try end.map(parseDate) ?? startDate.addingTimeInterval(3600)
+        }
+        guard startDate < endDate else { throw ValidationError("--end must be after --start") }
+        return (startDate, endDate)
+    }
+
     private func recurrenceRule(frequency: String) throws -> EKRecurrenceRule {
         let recurrenceEnd: EKRecurrenceEnd?
         if let until {
-            let date = try parseDate(until)
-            recurrenceEnd = EKRecurrenceEnd(end: isMidnight(date) ? endOfDay(date) : date)
+            // A bare date includes that whole day.
+            recurrenceEnd = EKRecurrenceEnd(end: try parseDay(until).map(endOfDay) ?? parseDate(until))
         } else if let count {
             recurrenceEnd = EKRecurrenceEnd(occurrenceCount: count)
         } else {
@@ -140,7 +147,7 @@ struct UpdateEvent: AsyncParsableCommand {
     @Option(help: "New end, same formats. For an all-day event this is the last day, inclusive.")
     var end: String?
 
-    @Flag(inversion: .prefixedNo, help: "--all-day makes it an all-day event, --no-all-day a timed one (pass --start and --end with it). Default: unchanged.")
+    @Flag(inversion: .prefixedNo, help: "--all-day makes it an all-day event; --no-all-day makes it timed and needs --start and --end. Default: unchanged.")
     var allDay: Bool?
 
     @Option(help: "Move the event to this calendar (id or title). Must be writable. Default: unchanged.")
@@ -170,8 +177,13 @@ struct UpdateEvent: AsyncParsableCommand {
     func validate() throws {
         _ = try parseSpan(span)
         _ = try availability.map(parseAvailability)
+        _ = try occurrence.map(parseDate)
         if alarms.contains(where: { $0 < 0 }) { throw ValidationError("--alarm takes minutes of 0 or more") }
         if let url, !url.isEmpty, URL(string: url) == nil { throw ValidationError("--url is not a valid URL: \(url)") }
+        if allDay == false, start == nil || end == nil { throw ValidationError("--no-all-day needs --start and --end") }
+        let startDate = try start.map(parseDate)
+        let endDate = try end.map(parseDate)
+        if let startDate, let endDate, startDate >= endDate { throw ValidationError("--end must be after --start") }
     }
 
     func run() async throws {
@@ -187,13 +199,19 @@ struct UpdateEvent: AsyncParsableCommand {
         if let calendar { event.calendar = try writableCalendar(calendar, in: store) }
         if !alarms.isEmpty { setAlarms(alarms, on: event) }
 
+        // Moving the start keeps the length: in seconds for timed events, in calendar days for
+        // all-day ones, so a move across a DST change does not gain or lose a day.
         let duration = event.endDate.timeIntervalSince(event.startDate)
+        let days = Calendar.current.dateComponents([.day], from: Calendar.current.startOfDay(for: event.startDate),
+                                                   to: Calendar.current.startOfDay(for: event.endDate)).day ?? 0
         if let allDay { event.isAllDay = allDay }
         if let start { event.startDate = try parseDate(start) }
         if let end {
             event.endDate = try parseDate(end)
         } else if start != nil {
-            event.endDate = event.startDate.addingTimeInterval(duration)
+            event.endDate = event.isAllDay
+                ? Calendar.current.date(byAdding: .day, value: days, to: event.startDate) ?? event.startDate
+                : event.startDate.addingTimeInterval(duration)
         }
         if event.isAllDay, allDay != nil || start != nil || end != nil {
             event.startDate = Calendar.current.startOfDay(for: event.startDate)
@@ -258,15 +276,21 @@ func findEvent(_ id: String, occurrence: String?, span: EKSpan, in store: EKEven
     }
     guard let occurrence else { return event }
 
-    // A bare date means any occurrence that day; a time means the nearest one within 12 hours.
-    let date = try parseDate(occurrence)
-    let window = isMidnight(date)
-        ? (date, date.addingTimeInterval(24 * 3600))
-        : (date.addingTimeInterval(-12 * 3600), date.addingTimeInterval(12 * 3600))
+    // A bare date means an occurrence starting that day; a time means the nearest one starting within 12 hours.
+    let date: Date
+    let window: (Date, Date)
+    if let day = parseDay(occurrence) {
+        date = day
+        window = (day, Calendar.current.date(byAdding: .day, value: 1, to: day) ?? day)
+    } else {
+        date = try parseDate(occurrence)
+        window = (date.addingTimeInterval(-12 * 3600), date.addingTimeInterval(12 * 3600))
+    }
     let predicate = store.predicateForEvents(withStart: window.0, end: window.1, calendars: nil)
     // An occurrence edited earlier is detached and carries the series id plus "/RID=…".
     let nearest = store.events(matching: predicate)
         .filter { $0.eventIdentifier == id || $0.eventIdentifier.hasPrefix(id + "/") }
+        .filter { $0.startDate >= window.0 && $0.startDate < window.1 }
         .min { abs($0.startDate.timeIntervalSince(date)) < abs($1.startDate.timeIntervalSince(date)) }
     guard let nearest else { throw IrisError("no occurrence of \(id) near \(iso(date))") }
     return nearest
@@ -295,11 +319,6 @@ func setAlarms(_ minutes: [Int], on event: EKEvent) {
 /// All-day events end at 23:59:59 of their last day.
 func endOfDay(_ date: Date) -> Date {
     Calendar.current.date(bySettingHour: 23, minute: 59, second: 59, of: date) ?? date
-}
-
-/// True for a bare date, which parseDate places at local midnight.
-func isMidnight(_ date: Date) -> Bool {
-    date == Calendar.current.startOfDay(for: date)
 }
 
 func parseSpan(_ text: String) throws -> EKSpan {
@@ -333,7 +352,7 @@ func parseFrequency(_ text: String) throws -> EKRecurrenceFrequency {
 func parseWeekdays(_ text: String) throws -> [EKRecurrenceDayOfWeek] {
     let weekdays: [String: EKWeekday] = ["su": .sunday, "mo": .monday, "tu": .tuesday, "we": .wednesday,
                                          "th": .thursday, "fr": .friday, "sa": .saturday]
-    return try text.split(separator: ",").map { token in
+    return try text.split(separator: ",", omittingEmptySubsequences: false).map { token in
         guard let day = weekdays[token.trimmingCharacters(in: .whitespaces).lowercased()] else {
             throw ValidationError("--on takes su,mo,tu,we,th,fr,sa, not '\(token)'")
         }
