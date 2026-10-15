@@ -36,10 +36,10 @@ struct Events: AsyncParsableCommand {
     var calendars: [String] = []
 
     func run() async throws {
-        let store = try await grantedStore()
         let start = try from.map(parseDate) ?? Calendar.current.startOfDay(for: Date())
         let end = try to.map(parseDate) ?? start.addingTimeInterval(7 * 86400)
-        guard start < end else { throw IrisError("--to must be after --from") }
+        guard start < end else { throw ValidationError("--to must be after --from") }
+        let store = try await grantedStore()
         let scope = try resolveCalendars(calendars, in: store)
         let predicate = store.predicateForEvents(withStart: start, end: end, calendars: scope)
         let events = store.events(matching: predicate)
@@ -108,7 +108,7 @@ func resolveCalendars(_ tokens: [String], in store: EKEventStore) throws -> [EKC
         if hits.isEmpty { missing.append(token) } else { found += hits }
     }
     guard missing.isEmpty else {
-        throw IrisError("no calendar named \(missing.joined(separator: ", ")); see `iris calendar calendars`")
+        throw ValidationError("no calendar named \(missing.joined(separator: ", ")); see `iris calendar calendars`")
     }
     return found
 }
@@ -125,7 +125,7 @@ func parseDate(_ text: String) throws -> Date {
         formatter.dateFormat = format
         if let date = formatter.date(from: text) { return date }
     }
-    throw IrisError("unrecognised date '\(text)'; use 2026-10-13, 2026-10-13T09:00, or ISO 8601 with offset")
+    throw ValidationError("unrecognised date '\(text)'; use 2026-10-13, 2026-10-13T09:00, or ISO 8601 with offset")
 }
 
 private let isoFormatter: ISO8601DateFormatter = {
