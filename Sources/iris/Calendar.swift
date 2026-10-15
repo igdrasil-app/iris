@@ -106,7 +106,7 @@ func grantedStore() async throws -> EKEventStore {
     return store
 }
 
-/// Id first, title second. A name that matches nothing is an error, never a silent widening to every calendar.
+/// Match by id or title. A name that matches nothing is an error, never a silent widening to every calendar.
 func resolveCalendars(_ tokens: [String], in store: EKEventStore) throws -> [EKCalendar]? {
     if tokens.isEmpty { return nil }
     let all = store.calendars(for: .event)
@@ -122,7 +122,7 @@ func resolveCalendars(_ tokens: [String], in store: EKEventStore) throws -> [EKC
     return found
 }
 
-/// ISO 8601 with offset, or a local wall-clock time without one.
+/// A value without an offset is read as local wall-clock time.
 func parseDate(_ text: String) throws -> Date {
     if let date = ISO8601DateFormatter().date(from: text) { return date }
     for format in ["yyyy-MM-dd'T'HH:mm:ss", "yyyy-MM-dd'T'HH:mm", "yyyy-MM-dd HH:mm", "yyyy-MM-dd"] {

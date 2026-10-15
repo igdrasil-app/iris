@@ -18,7 +18,7 @@ func becomeResponsible() {
     defer { posix_spawnattr_destroy(&attr) }
     let rc = disclaim(&attr, 1)
     guard rc == 0 else { setenv("IRIS_DISCLAIM_FAILED", String(rc), 1); return }
-    // SETEXEC replaces this process instead of forking: same pid, same stdin/stdout.
+    // With SETEXEC the new image keeps the same pid and the same stdin/stdout.
     posix_spawnattr_setflags(&attr, Int16(POSIX_SPAWN_SETEXEC))
 
     var size = UInt32(PATH_MAX)
