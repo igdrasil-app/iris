@@ -11,10 +11,10 @@ Agents can already script Apple apps with osascript: hundreds of tokens of Apple
 
 ## Install
 
-    brew install --cask igdrasil-app/tap/iris   # always tap-qualified: Homebrew has an unrelated cask named iris
-    brew upgrade --cask iris
+    brew install --cask igdrasil-app/tap/iris
+    brew upgrade --cask igdrasil-app/tap/iris
 
-The cask puts Iris.app in /Applications and links `iris` into Homebrew's bin.
+Always tap-qualified: Homebrew's own `iris` is an unrelated app, and a bare `brew upgrade --cask iris` would install it instead. A plain `brew upgrade` is fine. The cask puts Iris.app in /Applications and links `iris` into Homebrew's bin.
 
 ## Use
 

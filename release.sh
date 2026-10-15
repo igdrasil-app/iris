@@ -25,9 +25,6 @@ xcrun stapler staple build/Iris.app
 COPYFILE_DISABLE=1 tar -czf "$TAR" -C build Iris.app
 SHA="$(shasum -a 256 "$TAR" | cut -d' ' -f1)"
 
-git tag "v$VERSION" && git push -q origin "v$VERSION"
-gh release create "v$VERSION" "$TAR" --repo "$RELEASE_REPO" --title "Iris $VERSION" --notes "iris@$(git rev-parse --short HEAD)"
-
 mkdir -p "$TAP/Casks"
 cat > "$TAP/Casks/iris.rb" <<CASK
 cask "iris" do
@@ -46,5 +43,11 @@ cask "iris" do
 end
 CASK
 git -C "$TAP" add Casks/iris.rb
-git -C "$TAP" commit -q -m "iris $VERSION" && git -C "$TAP" push -q
-echo "released $VERSION: brew upgrade --cask iris"
+git -C "$TAP" commit -q -m "iris $VERSION"
+
+# Public from here on. A failure below is cleaned up by hand, not by a rerun.
+gh release create "v$VERSION" "$TAR" --repo "$RELEASE_REPO" --title "Iris $VERSION" --notes "iris@$(git rev-parse --short HEAD)"
+git -C "$TAP" push -q
+git tag "v$VERSION"
+git push -q origin "v$VERSION"
+echo "released $VERSION: brew upgrade --cask igdrasil-app/tap/iris"
