@@ -3,7 +3,7 @@
 Apple Calendar for the agents you already run: Claude Code, Cursor, Codex, OpenClaw.
 One signed app, one permission grant, a CLI and an MCP server.
 
-Status: step 2, read-only calendar commands.
+Status: step 3, calendar reads and writes.
 
 ## Why
 
@@ -22,6 +22,9 @@ Agents can already script Apple apps with osascript: hundreds of tokens of Apple
     iris calendar calendars                                         # id, title, writable, source
     iris calendar events                                            # next 7 days, every calendar
     iris calendar events --from 2026-10-13 --to 2026-10-20 --calendar Work
+    iris calendar add --calendar Work --title "Standup" --start 2026-10-19T09:30 --repeat weekly --on mo,we --count 8
+    iris calendar update <id> --occurrence 2026-10-21T09:30 --start 2026-10-21T10:00 --end 2026-10-21T10:15   # one occurrence
+    iris calendar delete <id>                                       # --occurrence <date> for one, --span future for the rest
 
 Dates in are `2026-10-13`, `2026-10-13T09:00` (local time) or ISO 8601 with an offset; dates out are ISO 8601 in the Mac's zone.
 

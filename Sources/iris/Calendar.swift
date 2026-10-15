@@ -5,8 +5,8 @@ import Foundation
 struct CalendarCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "calendar",
-        abstract: "Read Apple Calendar.",
-        subcommands: [Calendars.self, Events.self]
+        abstract: "Read and write Apple Calendar.",
+        subcommands: [Calendars.self, Events.self, AddEvent.self, UpdateEvent.self, DeleteEvent.self]
     )
 }
 
