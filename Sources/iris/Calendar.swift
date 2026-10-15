@@ -108,7 +108,8 @@ struct IrisError: Error, CustomStringConvertible {
 func grantedStore() async throws -> EKEventStore {
     let store = EKEventStore()
     guard try await store.requestFullAccessToEvents() else {
-        throw IrisError("calendar access denied; allow Iris under System Settings › Privacy & Security › Calendars")
+        let fix = EKEventStore.authorizationStatus(for: .event) == .writeOnly ? "give Iris Full Access" : "allow Iris"
+        throw IrisError("calendar access denied; \(fix) under System Settings › Privacy & Security › Calendars")
     }
     return store
 }
