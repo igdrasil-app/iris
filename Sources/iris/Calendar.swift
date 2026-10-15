@@ -37,7 +37,7 @@ struct Events: AsyncParsableCommand {
 
     func run() async throws {
         let start = try from.map(parseDate) ?? Calendar.current.startOfDay(for: Date())
-        let end = try to.map(parseDate) ?? start.addingTimeInterval(7 * 86400)
+        let end = try to.map(parseDate) ?? Calendar.current.date(byAdding: .day, value: 7, to: start) ?? start.addingTimeInterval(7 * 86400)
         guard start < end else { throw ValidationError("--to must be after --from") }
         let store = try await grantedStore()
         let scope = try resolveCalendars(calendars, in: store)
