@@ -264,8 +264,9 @@ func findEvent(_ id: String, occurrence: String?, span: EKSpan, in store: EKEven
         ? (date, date.addingTimeInterval(24 * 3600))
         : (date.addingTimeInterval(-12 * 3600), date.addingTimeInterval(12 * 3600))
     let predicate = store.predicateForEvents(withStart: window.0, end: window.1, calendars: nil)
+    // An occurrence edited earlier is detached and carries the series id plus "/RID=…".
     let nearest = store.events(matching: predicate)
-        .filter { $0.eventIdentifier == id }
+        .filter { $0.eventIdentifier == id || $0.eventIdentifier.hasPrefix(id + "/") }
         .min { abs($0.startDate.timeIntervalSince(date)) < abs($1.startDate.timeIntervalSince(date)) }
     guard let nearest else { throw IrisError("no occurrence of \(id) near \(iso(date))") }
     return nearest

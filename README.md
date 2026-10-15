@@ -23,7 +23,7 @@ Agents can already script Apple apps with osascript: hundreds of tokens of Apple
     iris calendar events                                            # next 7 days, every calendar
     iris calendar events --from 2026-10-13 --to 2026-10-20 --calendar Work
     iris calendar add --calendar Work --title "Standup" --start 2026-10-19T09:30 --repeat weekly --on mo,we --count 8
-    iris calendar update <id> --occurrence 2026-10-21T09:30 --start 2026-10-21T10:00 --end 2026-10-21T10:15   # one occurrence
+    iris calendar update <id> --occurrence 2026-10-21T09:30 --start 2026-10-21T10:00   # one occurrence; it gets its own id
     iris calendar delete <id>                                       # --occurrence <date> for one, --span future for the rest
 
 Dates in are `2026-10-13`, `2026-10-13T09:00` (local time) or ISO 8601 with an offset; dates out are ISO 8601 in the Mac's zone.
