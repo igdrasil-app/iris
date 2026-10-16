@@ -8,6 +8,7 @@ iris is a macOS binary that gives coding agents (Claude Code, Cursor, Codex, Ope
 - `make app` builds and signs `build/Iris.app`; the CLI is the binary inside it. Signing with the Developer ID is not optional: macOS binds permission grants to the bundle id and the signing identity.
 - The binary must never depend on the current directory; agents run it from anywhere.
 - CLI contract: JSON on stdout; errors on stderr, exit 1 at runtime and 64 for usage; dates in ISO 8601 with the Mac's offset. `--help` is the documentation agents read; keep it complete.
+- `iris mcp` serves the calendar commands as tools over stdio and writes nothing else to stdout. A tool is its command: a new option needs a row in the table in `Sources/iris/MCPTools.swift`.
 - A calendar name that matches nothing is an error, never a silent widening to every calendar.
 - Writes change one event per call and print the result. A recurring event needs `--occurrence` or `--span future`; placeholder ids and read-only calendars are refused.
 - Plain, readable Swift over clever Swift. Comment only what the code does not already say.
