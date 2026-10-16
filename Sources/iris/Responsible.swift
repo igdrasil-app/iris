@@ -21,9 +21,7 @@ func becomeResponsible() {
     // With SETEXEC the new image keeps the same pid and the same stdin/stdout.
     posix_spawnattr_setflags(&attr, Int16(POSIX_SPAWN_SETEXEC))
 
-    var size = UInt32(PATH_MAX)
-    var path = [CChar](repeating: 0, count: Int(size))
-    guard _NSGetExecutablePath(&path, &size) == 0 else { return }
+    guard let path = executablePath() else { return }
 
     setenv("IRIS_RESPONSIBLE", "1", 1)
     var argv: [UnsafeMutablePointer<CChar>?] = CommandLine.arguments.map { strdup($0) }
@@ -31,6 +29,14 @@ func becomeResponsible() {
     posix_spawn(nil, path, nil, &attr, argv, environ)
     // Only reached if the spawn failed; carry on as an ordinary child process.
     unsetenv("IRIS_RESPONSIBLE")
+}
+
+/// This binary as the kernel started it; argv[0] may be a bare name or Homebrew's symlink.
+func executablePath() -> String? {
+    var size = UInt32(PATH_MAX)
+    var path = [CChar](repeating: 0, count: Int(size))
+    guard _NSGetExecutablePath(&path, &size) == 0 else { return nil }
+    return String(cString: path)
 }
 
 /// What the process asked for, not what macOS decided; the Privacy pane is the ground truth.

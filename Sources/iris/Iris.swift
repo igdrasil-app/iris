@@ -13,7 +13,7 @@ struct Iris: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "iris",
         abstract: "Apple Calendar for the agents you run. JSON on stdout, errors on stderr.",
-        subcommands: [Status.self, CalendarCommand.self]
+        subcommands: [Status.self, CalendarCommand.self, MCP.self]
     )
 }
 
