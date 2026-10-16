@@ -37,6 +37,7 @@ Dates in are `2026-10-13`, `2026-10-13T09:00` (local time) or ISO 8601 with an o
     claude mcp add --scope user iris -- iris mcp                    # Claude Code
     codex mcp add iris -- iris mcp                                  # Codex
     grok mcp add iris -- iris mcp                                   # Grok CLI
+    openclaw mcp add iris --command /Applications/Iris.app/Contents/MacOS/iris --arg mcp   # OpenClaw; its Gateway has its own PATH
 
 Cursor (`~/.cursor/mcp.json`) and Claude Desktop (`~/Library/Application Support/Claude/claude_desktop_config.json`) are apps without Homebrew on their PATH, so they get the binary inside the app:
 
