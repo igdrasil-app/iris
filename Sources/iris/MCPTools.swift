@@ -24,15 +24,21 @@ struct Tool {
         if let unknown = arguments.keys.first(where: { key in !parameters.contains { $0.name == key } }) {
             throw IrisError("unknown parameter \(unknown); \(name) takes \(parameters.map(\.name).joined(separator: ", "))")
         }
-        var argv = command
+        var options: [String] = []
+        var positionals: [String] = []
         for parameter in parameters {
             guard let value = arguments[parameter.name], !(value is NSNull) else {
                 if parameter.required { throw IrisError("\(parameter.name) is required") }
                 continue
             }
-            argv += try parameter.arguments(for: value)
+            if parameter.kind == .positional {
+                positionals += try parameter.arguments(for: value)
+            } else {
+                options += try parameter.arguments(for: value)
+            }
         }
-        return argv
+        // After "--" every word is a value, so an id of "--help" is looked up, not obeyed.
+        return command + options + (positionals.isEmpty ? [] : ["--"] + positionals)
     }
 }
 
@@ -69,28 +75,40 @@ struct Parameter {
         let option = "--\(flag ?? name)"
         switch kind {
         case .positional: return [try string(value)]
-        case .string: return [option, try string(value)]
-        case .integer: return [option, try integer(value)]
-        case .strings: return try list(value).flatMap { [option, try string($0)] }
-        case .integers: return try list(value).flatMap { [option, try integer($0)] }
+        case .string: return join(option, try string(value))
+        case .integer: return join(option, try integer(value))
+        case .strings: return try list(value).flatMap { join(option, try string($0)) }
+        case .integers: return try list(value).flatMap { join(option, try integer($0)) }
         case .flag: return try bool(value) ? [option] : []
         case .toggle: return try bool(value) ? [option] : ["--no-\(flag ?? name)"]
         }
     }
 
+    /// `--option=value` keeps text starting with "-" a value; only an empty value needs its own word.
+    private func join(_ option: String, _ value: String) -> [String] {
+        value.isEmpty ? [option, value] : ["\(option)=\(value)"]
+    }
+
     private func string(_ value: Any) throws -> String {
         guard let string = value as? String else { throw IrisError("\(name) must be a string") }
+        // A command-line word cannot carry NUL; Process would raise an exception Swift cannot catch.
+        guard !string.contains("\0") else { throw IrisError("\(name) must not contain NUL") }
         return string
     }
 
+    // JSON true and 1 both arrive as NSNumber, so the type is checked before the value.
     private func integer(_ value: Any) throws -> String {
-        guard let number = value as? Int else { throw IrisError("\(name) must be a whole number") }
+        guard !isBoolean(value), let number = value as? Int else { throw IrisError("\(name) must be a whole number") }
         return String(number)
     }
 
     private func bool(_ value: Any) throws -> Bool {
-        guard let bool = value as? Bool else { throw IrisError("\(name) must be true or false") }
+        guard isBoolean(value), let bool = value as? Bool else { throw IrisError("\(name) must be true or false") }
         return bool
+    }
+
+    private func isBoolean(_ value: Any) -> Bool {
+        CFGetTypeID(value as CFTypeRef) == CFBooleanGetTypeID()
     }
 
     private func list(_ value: Any) throws -> [Any] {

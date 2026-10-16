@@ -43,10 +43,15 @@ struct RPCError: Error {
 
 /// The reply to one line, or nil when none is due: a notification, or a stray response.
 private func respond(to line: String) -> [String: Any]? {
-    guard let message = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any] else {
+    guard let json = try? JSONSerialization.jsonObject(with: Data(line.utf8)) else {
         return failure(id: NSNull(), code: -32700, message: "parse error")
     }
-    guard let method = message["method"] as? String, let id = message["id"] else { return nil }
+    guard let message = json as? [String: Any] else { return failure(id: NSNull(), code: -32600, message: "invalid request") }
+    guard message["method"] != nil else { return nil }
+    guard let method = message["method"] as? String else {
+        return failure(id: message["id"] ?? NSNull(), code: -32600, message: "invalid request")
+    }
+    guard let id = message["id"] else { return nil }
     let params = message["params"] as? [String: Any] ?? [:]
     let requested = (params["_meta"] as? [String: Any])?[versionKey] as? String
     if let requested, requested != modernVersion {
@@ -105,9 +110,13 @@ private func call(_ params: [String: Any]) throws -> [String: Any] {
     guard let tool = tools.first(where: { $0.name == name }) else {
         throw RPCError(code: -32602, message: "unknown tool: \(name)")
     }
+    let arguments = params["arguments"] ?? [String: Any]()
+    guard let arguments = arguments as? [String: Any] else {
+        throw RPCError(code: -32602, message: "arguments must be an object")
+    }
     let argv: [String]
     do {
-        argv = try tool.argv(params["arguments"] as? [String: Any] ?? [:])
+        argv = try tool.argv(arguments)
     } catch {
         return toolResult("\(error)", isError: true)
     }
@@ -122,9 +131,14 @@ private func call(_ params: [String: Any]) throws -> [String: Any] {
     process.standardOutput = output
     process.standardError = errors
     try process.run()
-    // Output first: an event list can outgrow the pipe buffer, an error message never does.
+    // Both pipes are drained at once: either one can outgrow its buffer, and a full pipe
+    // would stop the child before it closes the other.
+    var errorBytes = Data()
+    let draining = DispatchGroup()
+    DispatchQueue.global().async(group: draining) { errorBytes = errors.fileHandleForReading.readDataToEndOfFile() }
     let out = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-    let err = String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+    draining.wait()
+    let err = String(decoding: errorBytes, as: UTF8.self)
     process.waitUntilExit()
 
     if process.terminationStatus == 0 { return toolResult(out.trimmingCharacters(in: .whitespacesAndNewlines)) }
