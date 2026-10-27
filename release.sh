@@ -40,6 +40,12 @@ cask "iris" do
 
   app "Iris.app"
   binary "#{appdir}/Iris.app/Contents/MacOS/iris"
+
+  caveats <<~EOS
+    Next:
+      iris calendar calendars                        # macOS asks once for Calendar access
+      claude mcp add --scope user iris -- iris mcp   # Claude Code; other hosts: iris help mcp
+  EOS
 end
 CASK
 git -C "$TAP" add Casks/iris.rb

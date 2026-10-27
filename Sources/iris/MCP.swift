@@ -4,7 +4,41 @@ import Foundation
 struct MCP: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "mcp",
-        abstract: "Serve the calendar commands as MCP tools over stdio. Hosts start this; see the README for each one."
+        abstract: "Serve the calendar commands as MCP tools over stdio.",
+        // Lines stay under 80 columns: help wraps at 80 when piped, and a wrapped command no longer pastes.
+        discussion: """
+            Hosts start this, not people. Tools: calendars, events, add_event, update_event, delete_event, with the fields of the commands. Each host adds iris with its own line:
+
+              claude mcp add --scope user iris -- iris mcp      # Claude Code
+              codex mcp add iris -- iris mcp                    # Codex
+              grok mcp add iris -- iris mcp                     # Grok CLI
+
+            OpenClaw's Gateway has its own PATH, so it gets the binary inside the app:
+
+              openclaw mcp add iris \\
+                --command /Applications/Iris.app/Contents/MacOS/iris --arg mcp
+
+            Cursor and Claude Desktop are apps without Homebrew on their PATH, so they get the binary inside the app too, in these files:
+
+              ~/.cursor/mcp.json
+              ~/Library/Application Support/Claude/claude_desktop_config.json
+
+              { "mcpServers": { "iris": {
+                  "command": "/Applications/Iris.app/Contents/MacOS/iris",
+                  "args": ["mcp"] } } }
+
+            Hermes (~/.hermes/config.yaml):
+
+              mcp_servers:
+                iris:
+                  command: iris
+                  args: [mcp]
+
+            Muse Code (~/.config/muse/settings.json):
+
+              { "mcp_servers": { "iris": {
+                  "transport": "stdio", "command": "iris", "args": ["mcp"] } } }
+            """
     )
 
     func run() throws {
