@@ -14,12 +14,13 @@ Agents can already script Apple apps with osascript: hundreds of tokens of Apple
     brew install --cask igdrasil-app/tap/iris
     brew upgrade --cask igdrasil-app/tap/iris
 
-Always tap-qualified: Homebrew's own `iris` is an unrelated app, and a bare `brew upgrade --cask iris` would install it instead. A plain `brew upgrade` is fine. The cask puts Iris.app in /Applications and links `iris` into Homebrew's bin.
+Always tap-qualified: Homebrew's own `iris` is an unrelated app, and a bare `brew upgrade --cask iris` would install it instead. A plain `brew upgrade` is fine. The cask puts Iris.app in /Applications and links `iris` into Homebrew's bin. `iris doctor` says which version is installed and prints the upgrade command when a newer release exists.
 
 ## Use
 
     iris --help
     iris status                                                     # permission state, never prompts
+    iris doctor                                                     # version, path, permission state, newer release if any
     iris calendar calendars                                         # id, title, writable, source
     iris calendar events                                            # next 7 days, every calendar
     iris calendar events --from 2026-10-13 --to 2026-10-20 --calendar Work
