@@ -2,11 +2,15 @@
 # Publish the version in Info.plist: universal build, notarize, tar, GitHub release, cask bump.
 # Bump CFBundleShortVersionString in a PR first, then run this on a clean checkout of origin/main.
 # One-time setup: xcrun notarytool store-credentials iris --key AuthKey.p8 --key-id KEY --issuer ISSUER
+# Where the keychain cannot prompt (over SSH, from an agent session) the profile is unreachable;
+# set NOTARY_KEY, NOTARY_KEY_ID and NOTARY_ISSUER to sign in with the key file instead.
 set -euo pipefail
 cd "$(dirname "$0")"
 
 # iris is private and brew downloads anonymously, so the tarball lives on the public tap.
 RELEASE_REPO=igdrasil-app/homebrew-tap
+NOTARY=(--keychain-profile iris)
+[ -z "${NOTARY_KEY:-}" ] || NOTARY=(--key "$NOTARY_KEY" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER")
 TAP="$(brew --repository igdrasil-app/tap)"
 VERSION="$(plutil -extract CFBundleShortVersionString raw Info.plist)"
 TAR="build/Iris-$VERSION.tar.gz"
@@ -20,7 +24,7 @@ git fetch -q --tags origin main
 
 make app
 ditto -c -k --keepParent build/Iris.app build/Iris.zip
-xcrun notarytool submit build/Iris.zip --keychain-profile iris --wait
+xcrun notarytool submit build/Iris.zip "${NOTARY[@]}" --wait
 xcrun stapler staple build/Iris.app
 COPYFILE_DISABLE=1 tar -czf "$TAR" -C build Iris.app
 SHA="$(shasum -a 256 "$TAR" | cut -d' ' -f1)"

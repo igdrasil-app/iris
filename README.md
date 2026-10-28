@@ -62,5 +62,6 @@ Assistants that run in a vendor's cloud, such as Grok Bot, the Meta Muse app and
     make app                     # universal swift build, bundle as build/Iris.app, codesign; needs a Developer ID certificate
     build/Iris.app/Contents/MacOS/iris status
     ./release.sh                 # the version in Info.plist: notarize, tar, GitHub release, bump the cask
+                                 # over SSH or from an agent, where the keychain cannot prompt: NOTARY_KEY=<p8> NOTARY_KEY_ID=<id> NOTARY_ISSUER=<uuid> ./release.sh
 
 Copyright © 2026 Zhandos Ombayev. All rights reserved.
