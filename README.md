@@ -24,6 +24,7 @@ Always tap-qualified: Homebrew's own `iris` is an unrelated app, and a bare `bre
     iris calendar calendars                                         # id, title, writable, source
     iris calendar events                                            # next 7 days, every calendar
     iris calendar events --from 2026-10-13 --to 2026-10-20 --calendar Work
+    iris calendar events --title "bus pickup"                       # title contains the text, ignoring case
     iris calendar add --calendar Work --title "Standup" --start 2026-10-19T09:30 --repeat weekly --on mo,we --count 8
     iris calendar update <id> --occurrence 2026-10-21T09:30 --start 2026-10-21T10:00   # one occurrence; it gets its own id
     iris calendar delete <id>                                       # --occurrence <date> for one, --span future for the rest
