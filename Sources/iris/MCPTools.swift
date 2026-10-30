@@ -84,9 +84,10 @@ struct Parameter {
         }
     }
 
-    /// `--option=value` keeps text starting with "-" a value; only an empty value needs its own word.
+    /// Text starting with "-" rides on `--option=value` so ArgumentParser reads it as a value. Anything else
+    /// is its own word: a leading combining mark would fuse with the "=" into one character and hide it.
     private func join(_ option: String, _ value: String) -> [String] {
-        value.isEmpty ? [option, value] : ["\(option)=\(value)"]
+        value.unicodeScalars.first == "-" ? ["\(option)=\(value)"] : [option, value]
     }
 
     private func string(_ value: Any) throws -> String {
