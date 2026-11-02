@@ -85,7 +85,11 @@ final class MenuBar: NSObject, NSMenuDelegate {
     @objc private func allowAccess() {
         NSApp.activate()
         Task {
-            _ = try? await store.requestFullAccessToEvents()
+            do {
+                _ = try await store.requestFullAccessToEvents()
+            } catch {
+                showError(error)
+            }
             refresh()
         }
     }
@@ -106,9 +110,13 @@ final class MenuBar: NSObject, NSMenuDelegate {
                 try SMAppService.mainApp.register()
             }
         } catch {
-            NSApp.activate()
-            NSAlert(error: error).runModal()
+            showError(error)
         }
+    }
+
+    private func showError(_ error: Error) {
+        NSApp.activate()
+        NSAlert(error: error).runModal()
     }
 }
 
