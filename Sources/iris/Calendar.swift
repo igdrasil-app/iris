@@ -24,7 +24,14 @@ struct Calendars: AsyncParsableCommand {
 }
 
 struct Events: AsyncParsableCommand {
-    static let configuration = CommandConfiguration(abstract: "List events in a date range, earliest first.")
+    static let configuration = CommandConfiguration(
+        abstract: "List events in a date range, earliest first.",
+        discussion: """
+            recurring: the event repeats, so changing or deleting it needs --occurrence or --span future. \
+            detached: one occurrence of a repeating event that was changed on its own; it has its own id, \
+            recurring is false, and it is changed or deleted like a single event.
+            """
+    )
 
     @Option(help: "Range start: 2026-10-13, 2026-10-13T09:00 (local time), or ISO 8601 with an offset or Z, seconds and fractions optional. Default: start of today.")
     var from: String?
@@ -102,6 +109,7 @@ struct EventInfo: Encodable {
     let location: String?
     let notes: String?
     let recurring: Bool
+    let detached: Bool
     let availability: String
 
     init(_ event: EKEvent) {
@@ -115,6 +123,7 @@ struct EventInfo: Encodable {
         location = event.location.flatMap { $0.isEmpty ? nil : $0 }
         notes = event.notes.flatMap { $0.isEmpty ? nil : $0 }
         recurring = event.hasRecurrenceRules
+        detached = event.isDetached
         availability = describe(event.availability)
     }
 }
