@@ -2,16 +2,17 @@ import AppKit
 import EventKit
 import ServiceManagement
 
-/// Finder, `open` and login items start an app with no arguments and launchd as the parent.
-/// A shell or an agent never does, so the CLI behaves as before everywhere else.
+/// Finder, `open` and login items go through LaunchServices, which sets IRIS_MENU_BAR from
+/// LSEnvironment in Info.plist. A shell or an agent runs the binary directly and never has it.
 func launchedAsApp() -> Bool {
-    CommandLine.arguments.count == 1 && getppid() == 1
+    CommandLine.arguments.count == 1 && getenv("IRIS_MENU_BAR") != nil
 }
 
 @MainActor
 func runMenuBar() -> Never {
+    let app = NSApplication.shared
     let menuBar = MenuBar()
-    withExtendedLifetime(menuBar) { NSApplication.shared.run() }
+    withExtendedLifetime(menuBar) { app.run() }
     exit(0)
 }
 
@@ -23,6 +24,8 @@ final class MenuBar: NSObject, NSMenuDelegate {
     private let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
     private var status = EKEventStore.authorizationStatus(for: .event)
     private var latest: String?
+    private var latestChecked: Date?
+    private var checking = false
     private var timer: Timer?
 
     override init() {
@@ -35,7 +38,22 @@ final class MenuBar: NSObject, NSMenuDelegate {
         timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.refresh() }
         }
-        Task { latest = await latestRelease() }
+        checkForRelease()
+    }
+
+    /// At launch and on opening the menu: every six hours once GitHub has answered, and on
+    /// the next open after a failure (offline at login). A result shows on the open after.
+    private func checkForRelease() {
+        if checking { return }
+        if let latestChecked, latestChecked.timeIntervalSinceNow > -6 * 3600 { return }
+        checking = true
+        Task {
+            if let found = await latestRelease() {
+                latest = found
+                latestChecked = Date()
+            }
+            checking = false
+        }
     }
 
     private func refresh() {
@@ -52,6 +70,7 @@ final class MenuBar: NSObject, NSMenuDelegate {
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         refresh()
+        checkForRelease()
         menu.removeAllItems()
         menu.addItem(withTitle: "Calendar: \(describe(status))", action: nil, keyEquivalent: "")
         switch status {
@@ -69,7 +88,11 @@ final class MenuBar: NSObject, NSMenuDelegate {
             menu.addItem(action("Copy Upgrade Command for \(latest)", #selector(copyUpgradeCommand)))
         }
         let login = action("Open at Login", #selector(toggleOpenAtLogin))
-        login.state = SMAppService.mainApp.status == .enabled ? .on : .off
+        switch SMAppService.mainApp.status {
+        case .enabled: login.state = .on
+        case .requiresApproval: login.state = .mixed
+        default: login.state = .off
+        }
         menu.addItem(login)
 
         menu.addItem(.separator())
@@ -101,9 +124,13 @@ final class MenuBar: NSObject, NSMenuDelegate {
 
     @objc private func toggleOpenAtLogin() {
         do {
-            if SMAppService.mainApp.status == .enabled {
+            switch SMAppService.mainApp.status {
+            case .enabled:
                 try SMAppService.mainApp.unregister()
-            } else {
+            case .requiresApproval:
+                // Turned off in Login Items; registering again cannot undo that, the user can.
+                SMAppService.openSystemSettingsLoginItems()
+            default:
                 try SMAppService.mainApp.register()
             }
         } catch {
