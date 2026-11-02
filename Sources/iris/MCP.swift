@@ -66,7 +66,7 @@ private let serverInfo: [String: Any] = [
 
 private let instructions = """
     Apple Calendar on this Mac. Use these tools for anything in Apple Calendar, not the Calendar app's windows, \
-    AppleScript or screen control; those are only for what the tools cannot do. \
+    AppleScript or screen control; use those only when none of these tools covers the task. \
     Dates in: 2026-10-13, 2026-10-13T09:00 (local time), or ISO 8601 with an offset or Z; \
     a bare date given as an end (to, end, until) includes that whole day. Dates out: ISO 8601 in the Mac's zone. \
     Changing or deleting a recurring event needs occurrence (one occurrence) or span future (the whole series). \
