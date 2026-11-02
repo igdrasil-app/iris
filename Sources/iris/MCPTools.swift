@@ -84,9 +84,10 @@ struct Parameter {
         }
     }
 
-    /// `--option=value` keeps text starting with "-" a value; only an empty value needs its own word.
+    /// Text starting with "-" rides on `--option=value` so ArgumentParser reads it as a value. Anything else
+    /// is its own word: a leading combining mark would fuse with the "=" into one character and hide it.
     private func join(_ option: String, _ value: String) -> [String] {
-        value.isEmpty ? [option, value] : ["\(option)=\(value)"]
+        value.unicodeScalars.first == "-" ? ["\(option)=\(value)"] : [option, value]
     }
 
     private func string(_ value: Any) throws -> String {
@@ -139,6 +140,7 @@ let tools: [Tool] = [
         Parameter(name: "from", kind: .string, description: "Range start: \(dateFormats). Default: start of today."),
         Parameter(name: "to", kind: .string, description: "Range end, same formats; a bare date includes that whole day. Default: 7 days after from."),
         Parameter(name: "calendars", kind: .strings, description: "Calendar ids or titles. Default: every calendar.", flag: "calendar"),
+        Parameter(name: "title", kind: .string, description: "Only events whose title contains this text, ignoring case. Default: every event."),
     ]),
 
     Tool(name: "add_event", description: "Create an event. Returns the created event.",

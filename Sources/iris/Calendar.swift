@@ -35,8 +35,12 @@ struct Events: AsyncParsableCommand {
     @Option(name: .customLong("calendar"), help: "Calendar id or title; repeat for several. Default: every calendar.")
     var calendars: [String] = []
 
+    @Option(help: "Only events whose title contains this text, ignoring case. Default: every event.")
+    var title: String?
+
     func validate() throws {
         _ = try range()
+        if title == "" { throw ValidationError("--title must not be empty") }
     }
 
     func run() async throws {
@@ -44,9 +48,15 @@ struct Events: AsyncParsableCommand {
         let (start, end) = try range()
         let scope = try resolveCalendars(calendars, in: store)
         let events = fetchEvents(in: store, from: start, to: end, calendars: scope)
+            .filter(matches)
             .sorted { $0.startDate < $1.startDate }
             .map(EventInfo.init)
         try emit(events)
+    }
+
+    private func matches(_ event: EKEvent) -> Bool {
+        guard let title else { return true }
+        return (event.title ?? "").range(of: title, options: .caseInsensitive) != nil
     }
 
     private func range() throws -> (Date, Date) {
