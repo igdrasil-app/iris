@@ -50,7 +50,7 @@ cask "iris" do
 
   caveats <<~EOS
     Open Iris once to put it in the menu bar; macOS may ask you to confirm the download:
-      open "#{appdir}/Iris.app"
+      open #{(appdir/"Iris.app").to_s.shellescape}
     macOS asks once for Calendar access, on the first calendar command:
       iris calendar calendars
     Add iris to Claude Code (other hosts: iris help mcp):
