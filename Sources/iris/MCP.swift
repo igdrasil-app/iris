@@ -7,11 +7,11 @@ struct MCP: ParsableCommand {
         abstract: "Serve the calendar commands as MCP tools over stdio.",
         // Lines stay under 80 columns: help wraps at 80 when piped, and a wrapped command no longer pastes.
         discussion: """
-            Hosts start this, not people. Tools: calendars, events, add_event, update_event, delete_event, with the fields of the commands. Each host adds iris with its own line:
+            Hosts start this, not people. Tools: calendars, events, add_event, update_event, delete_event, with the fields of the commands. Each host adds iris with its own line; Claude Code, Codex and Grok CLI:
 
-              claude mcp add --scope user iris -- iris mcp      # Claude Code
-              codex mcp add iris -- iris mcp                    # Codex
-              grok mcp add iris -- iris mcp                     # Grok CLI
+              claude mcp add --scope user iris -- iris mcp
+              codex mcp add iris -- iris mcp
+              grok mcp add iris -- iris mcp
 
             OpenClaw's Gateway has its own PATH, so it gets the binary inside the app:
 
@@ -36,8 +36,8 @@ struct MCP: ParsableCommand {
 
             Muse Code (~/.config/muse/settings.json):
 
-              { "mcp_servers": { "iris": {
-                  "transport": "stdio", "command": "iris", "args": ["mcp"] } } }
+              { "schema_version": 1, "mcpServers": { "iris": {
+                  "command": "iris", "args": ["mcp"] } } }
             """
     )
 

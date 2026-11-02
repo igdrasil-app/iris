@@ -46,9 +46,10 @@ cask "iris" do
   binary "#{appdir}/Iris.app/Contents/MacOS/iris"
 
   caveats <<~EOS
-    Next:
-      iris calendar calendars                        # macOS asks once for Calendar access
-      claude mcp add --scope user iris -- iris mcp   # Claude Code; other hosts: iris help mcp
+    macOS asks once for Calendar access, on the first calendar command:
+      iris calendar calendars
+    Add iris to Claude Code (other hosts: iris help mcp):
+      claude mcp add --scope user iris -- iris mcp
   EOS
 end
 CASK
