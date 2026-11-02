@@ -14,7 +14,7 @@ Agents can already script Apple apps with osascript: hundreds of tokens of Apple
     brew install --cask igdrasil-app/tap/iris
     brew upgrade --cask igdrasil-app/tap/iris
 
-Then open Iris once, `open /Applications/Iris.app`, so it sits in the menu bar and macOS asks about the download while you are at the terminal rather than inside an agent's first `iris mcp`. Run `iris calendar calendars`, where macOS asks once for Calendar access, and add iris to your agent: `claude mcp add --scope user iris -- iris mcp` for Claude Code, `iris help mcp` or [Hosts](#hosts) for the rest.
+Then open Iris once with the `open` line brew prints (`open /Applications/Iris.app` unless you set another appdir), so it sits in the menu bar and macOS asks about the download while you are at the terminal rather than inside an agent's first `iris mcp`. Run `iris calendar calendars`, where macOS asks once for Calendar access, and add iris to your agent: `claude mcp add --scope user iris -- iris mcp` for Claude Code, `iris help mcp` or [Hosts](#hosts) for the rest.
 
 Always tap-qualified: Homebrew's own `iris` is an unrelated app that a bare `brew upgrade --cask iris` would install instead; a plain `brew upgrade` is fine. `iris doctor` says which version is installed and prints the upgrade command when a newer release exists.
 
