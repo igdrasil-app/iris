@@ -45,7 +45,12 @@ cask "iris" do
   app "Iris.app"
   binary "#{appdir}/Iris.app/Contents/MacOS/iris"
 
+  # Upgrades quit the menu bar app and brew reopens the new one; iris mcp processes are not apps and keep running.
+  uninstall quit: "app.igdrasil.iris"
+
   caveats <<~EOS
+    Open Iris once to put it in the menu bar; macOS may ask you to confirm the download:
+      open "#{appdir}/Iris.app"
     macOS asks once for Calendar access, on the first calendar command:
       iris calendar calendars
     Add iris to Claude Code (other hosts: iris help mcp):
