@@ -14,7 +14,9 @@ Agents can already script Apple apps with osascript: hundreds of tokens of Apple
     brew install --cask igdrasil-app/tap/iris
     brew upgrade --cask igdrasil-app/tap/iris
 
-Always tap-qualified: Homebrew's own `iris` is an unrelated app, and a bare `brew upgrade --cask iris` would install it instead. A plain `brew upgrade` is fine. The cask puts Iris.app in /Applications and links `iris` into Homebrew's bin. `iris doctor` says which version is installed and prints the upgrade command when a newer release exists.
+Then `iris calendar calendars`, where macOS asks once for Calendar access, and add iris to your agent: `claude mcp add --scope user iris -- iris mcp` for Claude Code, `iris help mcp` or [Hosts](#hosts) for the rest.
+
+Always tap-qualified: Homebrew's own `iris` is an unrelated app that a bare `brew upgrade --cask iris` would install instead; a plain `brew upgrade` is fine. `iris doctor` says which version is installed and prints the upgrade command when a newer release exists.
 
 ## Use
 
@@ -34,12 +36,15 @@ Dates in are `2026-10-13`, `2026-10-13T09:00` (local time) or ISO 8601 with an o
 
 ## Hosts
 
-`iris mcp` serves the calendar commands as MCP tools over stdio: `calendars`, `events`, `add_event`, `update_event`, `delete_event`, with the fields of the commands. Any host that starts local MCP servers can use it.
+`iris mcp` serves the calendar commands as MCP tools over stdio: `calendars`, `events`, `add_event`, `update_event`, `delete_event`, with the fields of the commands. Any host that starts local MCP servers can use it. Claude Code, Codex and Grok CLI:
 
-    claude mcp add --scope user iris -- iris mcp                    # Claude Code
-    codex mcp add iris -- iris mcp                                  # Codex
-    grok mcp add iris -- iris mcp                                   # Grok CLI
-    openclaw mcp add iris --command /Applications/Iris.app/Contents/MacOS/iris --arg mcp   # OpenClaw; its Gateway has its own PATH
+    claude mcp add --scope user iris -- iris mcp
+    codex mcp add iris -- iris mcp
+    grok mcp add iris -- iris mcp
+
+OpenClaw's Gateway has its own PATH, so it gets the binary inside the app:
+
+    openclaw mcp add iris --command /Applications/Iris.app/Contents/MacOS/iris --arg mcp
 
 Cursor (`~/.cursor/mcp.json`) and Claude Desktop (`~/Library/Application Support/Claude/claude_desktop_config.json`) are apps without Homebrew on their PATH, so they get the binary inside the app:
 
@@ -54,7 +59,7 @@ Hermes (`~/.hermes/config.yaml`):
 
 Muse Code (`~/.config/muse/settings.json`):
 
-    { "mcp_servers": { "iris": { "transport": "stdio", "command": "iris", "args": ["mcp"] } } }
+    { "schema_version": 1, "mcpServers": { "iris": { "command": "iris", "args": ["mcp"] } } }
 
 Assistants that run in a vendor's cloud, such as Grok Bot, the Meta Muse app and Hark Pro, cannot start a process on this Mac and are not served.
 
