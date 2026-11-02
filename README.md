@@ -18,6 +18,8 @@ Then `iris calendar calendars`, where macOS asks once for Calendar access, and a
 
 Always tap-qualified: Homebrew's own `iris` is an unrelated app that a bare `brew upgrade --cask iris` would install instead; a plain `brew upgrade` is fine. `iris doctor` says which version is installed and prints the upgrade command when a newer release exists.
 
+Open Iris.app for a menu bar icon: the bot head, with a dot while Iris lacks full Calendar access. Its menu asks for access or opens Privacy Settings, shows the version, and can open Iris at login.
+
 ## Use
 
     iris --help
