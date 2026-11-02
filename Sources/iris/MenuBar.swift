@@ -23,9 +23,6 @@ final class MenuBar: NSObject, NSMenuDelegate {
     private let store = EKEventStore()
     private let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
     private var status = EKEventStore.authorizationStatus(for: .event)
-    private var latest: String?
-    private var latestChecked: Date?
-    private var checking = false
     private var timer: Timer?
 
     override init() {
@@ -37,22 +34,6 @@ final class MenuBar: NSObject, NSMenuDelegate {
         // The grant changes in System Settings, which tells no one; asking is cheap.
         timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.refresh() }
-        }
-        checkForRelease()
-    }
-
-    /// At launch and on opening the menu: every six hours once GitHub has answered, and on
-    /// the next open after a failure (offline at login). A result shows on the open after.
-    private func checkForRelease() {
-        if checking { return }
-        if let latestChecked, latestChecked.timeIntervalSinceNow > -6 * 3600 { return }
-        checking = true
-        Task {
-            if let found = await latestRelease() {
-                latest = found
-                latestChecked = Date()
-            }
-            checking = false
         }
     }
 
@@ -70,7 +51,6 @@ final class MenuBar: NSObject, NSMenuDelegate {
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         refresh()
-        checkForRelease()
         menu.removeAllItems()
         menu.addItem(withTitle: "Calendar: \(describe(status))", action: nil, keyEquivalent: "")
         switch status {
@@ -84,9 +64,6 @@ final class MenuBar: NSObject, NSMenuDelegate {
 
         menu.addItem(.separator())
         menu.addItem(withTitle: "Iris \(version ?? "unknown")", action: nil, keyEquivalent: "")
-        if let version, let latest, isNewer(latest, than: version) {
-            menu.addItem(action("Copy Upgrade Command for \(latest)", #selector(copyUpgradeCommand)))
-        }
         let login = action("Open at Login", #selector(toggleOpenAtLogin))
         switch SMAppService.mainApp.status {
         case .enabled: login.state = .on
@@ -115,11 +92,6 @@ final class MenuBar: NSObject, NSMenuDelegate {
 
     @objc private func openPrivacySettings() {
         NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars")!)
-    }
-
-    @objc private func copyUpgradeCommand() {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString("brew upgrade --cask igdrasil-app/tap/iris", forType: .string)
     }
 
     @objc private func toggleOpenAtLogin() {
