@@ -16,15 +16,17 @@ Agents can already script Apple apps with osascript: hundreds of tokens of Apple
 
 Then `iris calendar calendars`, where macOS asks once for Calendar access, and add iris to your agent: `claude mcp add --scope user iris -- iris mcp` for Claude Code, `iris help mcp` or [Hosts](#hosts) for the rest.
 
-Always tap-qualified: Homebrew's own `iris` is an unrelated app that a bare `brew upgrade --cask iris` would install instead; a plain `brew upgrade` is fine.
+Always tap-qualified: Homebrew's own `iris` is an unrelated app that a bare `brew upgrade --cask iris` would install instead; a plain `brew upgrade` is fine. `iris doctor` says which version is installed and prints the upgrade command when a newer release exists.
 
 ## Use
 
     iris --help
     iris status                                                     # permission state, never prompts
+    iris doctor                                                     # version, path, permission state, newer release if any
     iris calendar calendars                                         # id, title, writable, source
     iris calendar events                                            # next 7 days, every calendar
     iris calendar events --from 2026-10-13 --to 2026-10-20 --calendar Work
+    iris calendar events --title "bus pickup"                       # title contains the text, ignoring case
     iris calendar add --calendar Work --title "Standup" --start 2026-10-19T09:30 --repeat weekly --on mo,we --count 8
     iris calendar update <id> --occurrence 2026-10-21T09:30 --start 2026-10-21T10:00   # one occurrence; it gets its own id
     iris calendar delete <id>                                       # --occurrence <date> for one, --span future for the rest
@@ -63,5 +65,6 @@ Assistants that run in a vendor's cloud, such as Grok Bot, the Meta Muse app and
     make app                     # universal swift build, bundle as build/Iris.app, codesign; needs a Developer ID certificate
     build/Iris.app/Contents/MacOS/iris status
     ./release.sh                 # the version in Info.plist: notarize, tar, GitHub release, bump the cask
+                                 # over SSH or from an agent, where the keychain cannot prompt: NOTARY_KEY=<p8> NOTARY_KEY_ID=<id> NOTARY_ISSUER=<uuid> ./release.sh
 
 Copyright © 2026 Zhandos Ombayev. All rights reserved.
