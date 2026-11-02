@@ -34,7 +34,8 @@ private let instructions = """
     Apple Calendar on this Mac. Dates in: 2026-10-13, 2026-10-13T09:00 (local time), or ISO 8601 with an offset or Z; \
     a bare date given as an end (to, end, until) includes that whole day. Dates out: ISO 8601 in the Mac's zone. \
     Changing or deleting a recurring event needs occurrence (one occurrence) or span future (the whole series). \
-    An occurrence changed on its own is detached: its own id, recurring false, detached true, changed or deleted like a single event.
+    An occurrence changed on its own is detached: its own id, recurring false, detached true. By that id, the default span this \
+    changes or deletes only this occurrence; span future still reaches the occurrences after it.
     """
 
 struct RPCError: Error {

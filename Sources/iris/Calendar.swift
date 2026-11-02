@@ -28,8 +28,9 @@ struct Events: AsyncParsableCommand {
         abstract: "List events in a date range, earliest first.",
         discussion: """
             recurring: the event repeats, so changing or deleting it needs --occurrence or --span future. \
-            detached: one occurrence of a repeating event that was changed on its own; it has its own id, \
-            recurring is false, and it is changed or deleted like a single event.
+            detached: one occurrence of a repeating event that was changed on its own; it has its own id and \
+            recurring is false. By that id, the default --span this changes or deletes only this occurrence; \
+            --span future still reaches the occurrences after it.
             """
     )
 
