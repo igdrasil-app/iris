@@ -27,6 +27,12 @@
 	<true/>
 	<key>NSCalendarsFullAccessUsageDescription</key>
 	<string>Iris reads and writes your calendar on behalf of the agents you run.</string>
+	<key>SUFeedURL</key>
+	<string>https://raw.githubusercontent.com/igdrasil-app/homebrew-tap/main/Appcasts/iris.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>+WdpDVvwfr2uMexNgPtzVwqAxiG1fO3B8iqgMEdFFu0=</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
 	<key>NSHumanReadableCopyright</key>
 	<string>Copyright © 2026 Zhandos Ombayev. All rights reserved.</string>
 </dict>

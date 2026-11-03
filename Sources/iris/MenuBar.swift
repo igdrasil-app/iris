@@ -1,6 +1,7 @@
 import AppKit
 import EventKit
 import ServiceManagement
+import Sparkle
 
 /// Finder, `open` and login items go through LaunchServices, which sets IRIS_MENU_BAR from
 /// LSEnvironment in Info.plist. A shell or an agent runs the binary directly and never has it.
@@ -21,6 +22,8 @@ func runMenuBar() -> Never {
 final class MenuBar: NSObject, NSMenuDelegate {
     private let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     private let store = EKEventStore()
+    // Checks the appcast in Info.plist once a day and offers the update; the CLI never starts it.
+    private let updater = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
     private let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
     private var status = EKEventStore.authorizationStatus(for: .event)
     private var timer: Timer?
@@ -64,6 +67,9 @@ final class MenuBar: NSObject, NSMenuDelegate {
 
         menu.addItem(.separator())
         menu.addItem(withTitle: "Iris \(version ?? "unknown")", action: nil, keyEquivalent: "")
+        let check = NSMenuItem(title: "Check for Updates…", action: #selector(SPUStandardUpdaterController.checkForUpdates), keyEquivalent: "")
+        check.target = updater
+        menu.addItem(check)
         let login = action("Open at Login", #selector(toggleOpenAtLogin))
         switch SMAppService.mainApp.status {
         case .enabled: login.state = .on
