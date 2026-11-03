@@ -24,7 +24,8 @@ TAR="build/Iris-$VERSION.tar.gz"
 [ -d "$TAP" ] || brew tap igdrasil-app/tap
 git -C "$TAP" pull -q --ff-only
 # Sparkle compares CFBundleVersion only: a release that keeps it reaches no one, silently.
-PUBLISHED="$(sed -n 's:.*<sparkle\:version>\(.*\)</sparkle\:version>.*:\1:p' "$APPCAST" 2>/dev/null || true)"
+# Read from the pushed tap, not the checkout, which a failed run may have left edited.
+PUBLISHED="$(git -C "$TAP" show origin/main:Appcasts/iris.xml 2>/dev/null | sed -n 's:.*<sparkle\:version>\(.*\)</sparkle\:version>.*:\1:p' || true)"
 [ "$BUILD" -gt "${PUBLISHED:-0}" ] || { echo "release: CFBundleVersion $BUILD is not above the published $PUBLISHED" >&2; exit 1; }
 [ -z "$(git status --porcelain)" ] || { echo "release: the tree is dirty" >&2; exit 1; }
 git fetch -q --tags origin main
@@ -50,7 +51,7 @@ cask "iris" do
   desc "Apple Calendar for the coding agents you run"
   homepage "https://github.com/igdrasil-app/iris"
 
-  # The menu bar app updates itself with Sparkle; brew upgrades only a bundle older than this cask.
+  # The menu bar app updates itself with Sparkle; a plain brew upgrade skips a bundle that is already current.
   auto_updates true
   depends_on macos: :sonoma
 
