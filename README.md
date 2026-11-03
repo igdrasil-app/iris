@@ -20,6 +20,8 @@ Always tap-qualified: Homebrew's own `iris` is an unrelated app that a bare `bre
 
 Open Iris.app for a menu bar icon: the bot head, with a dot while Iris lacks full Calendar access. Its menu asks for access or opens Privacy Settings, shows the version, and can open Iris at login. `brew upgrade` quits the menu bar and reopens the new version; running `iris mcp` servers are left alone.
 
+While it runs, the menu bar app updates Iris itself: it checks once a day, offers a new version, and has Check for Updates… next to the version. The update replaces Iris.app in place with the same signature, so the Calendar grant, `/opt/homebrew/bin/iris` and running `iris mcp` servers carry on, and the next `iris` starts without a Gatekeeper dialog. `brew upgrade` still works and skips Iris once it is current.
+
 ## Use
 
     iris --help
@@ -69,7 +71,8 @@ Assistants that run in a vendor's cloud, such as Grok Bot, the Meta Muse app and
 
     make app                     # universal swift build, bundle as build/Iris.app, codesign; needs a Developer ID certificate
     build/Iris.app/Contents/MacOS/iris status
-    ./release.sh                 # the version in Info.plist: notarize, tar, GitHub release, bump the cask
-                                 # over SSH or from an agent, where the keychain cannot prompt: NOTARY_KEY=<p8> NOTARY_KEY_ID=<id> NOTARY_ISSUER=<uuid> ./release.sh
+    ./release.sh                 # the version in Info.plist: notarize, tar, GitHub release, bump the cask and the Sparkle appcast
+                                 # bump CFBundleVersion with the version; Sparkle compares only that, and release.sh refuses a repeat
+                                 # over SSH or from an agent, where the keychain cannot prompt: NOTARY_KEY=<p8> NOTARY_KEY_ID=<id> NOTARY_ISSUER=<uuid> SPARKLE_KEY=<file> ./release.sh
 
 Copyright © 2026 Zhandos Ombayev. All rights reserved.
