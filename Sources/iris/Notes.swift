@@ -12,12 +12,13 @@ struct NotesCommand: ParsableCommand {
 struct NoteFolders: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "folders",
-        abstract: "List Notes folders: id, name, account, noteCount.",
+        abstract: "List Notes folders: id, name, account, parent, noteCount.",
         discussion: """
             Every folder of every account, subfolders and Recently Deleted included. Names can repeat; \
-            the id tells folders apart. noteCount is what the folder shows: a note shown in several \
-            folders, as a smart folder does, counts in each. The first run asks to let Iris control Notes; \
-            a denial is changed under System Settings › Privacy & Security › Automation.
+            the id tells folders apart. parent is the id of the folder it sits in, or null at the top of \
+            its account. noteCount is what the folder shows: a note shown in several folders, as a smart \
+            folder does, counts in each. The first run asks to let Iris control Notes; a denial is changed \
+            under System Settings › Privacy & Security › Automation. Notes gets 30 seconds to answer.
             """
     )
 
@@ -31,30 +32,51 @@ struct FolderInfo: Encodable {
     let id: String
     let name: String
     let account: String
+    let parent: String?
     let noteCount: Int
+
+    enum CodingKeys: CodingKey { case id, name, account, parent, noteCount }
+
+    // Written out so a top-level folder carries "parent": null instead of dropping the key.
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(name, forKey: .name)
+        try container.encode(account, forKey: .account)
+        try container.encode(parent, forKey: .parent)
+        try container.encode(noteCount, forKey: .noteCount)
+    }
 }
 
 // One Apple Event per property, each covering every folder: one event per folder costs ~46 ms.
 // The order of `every folder` is the same in each, so the lists line up by index.
+// Without the timeout a stalled Notes holds the call for the default 120 seconds.
 private let foldersScript = """
     tell application "Notes"
-        {id of every folder, name of every folder, id of every note of every folder, ¬
-            name of every account, id of every folder of every account}
+        with timeout of 30 seconds
+            {id of every folder, name of every folder, id of every note of every folder, ¬
+                id of container of every folder, ¬
+                name of every account, id of every account, id of every folder of every account}
+        end timeout
     end tell
     """
 
 @MainActor
 private func readFolders() throws -> [FolderInfo] {
     let parts = items(try runNotesScript(foldersScript))
-    guard parts.count == 5 else { throw IrisError("Notes returned \(parts.count) lists for folders, expected 5") }
+    guard parts.count == 7 else { throw IrisError("Notes returned \(parts.count) lists for folders, expected 7") }
     let ids = strings(parts[0])
     let names = strings(parts[1])
     let noteLists = items(parts[2])
-    let accounts = strings(parts[3])
-    let accountFolders = items(parts[4])
-    guard names.count == ids.count, noteLists.count == ids.count, accountFolders.count == accounts.count else {
+    let containers = strings(parts[3])
+    let accounts = strings(parts[4])
+    let accountIds = Set(strings(parts[5]))
+    let accountFolders = items(parts[6])
+    guard names.count == ids.count, noteLists.count == ids.count, containers.count == ids.count,
+          accountIds.count == accounts.count, accountFolders.count == accounts.count else {
         throw IrisError("Notes changed while folders were read; run again")
     }
+    let folderIds = Set(ids)
 
     // Folders join their account by id: names repeat across accounts and parents.
     var accountOf: [String: String] = [:]
@@ -64,8 +86,14 @@ private func readFolders() throws -> [FolderInfo] {
 
     var folders: [FolderInfo] = []
     for index in ids.indices {
-        guard let account = accountOf[ids[index]] else { throw IrisError("Notes changed while folders were read; run again") }
+        // A folder sits in another folder or, at the top, in its account.
+        let container = containers[index]
+        guard let account = accountOf[ids[index]],
+              folderIds.contains(container) || accountIds.contains(container) else {
+            throw IrisError("Notes changed while folders were read; run again")
+        }
         folders.append(FolderInfo(id: ids[index], name: names[index], account: account,
+                                  parent: folderIds.contains(container) ? container : nil,
                                   noteCount: noteLists[index].numberOfItems))
     }
     return folders
