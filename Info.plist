@@ -27,6 +27,8 @@
 	<true/>
 	<key>NSCalendarsFullAccessUsageDescription</key>
 	<string>Iris reads and writes your calendar on behalf of the agents you run.</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Iris reads your notes on behalf of the agents you run.</string>
 	<key>SUFeedURL</key>
 	<string>https://raw.githubusercontent.com/igdrasil-app/homebrew-tap/main/Appcasts/iris.xml</string>
 	<key>SUPublicEDKey</key>
