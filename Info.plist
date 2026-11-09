@@ -30,7 +30,7 @@
 	<key>SUFeedURL</key>
 	<string>https://raw.githubusercontent.com/igdrasil-app/homebrew-tap/main/Appcasts/iris.xml</string>
 	<key>SUPublicEDKey</key>
-	<string>+WdpDVvwfr2uMexNgPtzVwqAxiG1fO3B8iqgMEdFFu0=</string>
+	<string>NxTjMvw2tbsRPvVJGpF7TxB8ZHt7CI+pO7vmtdC/vws=</string>
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
 	<key>NSHumanReadableCopyright</key>
