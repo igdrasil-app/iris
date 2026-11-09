@@ -18,7 +18,7 @@ struct NoteFolders: AsyncParsableCommand {
             the id tells folders apart. parent is the id of the folder it sits in, or null at the top of \
             its account. noteCount is what the folder shows: a note shown in several folders, as a smart \
             folder does, counts in each. The first run asks to let Iris control Notes; a denial is changed \
-            under System Settings › Privacy & Security › Automation. Notes gets 30 seconds to answer.
+            under System Settings › Privacy & Security › Automation. Notes gets 30 seconds to answer each request.
             """
     )
 
@@ -50,7 +50,8 @@ struct FolderInfo: Encodable {
 
 // One Apple Event per property, each covering every folder: one event per folder costs ~46 ms.
 // The order of `every folder` is the same in each, so the lists line up by index.
-// Without the timeout a stalled Notes holds the call for the default 120 seconds.
+// Without the timeout a stalled Notes holds the call for the default 120 seconds. The timeout is per
+// event, so a stalled Notes fails on the first one at 30 s.
 private let foldersScript = """
     tell application "Notes"
         with timeout of 30 seconds
