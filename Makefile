@@ -16,6 +16,9 @@ app: build
 	cp .build/release/iris $(APP)/Contents/MacOS/
 	iconutil -c icns -o $(APP)/Contents/Resources/iris.icns Assets/iris.iconset
 	ditto .build/release/Sparkle.framework $(SPARKLE)
+	# MIT asks for the notices in every copy; Sparkle's covers the code it vendors too.
+	cp LICENSE $(APP)/Contents/Resources/LICENSE
+	cp .build/artifacts/sparkle/Sparkle/LICENSE $(APP)/Contents/Resources/Sparkle-LICENSE
 	# Sparkle's XPC services are for sandboxed apps.
 	rm -rf $(SPARKLE)/XPCServices $(SPARKLE)/Versions/B/XPCServices
 	codesign --force --options runtime --timestamp --sign "$(IDENTITY)" $(SPARKLE)/Versions/B/Autoupdate $(SPARKLE)/Versions/B/Updater.app

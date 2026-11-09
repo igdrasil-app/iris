@@ -9,7 +9,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-# iris is private and brew downloads anonymously, so the tarball lives on the public tap.
+# Releases live on the tap, next to the cask and the appcast.
 RELEASE_REPO=igdrasil-app/homebrew-tap
 NOTARY=(--keychain-profile iris)
 [ -z "${NOTARY_KEY:-}" ] || NOTARY=(--key "$NOTARY_KEY" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER")

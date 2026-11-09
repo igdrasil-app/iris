@@ -75,4 +75,4 @@ Assistants that run in a vendor's cloud, such as Grok Bot, the Meta Muse app and
                                  # bump CFBundleVersion with the version; Sparkle compares only that, and release.sh refuses a repeat
                                  # over SSH or from an agent, where the keychain cannot prompt: NOTARY_KEY=<p8> NOTARY_KEY_ID=<id> NOTARY_ISSUER=<uuid> SPARKLE_KEY=<file> ./release.sh
 
-Copyright © 2026 Zhandos Ombayev. All rights reserved.
+Copyright © 2026 Jandos Meirkhan. MIT License, see LICENSE.
