@@ -7,7 +7,7 @@ struct MCP: ParsableCommand {
         abstract: "Serve the calendar commands as MCP tools over stdio.",
         // Lines stay under 80 columns: help wraps at 80 when piped, and a wrapped command no longer pastes.
         discussion: """
-            Hosts start this, not people. Tools: calendars, events, add_event, update_event, delete_event, with the fields of the commands. Each host adds iris with its own line; Claude Code, Codex and Grok CLI:
+            Hosts start this, not people. Tools: calendars, events, add_event, update_event, delete_event, note_folders, with the fields of the commands. Each host adds iris with its own line; Claude Code, Codex and Grok CLI:
 
               claude mcp add --scope user iris -- iris mcp
               codex mcp add iris -- iris mcp

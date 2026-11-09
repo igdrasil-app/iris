@@ -182,4 +182,8 @@ let tools: [Tool] = [
 
     Tool(name: "delete_event", description: "Delete an event. Returns {deleted, title, start, span}.",
          command: ["calendar", "delete"], parameters: [eventId, occurrence, span]),
+
+    Tool(name: "note_folders",
+         description: "List Apple Notes folders: id, name, account, noteCount. Subfolders and Recently Deleted included; names can repeat, ids cannot.",
+         command: ["notes", "folders"], parameters: []),
 ]
