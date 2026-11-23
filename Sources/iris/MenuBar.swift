@@ -17,7 +17,8 @@ func runMenuBar() -> Never {
     exit(0)
 }
 
-/// The menu bar icon: the mascot's bot head, with a dot while Iris lacks full Calendar access.
+/// The menu bar icon: the mascot's bot head, with a dot while Iris lacks full Calendar access or Notes
+/// access is denied. Notes not determined is no dot: many people never use Notes with Iris.
 @MainActor
 final class MenuBar: NSObject, NSMenuDelegate {
     private let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -26,6 +27,9 @@ final class MenuBar: NSObject, NSMenuDelegate {
     private let updater = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
     private let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
     private var status = EKEventStore.authorizationStatus(for: .event)
+    // What the last probe answered; the menu shows this, at most one timer tick old.
+    private var notes = "unknown"
+    private var probingNotes = false
     private var timer: Timer?
 
     override init() {
@@ -34,6 +38,7 @@ final class MenuBar: NSObject, NSMenuDelegate {
         menu.delegate = self
         item.menu = menu
         showStatus()
+        probeNotes()
         // The grant changes in System Settings, which tells no one; asking is cheap.
         timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.refresh() }
@@ -41,15 +46,34 @@ final class MenuBar: NSObject, NSMenuDelegate {
     }
 
     private func refresh() {
+        probeNotes()
         let now = EKEventStore.authorizationStatus(for: .event)
         guard now != status else { return }
         status = now
         showStatus()
     }
 
+    /// Asks about Notes off the main thread: the call takes milliseconds and has been known to hang.
+    /// One at a time, so an older answer never lands on top of a newer one.
+    private func probeNotes(ask: Bool = false) {
+        guard !probingNotes else { return }
+        probingNotes = true
+        Task.detached { [weak self] in
+            let answer = notesPermission(ask: ask)
+            await self?.show(notes: answer)
+        }
+    }
+
+    private func show(notes answer: String) {
+        probingNotes = false
+        guard answer != notes else { return }
+        notes = answer
+        showStatus()
+    }
+
     private func showStatus() {
-        item.button?.image = botGlyph(badge: status != .fullAccess)
-        item.button?.toolTip = "Iris: Calendar \(describe(status))"
+        item.button?.image = botGlyph(badge: status != .fullAccess || notes == "denied")
+        item.button?.toolTip = "Iris: Calendar \(describe(status)), Notes \(notes)"
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
@@ -61,6 +85,15 @@ final class MenuBar: NSObject, NSMenuDelegate {
             menu.addItem(action("Allow Calendar Access…", #selector(allowAccess)))
         case .denied, .writeOnly:
             menu.addItem(action("Open Privacy Settings…", #selector(openPrivacySettings)))
+        default:
+            break
+        }
+        menu.addItem(withTitle: "Notes: \(notes)", action: nil, keyEquivalent: "")
+        switch notes {
+        case "not determined":
+            menu.addItem(action("Allow Notes Access…", #selector(allowNotesAccess)))
+        case "denied":
+            menu.addItem(action("Open Automation Settings…", #selector(openAutomationSettings)))
         default:
             break
         }
@@ -100,8 +133,18 @@ final class MenuBar: NSObject, NSMenuDelegate {
         }
     }
 
+    // The dialog holds the probe until the person answers; the timer's probes wait behind it.
+    @objc private func allowNotesAccess() {
+        NSApp.activate()
+        probeNotes(ask: true)
+    }
+
     @objc private func openPrivacySettings() {
         NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars")!)
+    }
+
+    @objc private func openAutomationSettings() {
+        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation")!)
     }
 
     @objc private func toggleOpenAtLogin() {

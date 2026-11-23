@@ -506,12 +506,30 @@ func runNotesScript(_ source: String) throws -> NSAppleEventDescriptor {
     return result
 }
 
+let notesAutomationFix = "turn on Notes under Iris in System Settings › Privacy & Security › Automation"
+
+/// Whether Iris may control Notes. Without ask it never prompts and never launches Notes;
+/// with ask it shows the dialog when there is none yet and blocks until the person answers.
+func notesPermission(ask: Bool = false) -> String {
+    let notes = NSAppleEventDescriptor(bundleIdentifier: "com.apple.Notes")
+    let code = withExtendedLifetime(notes) {
+        AEDeterminePermissionToAutomateTarget(notes.aeDesc, typeWildCard, typeWildCard, ask)
+    }
+    switch Int(code) {
+    case Int(noErr): return "granted"
+    case errAEEventNotPermitted: return "denied"
+    case errAEEventWouldRequireUserConsent: return "not determined"
+    case procNotFound: return "unknown (Notes not running)"
+    default: return "unknown (\(code))"
+    }
+}
+
 private func notesError(_ error: NSDictionary) -> IrisError {
     let number = (error[NSAppleScript.errorNumber] as? NSNumber)?.intValue
     let message = error[NSAppleScript.errorMessage] as? String ?? ""
     switch number {
     case -1743:
-        return IrisError("Iris may not control Notes; turn on Notes under Iris in System Settings › Privacy & Security › Automation")
+        return IrisError("Iris may not control Notes; \(notesAutomationFix)")
     case -1712:
         return IrisError("Notes did not answer in time; if a permission dialog was open, answer it and run this again")
     default:

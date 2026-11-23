@@ -18,15 +18,15 @@ Then open Iris once with the `open` line brew prints (`open /Applications/Iris.a
 
 Always tap-qualified: Homebrew's own `iris` is an unrelated app that a bare `brew upgrade --cask iris` would install instead; a plain `brew upgrade` is fine. `iris doctor` says which version is installed and prints the upgrade command when a newer release exists.
 
-Open Iris.app for a menu bar icon: the bot head, with a dot while Iris lacks full Calendar access. Its menu asks for access or opens Privacy Settings, shows the version, and can open Iris at login. `brew upgrade` quits the menu bar and reopens the new version; running `iris mcp` servers are left alone.
+Open Iris.app for a menu bar icon: the bot head, with a dot while Iris lacks full Calendar access or Notes access is denied. Its menu shows the Calendar and Notes permission state; for Calendar it asks for access or opens Privacy Settings, for Notes it asks (Allow Notes Access…, while Notes is open) or opens Automation Settings. It also shows the version, and can open Iris at login. `brew upgrade` quits the menu bar and reopens the new version; running `iris mcp` servers are left alone.
 
 While it runs, the menu bar app updates Iris itself: it checks once a day, offers a new version, and has Check for Updates… next to the version. The update replaces Iris.app in place with the same signature, so the Calendar grant, `/opt/homebrew/bin/iris` and running `iris mcp` servers carry on, and the next `iris` starts without a Gatekeeper dialog. A plain `brew upgrade` skips Iris once the app is current; the tap-qualified upgrade reinstalls it, because brew still records the version it installed.
 
 ## Use
 
     iris --help
-    iris status                                                     # permission state, never prompts
-    iris doctor                                                     # version, path, permission state, newer release if any
+    iris status                                                     # Calendar and Notes permission state, never prompts
+    iris doctor                                                     # version, path, Calendar and Notes permission state, newer release if any
     iris calendar calendars                                         # id, title, writable, source
     iris calendar events                                            # next 7 days, every calendar
     iris calendar events --from 2026-10-13 --to 2026-10-20 --calendar Work
