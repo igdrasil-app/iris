@@ -195,4 +195,11 @@ let tools: [Tool] = [
         Parameter(name: "title", kind: .string, description: "Only notes whose title contains this text, ignoring case. Default: every note."),
         Parameter(name: "limit", kind: .integer, description: "At most this many notes. Default: 50."),
     ]),
+
+    Tool(name: "show_note",
+         description: "Show one Apple Note: id, title, folder, folderId, account, created, modified, locked, shared, body (plain text, can run to megabytes), attachments (names; null for an unnamed one). A locked note gives locked true and null body and attachments.",
+         command: ["notes", "show"], parameters: [
+        // --html stays CLI-only: HTML bodies embed images as data URIs and run to tens of megabytes.
+        Parameter(name: "id", kind: .positional, description: "Note id, from notes.", required: true),
+    ]),
 ]
