@@ -5,7 +5,7 @@ struct NotesCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "notes",
         abstract: "Read Apple Notes.",
-        subcommands: [NoteFolders.self]
+        subcommands: [NoteFolders.self, NoteList.self]
     )
 }
 
@@ -78,12 +78,7 @@ private func readFolders() throws -> [FolderInfo] {
         throw IrisError("Notes changed while folders were read; run again")
     }
     let folderIds = Set(ids)
-
-    // Folders join their account by id: names repeat across accounts and parents.
-    var accountOf: [String: String] = [:]
-    for (account, folders) in zip(accounts, accountFolders) {
-        for id in strings(folders) { accountOf[id] = account }
-    }
+    let accountOf = accountByFolder(accounts, accountFolders)
 
     var folders: [FolderInfo] = []
     for index in ids.indices {
@@ -98,6 +93,180 @@ private func readFolders() throws -> [FolderInfo] {
                                   noteCount: noteLists[index].numberOfItems))
     }
     return folders
+}
+
+/// Folders join their account by id: names repeat across accounts and parents.
+private func accountByFolder(_ accounts: [String], _ accountFolders: [NSAppleEventDescriptor]) -> [String: String] {
+    var accountOf: [String: String] = [:]
+    for (account, folders) in zip(accounts, accountFolders) {
+        for id in strings(folders) { accountOf[id] = account }
+    }
+    return accountOf
+}
+
+struct NoteList: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "list",
+        abstract: "List notes, newest first: id, title, folder, folderId, account, created, modified, locked, shared.",
+        discussion: """
+            Filters apply first, then notes are sorted by modified, newest first (equal dates by id), then \
+            --limit keeps the first ones (default 50). A note shown in several folders is listed once. folder is \
+            the folder the note is kept in; --folder lists the notes a folder shows, so a folder that only shows \
+            notes kept elsewhere, as a smart folder does, lists them with their own folder. folder, folderId and \
+            account are null when Notes names no listed folder for the note. locked: the note is password protected; its title still shows. No note text \
+            is listed. The first run asks to let Iris control Notes; a denial is changed under System Settings › \
+            Privacy & Security › Automation. Notes gets 30 seconds to answer each request.
+            """
+    )
+
+    @Option(name: .customLong("folder"), help: "Folder id or name, from `iris notes folders`; repeat for several. A name in several accounts includes each; one that matches nothing is an error. Default: every folder.")
+    var folders: [String] = []
+
+    @Option(help: "Only notes modified at or after this time: 2026-10-13 (local midnight), 2026-10-13T09:00 (local time), or ISO 8601 with an offset or Z. Default: any time.")
+    var since: String?
+
+    @Option(help: "Only notes whose title contains this text, ignoring case. Default: every note.")
+    var title: String?
+
+    @Option(help: "At most this many notes.")
+    var limit = 50
+
+    func validate() throws {
+        _ = try since.map(parseDate)
+        if title == "" { throw ValidationError("--title must not be empty") }
+        if limit < 1 { throw ValidationError("--limit must be at least 1") }
+    }
+
+    func run() async throws {
+        let (notes, shown) = try await MainActor.run { try readNotes() }
+        let scope = try resolveFolders(folders, in: shown)
+        let start = try since.map(parseDate)
+        let listed = notes
+            .filter { note in
+                (scope?.contains(note.id) ?? true)
+                    && (start.map { note.modifiedDate >= $0 } ?? true)
+                    && (title.map { note.title.range(of: $0, options: .caseInsensitive) != nil } ?? true)
+            }
+            // Equal dates fall back to the id, so --limit keeps the same notes run to run.
+            .sorted { ($0.modifiedDate, $0.id) > ($1.modifiedDate, $1.id) }
+            .prefix(limit)
+        try emit(Array(listed))
+    }
+}
+
+struct NoteInfo: Encodable {
+    let id: String
+    let title: String
+    let folder: String?
+    let folderId: String?
+    let account: String?
+    let modifiedDate: Date
+    let created: String
+    let locked: Bool
+    let shared: Bool
+
+    enum CodingKeys: CodingKey { case id, title, folder, folderId, account, created, modified, locked, shared }
+
+    // Written out so a note no folder shows carries "folder": null instead of dropping the key.
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(title, forKey: .title)
+        try container.encode(folder, forKey: .folder)
+        try container.encode(folderId, forKey: .folderId)
+        try container.encode(account, forKey: .account)
+        try container.encode(created, forKey: .created)
+        try container.encode(iso(modifiedDate), forKey: .modified)
+        try container.encode(locked, forKey: .locked)
+        try container.encode(shared, forKey: .shared)
+    }
+}
+
+/// A folder and the ids of the notes it shows, smart folders included.
+struct ShownFolder {
+    let id: String
+    let name: String
+    let noteIds: [String]
+}
+
+// The note properties come from app-level `every note`, whose lists line up by index; a note shown in
+// several folders appears there once per folder. `id of container` answers missing value, but `container`
+// is a reference whose key is the id of the folder the note is kept in. The nested `every note of every
+// folder` order differs from the app-level order, so it is only used for membership, never by index.
+private let notesScript = """
+    tell application "Notes"
+        with timeout of 30 seconds
+            {id of every note, name of every note, creation date of every note, ¬
+                modification date of every note, password protected of every note, shared of every note, ¬
+                container of every note, ¬
+                id of every folder, name of every folder, id of every note of every folder, ¬
+                name of every account, id of every folder of every account}
+        end timeout
+    end tell
+    """
+
+@MainActor
+private func readNotes() throws -> ([NoteInfo], [ShownFolder]) {
+    let parts = items(try runNotesScript(notesScript))
+    guard parts.count == 12 else { throw IrisError("Notes returned \(parts.count) lists for notes, expected 12") }
+    let ids = strings(parts[0])
+    let names = strings(parts[1])
+    let created = items(parts[2])
+    let modified = items(parts[3])
+    let locked = items(parts[4])
+    let shared = items(parts[5])
+    let containers = items(parts[6])
+    let folderIds = strings(parts[7])
+    let folderNames = strings(parts[8])
+    let noteLists = items(parts[9])
+    let accounts = strings(parts[10])
+    let accountFolders = items(parts[11])
+    guard [names.count, created.count, modified.count, locked.count, shared.count, containers.count]
+            .allSatisfy({ $0 == ids.count }),
+          folderNames.count == folderIds.count, noteLists.count == folderIds.count,
+          accountFolders.count == accounts.count else {
+        throw IrisError("Notes changed while notes were read; run again")
+    }
+
+    let folders = folderIds.indices.map {
+        ShownFolder(id: folderIds[$0], name: folderNames[$0], noteIds: strings(noteLists[$0]))
+    }
+    let folderName = Dictionary(folders.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
+    let accountOf = accountByFolder(accounts, accountFolders)
+
+    var notes: [NoteInfo] = []
+    var seen: Set<String> = []
+    for index in ids.indices where seen.insert(ids[index]).inserted {
+        guard let createdDate = created[index].dateValue, let modifiedDate = modified[index].dateValue else {
+            throw IrisError("Notes returned a note without a date; run again")
+        }
+        // The folder the note is kept in, or nil when Notes names no listed folder. Any folder showing the
+        // note would be a guess, and possibly a smart one.
+        let home = containers[index].forKeyword(AEKeyword(keyAEKeyData))?.stringValue
+        let folderId = home.flatMap { folderName[$0] == nil ? nil : $0 }
+        notes.append(NoteInfo(id: ids[index], title: names[index],
+                              folder: folderId.flatMap { folderName[$0] }, folderId: folderId,
+                              account: folderId.flatMap { accountOf[$0] },
+                              modifiedDate: modifiedDate, created: iso(createdDate),
+                              locked: locked[index].booleanValue, shared: shared[index].booleanValue))
+    }
+    return (notes, folders)
+}
+
+/// The ids of the notes the named folders show; nil for every note. Match by id or name: a name in several
+/// accounts takes each folder, and a name that matches nothing is an error, never every folder.
+private func resolveFolders(_ tokens: [String], in folders: [ShownFolder]) throws -> Set<String>? {
+    if tokens.isEmpty { return nil }
+    var shown: Set<String> = []
+    var missing: [String] = []
+    for token in tokens {
+        let hits = folders.filter { $0.id == token || $0.name == token }
+        if hits.isEmpty { missing.append(token) } else { hits.forEach { shown.formUnion($0.noteIds) } }
+    }
+    guard missing.isEmpty else {
+        throw IrisError("no folder named \(missing.joined(separator: ", ")); see `iris notes folders`")
+    }
+    return shown
 }
 
 /// NSAppleScript must run on the main thread: off it the reply never arrives and the call hangs with no timeout.

@@ -186,4 +186,13 @@ let tools: [Tool] = [
     Tool(name: "note_folders",
          description: "List Apple Notes folders: id, name, account, parent (folder id, null at the top), noteCount. Subfolders and Recently Deleted included; names can repeat, ids cannot.",
          command: ["notes", "folders"], parameters: []),
+
+    Tool(name: "notes",
+         description: "List Apple Notes, newest modified first: id, title, folder, folderId, account, created, modified, locked, shared. No note text. Filters apply first, then the sort, then limit. A note shown in several folders is listed once, with the folder it is kept in.",
+         command: ["notes", "list"], parameters: [
+        Parameter(name: "folders", kind: .strings, description: "Folder ids or names, from note_folders: the notes those folders show, smart folders included. A name that matches nothing is an error. Default: every folder.", flag: "folder"),
+        Parameter(name: "since", kind: .string, description: "Only notes modified at or after this time: \(dateFormats). Default: any time."),
+        Parameter(name: "title", kind: .string, description: "Only notes whose title contains this text, ignoring case. Default: every note."),
+        Parameter(name: "limit", kind: .integer, description: "At most this many notes. Default: 50."),
+    ]),
 ]
