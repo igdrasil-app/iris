@@ -93,7 +93,8 @@ struct Parameter {
     private func string(_ value: Any) throws -> String {
         guard let string = value as? String else { throw IrisError("\(name) must be a string") }
         // A command-line word cannot carry NUL; Process would raise an exception Swift cannot catch.
-        guard !string.contains("\0") else { throw IrisError("\(name) must not contain NUL") }
+        // Checked on the bytes: a NUL followed by a combining mark is one character that is not "\0".
+        guard !string.utf8.contains(0) else { throw IrisError("\(name) must not contain NUL") }
         return string
     }
 
@@ -194,5 +195,12 @@ let tools: [Tool] = [
         Parameter(name: "since", kind: .string, description: "Only notes modified at or after this time: \(dateFormats). Default: any time."),
         Parameter(name: "title", kind: .string, description: "Only notes whose title contains this text, ignoring case. Default: every note."),
         Parameter(name: "limit", kind: .integer, description: "At most this many notes. Default: 50."),
+    ]),
+
+    Tool(name: "show_note",
+         description: "Show one Apple Note: id, title, folder, folderId, account, created, modified, locked, shared, body (plain text, can run to megabytes), attachments (names; null for an unnamed one). A locked note gives locked true and null body and attachments.",
+         command: ["notes", "show"], parameters: [
+        // --html stays CLI-only: HTML bodies embed images as data URIs and run to tens of megabytes.
+        Parameter(name: "id", kind: .positional, description: "Note id, from notes.", required: true),
     ]),
 ]

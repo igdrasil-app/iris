@@ -36,13 +36,14 @@ While it runs, the menu bar app updates Iris itself: it checks once a day, offer
     iris calendar delete <id>                                       # --occurrence <date> for one, --span future for the rest
     iris notes folders                                              # id, name, account, parent, noteCount
     iris notes list --folder Work --since 2026-10-01 --limit 10    # newest modified first, 50 by default
+    iris notes show <id>                                            # one note with its text; --html adds the HTML body
     iris mcp                                                        # MCP server over stdio; hosts start it, see below
 
 Dates in are `2026-10-13`, `2026-10-13T09:00` (local time) or ISO 8601 with an offset or `Z`, seconds and fractions optional; a bare date given as an end (`--to`, `--end`, `--until`) includes that whole day. Dates out are ISO 8601 in the Mac's zone.
 
 ## Hosts
 
-`iris mcp` serves the calendar and notes commands as MCP tools over stdio: `calendars`, `events`, `add_event`, `update_event`, `delete_event`, `note_folders`, `notes`, with the fields of the commands. Any host that starts local MCP servers can use it. Claude Code, Codex and Grok CLI:
+`iris mcp` serves the calendar and notes commands as MCP tools over stdio: `calendars`, `events`, `add_event`, `update_event`, `delete_event`, `note_folders`, `notes`, `show_note`, with the fields of the commands. Any host that starts local MCP servers can use it. Claude Code, Codex and Grok CLI:
 
     claude mcp add --scope user iris -- iris mcp
     codex mcp add iris -- iris mcp

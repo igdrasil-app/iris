@@ -5,7 +5,7 @@ struct NotesCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "notes",
         abstract: "Read Apple Notes.",
-        subcommands: [NoteFolders.self, NoteList.self]
+        subcommands: [NoteFolders.self, NoteList.self, NoteShow.self]
     )
 }
 
@@ -269,8 +269,136 @@ private func resolveFolders(_ tokens: [String], in folders: [ShownFolder]) throw
     return shown
 }
 
+struct NoteShow: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "show",
+        abstract: "Show one note: id, title, folder, folderId, account, created, modified, locked, shared, body, attachments.",
+        discussion: """
+            The id comes from `iris notes list`. body is the note's plain text. attachments are the names of \
+            its attachments, null for one Notes gives no name. folder, folderId and account are null when \
+            Notes names no listed folder for the note. A locked note (password protected) prints locked: true \
+            and null for body, html and attachments, even when it is unlocked in Notes. --html adds html, the \
+            note's HTML body, which can be large. An id that is not a note id is a usage error; a note id \
+            that matches no note is an error. The first run asks to let Iris control Notes; a denial is \
+            changed under System Settings › Privacy & Security › Automation. Notes gets 30 seconds to answer \
+            each request.
+            """
+    )
+
+    @Argument(help: "Note id, from `iris notes list`.")
+    var id: String
+
+    @Flag(help: "Add html, the note's HTML body.")
+    var html = false
+
+    func validate() throws {
+        guard isNoteId(id) else { throw ValidationError("not a note id; note ids come from `iris notes list`") }
+    }
+
+    func run() async throws {
+        let note = try await MainActor.run { try readNote(id, html: html) }
+        try emit(note)
+    }
+}
+
+/// The id is pasted into the script, so it must be exactly the form Notes prints, nothing more.
+private func isNoteId(_ id: String) -> Bool {
+    id.wholeMatch(of: #/x-coredata://[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}/ICNote/p[0-9]+/#) != nil
+}
+
+struct NoteDetail: Encodable {
+    let id: String
+    let title: String
+    let folder: String?
+    let folderId: String?
+    let account: String?
+    let created: String
+    let modified: String
+    let locked: Bool
+    let shared: Bool
+    let body: String?
+    let showsHtml: Bool
+    let html: String?
+    let attachments: [String?]?
+
+    enum CodingKeys: CodingKey { case id, title, folder, folderId, account, created, modified, locked, shared, body, html, attachments }
+
+    // Written out so empty fields carry null instead of dropping the key; html is left out unless asked for.
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(title, forKey: .title)
+        try container.encode(folder, forKey: .folder)
+        try container.encode(folderId, forKey: .folderId)
+        try container.encode(account, forKey: .account)
+        try container.encode(created, forKey: .created)
+        try container.encode(modified, forKey: .modified)
+        try container.encode(locked, forKey: .locked)
+        try container.encode(shared, forKey: .shared)
+        try container.encode(body, forKey: .body)
+        if showsHtml { try container.encode(html, forKey: .html) }
+        try container.encode(attachments, forKey: .attachments)
+    }
+}
+
+// `note id` is resolved once; each property after it is one Apple Event. Only a lookup that finds no note
+// answers missing value; any other error still fails. A locked note is never asked for its text or
+// attachments. The folder lists join the note's container to a
+// folder name and account, as `notes list` does.
+private func noteScript(_ id: String, html: Bool) -> String {
+    """
+    tell application "Notes"
+        with timeout of 30 seconds
+            try
+                set theNote to note id "\(id)"
+            on error number -1728
+                return missing value
+            end try
+            set isLocked to password protected of theNote
+            set {theText, theHtml, theNames} to {missing value, missing value, missing value}
+            if not isLocked then
+                set {theText, theHtml, theNames} to {plaintext of theNote, ¬
+                    \(html ? "body of theNote" : "missing value"), name of every attachment of theNote}
+            end if
+            {name of theNote, creation date of theNote, modification date of theNote, ¬
+                isLocked, shared of theNote, container of theNote, theText, theHtml, theNames, ¬
+                id of every folder, name of every folder, name of every account, id of every folder of every account}
+        end timeout
+    end tell
+    """
+}
+
+@MainActor
+private func readNote(_ id: String, html: Bool) throws -> NoteDetail {
+    let result = try runNotesScript(noteScript(id, html: html))
+    guard result.descriptorType == typeAEList else { throw IrisError("no note with id \(id); see `iris notes list`") }
+    let parts = items(result)
+    guard parts.count == 13 else { throw IrisError("Notes returned \(parts.count) items for a note, expected 13") }
+    let folderIds = strings(parts[9])
+    let folderNames = strings(parts[10])
+    let accounts = strings(parts[11])
+    let accountFolders = items(parts[12])
+    guard let created = parts[1].dateValue, let modified = parts[2].dateValue,
+          folderNames.count == folderIds.count, accountFolders.count == accounts.count else {
+        throw IrisError("Notes changed while the note was read; run again")
+    }
+    let folderName = Dictionary(zip(folderIds, folderNames), uniquingKeysWith: { first, _ in first })
+    let home = parts[5].forKeyword(AEKeyword(keyAEKeyData))?.stringValue
+    let folderId = home.flatMap { folderName[$0] == nil ? nil : $0 }
+    // Decided here, not by what Notes returns: once the note is unlocked in Notes, Notes hands out its text.
+    let locked = parts[3].booleanValue
+    return NoteDetail(id: id, title: parts[0].stringValue ?? "",
+                      folder: folderId.flatMap { folderName[$0] }, folderId: folderId,
+                      account: folderId.flatMap { accountByFolder(accounts, accountFolders)[$0] },
+                      created: iso(created), modified: iso(modified),
+                      locked: locked, shared: parts[4].booleanValue,
+                      body: locked ? nil : parts[6].stringValue,
+                      showsHtml: html, html: locked ? nil : parts[7].stringValue,
+                      attachments: locked ? nil : items(parts[8]).map(\.stringValue))
+}
+
 /// NSAppleScript must run on the main thread: off it the reply never arrives and the call hangs with no timeout.
-/// The source is always a fixed string; nothing a caller supplies is pasted into it.
+/// The source is a fixed string; the only caller text ever put in is a note id that passed `isNoteId`.
 @MainActor
 func runNotesScript(_ source: String) throws -> NSAppleEventDescriptor {
     guard let script = NSAppleScript(source: source) else { throw IrisError("the Notes script does not compile") }
