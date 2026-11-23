@@ -17,8 +17,8 @@ func runMenuBar() -> Never {
     exit(0)
 }
 
-/// The menu bar icon: the mascot's bot head, with a dot while Iris lacks full Calendar access or may not
-/// control Notes. Notes not determined is no dot: many people never use Notes with Iris.
+/// The menu bar icon: the mascot's bot head, with a dot while Iris lacks full Calendar access or Notes
+/// access is denied. Notes not determined is no dot: many people never use Notes with Iris.
 @MainActor
 final class MenuBar: NSObject, NSMenuDelegate {
     private let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -27,7 +27,9 @@ final class MenuBar: NSObject, NSMenuDelegate {
     private let updater = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
     private let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
     private var status = EKEventStore.authorizationStatus(for: .event)
-    private var notes = notesPermission()
+    // What the last probe answered; the menu shows this, at most one timer tick old.
+    private var notes = "unknown"
+    private var probingNotes = false
     private var timer: Timer?
 
     override init() {
@@ -36,21 +38,36 @@ final class MenuBar: NSObject, NSMenuDelegate {
         menu.delegate = self
         item.menu = menu
         showStatus()
+        probeNotes()
         // The grant changes in System Settings, which tells no one; asking is cheap.
-        // Asking about Notes takes several milliseconds, too long for the main thread every 5 seconds.
         timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
-            Task.detached {
-                let notes = notesPermission()
-                await self?.refresh(notes: notes)
-            }
+            MainActor.assumeIsolated { self?.refresh() }
         }
     }
 
-    private func refresh(notes: String) {
+    private func refresh() {
+        probeNotes()
         let now = EKEventStore.authorizationStatus(for: .event)
-        guard now != status || notes != self.notes else { return }
+        guard now != status else { return }
         status = now
-        self.notes = notes
+        showStatus()
+    }
+
+    /// Asks about Notes off the main thread: the call takes milliseconds and has been known to hang.
+    /// One at a time, so an older answer never lands on top of a newer one.
+    private func probeNotes(ask: Bool = false) {
+        guard !probingNotes else { return }
+        probingNotes = true
+        Task.detached { [weak self] in
+            let answer = notesPermission(ask: ask)
+            await self?.show(notes: answer)
+        }
+    }
+
+    private func show(notes answer: String) {
+        probingNotes = false
+        guard answer != notes else { return }
+        notes = answer
         showStatus()
     }
 
@@ -60,7 +77,7 @@ final class MenuBar: NSObject, NSMenuDelegate {
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
-        refresh(notes: notesPermission())
+        refresh()
         menu.removeAllItems()
         menu.addItem(withTitle: "Calendar: \(describe(status))", action: nil, keyEquivalent: "")
         switch status {
@@ -112,16 +129,14 @@ final class MenuBar: NSObject, NSMenuDelegate {
             } catch {
                 showError(error)
             }
-            refresh(notes: notes)
+            refresh()
         }
     }
 
-    // The dialog blocks the caller until the person answers.
+    // The dialog holds the probe until the person answers; the timer's probes wait behind it.
     @objc private func allowNotesAccess() {
-        Task.detached { [weak self] in
-            let notes = notesPermission(ask: true)
-            await self?.refresh(notes: notes)
-        }
+        NSApp.activate()
+        probeNotes(ask: true)
     }
 
     @objc private func openPrivacySettings() {
