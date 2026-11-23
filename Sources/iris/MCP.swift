@@ -194,8 +194,10 @@ private func call(_ params: [String: Any]) throws -> [String: Any] {
         // The child is the whole tree: the re-launch in becomeResponsible keeps its pid, and no
         // command starts a process of its own, so its exit closes both pipes.
         draining.wait()
-        return toolResult("\(name) did not finish within \(toolDeadline) seconds and was stopped. If a permission "
-            + "dialog is open on this Mac, answer it; if Calendar or Notes is not responding, open it; then try again.",
+        // No "try again": a write may have been saved before the child was stopped, and repeating it would double it.
+        return toolResult("\(name) did not finish within \(toolDeadline) seconds and was stopped; whether it took "
+            + "effect is not known. Before repeating a change, check with events that it was not made. If a permission "
+            + "dialog is open on this Mac, answer it; if Calendar or Notes is not responding, open it.",
             isError: true)
     }
     draining.wait()
