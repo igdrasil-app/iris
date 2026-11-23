@@ -197,6 +197,14 @@ let tools: [Tool] = [
         Parameter(name: "limit", kind: .integer, description: "At most this many notes. Default: 50."),
     ]),
 
+    Tool(name: "search_notes",
+         description: "Find Apple Notes whose title or text contains every word of text, ignoring case and diacritics: id, title, folder, folderId, modified, snippet. No ranking: newest modified first, then limit. snippet is 160 characters of the text, whitespace collapsed, from 60 before the first word found there; null when the words are only in the title. A locked note is matched on its title only. Reads every note's text on each call.",
+         command: ["notes", "search"], parameters: [
+        Parameter(name: "text", kind: .positional, description: "The words to find, separated by spaces; every one must occur.", required: true),
+        Parameter(name: "folders", kind: .strings, description: "Folder ids or names, from note_folders: the notes those folders show, smart folders included. A name that matches nothing is an error. Default: every folder.", flag: "folder"),
+        Parameter(name: "limit", kind: .integer, description: "At most this many notes. Default: 20."),
+    ]),
+
     Tool(name: "show_note",
          description: "Show one Apple Note: id, title, folder, folderId, account, created, modified, locked, shared, body (plain text, can run to megabytes), attachments (names; null for an unnamed one). A locked note gives locked true and null body and attachments.",
          command: ["notes", "show"], parameters: [
