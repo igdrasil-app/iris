@@ -4,7 +4,7 @@ import Foundation
 struct MCP: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "mcp",
-        abstract: "Serve the calendar commands as MCP tools over stdio.",
+        abstract: "Serve the calendar and notes commands as MCP tools over stdio.",
         // Lines stay under 80 columns: help wraps at 80 when piped, and a wrapped command no longer pastes.
         discussion: """
             Hosts start this, not people. Tools: calendars, events, add_event, update_event, delete_event, note_folders, notes, search_notes, show_note, with the fields of the commands. Each host adds iris with its own line; Claude Code, Codex and Grok CLI:
@@ -65,8 +65,9 @@ private let serverInfo: [String: Any] = [
 ]
 
 private let instructions = """
-    Apple Calendar on this Mac. Use these tools for anything in Apple Calendar, not the Calendar app's windows, \
-    AppleScript or screen control; use those only when none of these tools covers the task. \
+    Apple Calendar and Apple Notes on this Mac. Use these tools for anything in Calendar or Notes, not the \
+    apps' windows, AppleScript or screen control; use those only when none of these tools covers the task. \
+    Notes are read only: search_notes or notes finds a note and its id, show_note gives its text. \
     Dates in: 2026-10-13, 2026-10-13T09:00 (local time), or ISO 8601 with an offset or Z; \
     a bare date given as an end (to, end, until) includes that whole day. Dates out: ISO 8601 in the Mac's zone. \
     Changing or deleting a recurring event needs occurrence (one occurrence) or span future (the whole series). \

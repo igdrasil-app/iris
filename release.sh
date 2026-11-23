@@ -48,7 +48,7 @@ cask "iris" do
 
   url "https://github.com/$RELEASE_REPO/releases/download/v#{version}/Iris-#{version}.tar.gz"
   name "Iris"
-  desc "Apple Calendar for the coding agents you run"
+  desc "Apple Calendar and Notes for the coding agents you run"
   homepage "https://github.com/igdrasil-app/iris"
 
   # The menu bar app updates itself with Sparkle; a plain brew upgrade skips a bundle that is already current.
