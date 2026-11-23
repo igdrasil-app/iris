@@ -14,7 +14,7 @@ struct NoteFolders: AsyncParsableCommand {
         commandName: "folders",
         abstract: "List Notes folders: id, name, account, parent, noteCount.",
         discussion: """
-            Every folder of every account, subfolders and Recently Deleted included. Names can repeat; \
+            Every folder of every account, subfolders included. Names can repeat; \
             the id tells folders apart. parent is the id of the folder it sits in, or null at the top of \
             its account. noteCount is what the folder shows: a note shown in several folders, as a smart \
             folder does, counts in each. The first run asks to let Iris control Notes; a denial is changed \
