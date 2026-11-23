@@ -9,7 +9,9 @@ struct Doctor: AsyncParsableCommand {
             version and bundle come from Iris.app, so a bare build prints null for both. \
             latest is the newest release on the Homebrew tap, null when GitHub does not answer \
             within a few seconds; that is never an error. update holds the upgrade command and \
-            is present only when latest is newer than version.
+            is present only when latest is newer than version. notes is whether Iris may control \
+            Notes: granted, denied, not determined, or unknown, as when Notes is not running. \
+            notesFix says how to allow it and is present only when notes is denied.
             """
     )
 
@@ -22,10 +24,13 @@ struct Doctor: AsyncParsableCommand {
         if let version, let latest, isNewer(latest, than: version) {
             update = "brew upgrade --cask igdrasil-app/tap/iris"
         }
+        let notes = notesPermission()
         try emit(DoctorInfo(version: version,
                             path: executable?.path,
                             bundle: app?.bundleIdentifier,
                             calendars: describe(EKEventStore.authorizationStatus(for: .event)),
+                            notes: notes,
+                            notesFix: notes == "denied" ? notesAutomationFix : nil,
                             responsible: responsibleDescription(),
                             latest: latest,
                             update: update))
@@ -45,19 +50,23 @@ struct DoctorInfo: Encodable {
     let path: String?
     let bundle: String?
     let calendars: String
+    let notes: String
+    let notesFix: String?
     let responsible: String
     let latest: String?
     let update: String?
 
-    enum CodingKeys: CodingKey { case version, path, bundle, calendars, responsible, latest, update }
+    enum CodingKeys: CodingKey { case version, path, bundle, calendars, notes, notesFix, responsible, latest, update }
 
-    // An unknown fact prints as null so the reader sees the check ran; update is only there when there is one.
+    // An unknown fact prints as null so the reader sees the check ran; notesFix and update are only there when there is one.
     func encode(to encoder: Encoder) throws {
         var fields = encoder.container(keyedBy: CodingKeys.self)
         try fields.encode(version, forKey: .version)
         try fields.encode(path, forKey: .path)
         try fields.encode(bundle, forKey: .bundle)
         try fields.encode(calendars, forKey: .calendars)
+        try fields.encode(notes, forKey: .notes)
+        try fields.encodeIfPresent(notesFix, forKey: .notesFix)
         try fields.encode(responsible, forKey: .responsible)
         try fields.encode(latest, forKey: .latest)
         try fields.encodeIfPresent(update, forKey: .update)

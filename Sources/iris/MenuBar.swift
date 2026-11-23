@@ -17,7 +17,8 @@ func runMenuBar() -> Never {
     exit(0)
 }
 
-/// The menu bar icon: the mascot's bot head, with a dot while Iris lacks full Calendar access.
+/// The menu bar icon: the mascot's bot head, with a dot while Iris lacks full Calendar access or may not
+/// control Notes. Notes not determined is no dot: many people never use Notes with Iris.
 @MainActor
 final class MenuBar: NSObject, NSMenuDelegate {
     private let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -26,6 +27,7 @@ final class MenuBar: NSObject, NSMenuDelegate {
     private let updater = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
     private let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
     private var status = EKEventStore.authorizationStatus(for: .event)
+    private var notes = notesPermission()
     private var timer: Timer?
 
     override init() {
@@ -35,25 +37,30 @@ final class MenuBar: NSObject, NSMenuDelegate {
         item.menu = menu
         showStatus()
         // The grant changes in System Settings, which tells no one; asking is cheap.
+        // Asking about Notes takes several milliseconds, too long for the main thread every 5 seconds.
         timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.refresh() }
+            Task.detached {
+                let notes = notesPermission()
+                await self?.refresh(notes: notes)
+            }
         }
     }
 
-    private func refresh() {
+    private func refresh(notes: String) {
         let now = EKEventStore.authorizationStatus(for: .event)
-        guard now != status else { return }
+        guard now != status || notes != self.notes else { return }
         status = now
+        self.notes = notes
         showStatus()
     }
 
     private func showStatus() {
-        item.button?.image = botGlyph(badge: status != .fullAccess)
-        item.button?.toolTip = "Iris: Calendar \(describe(status))"
+        item.button?.image = botGlyph(badge: status != .fullAccess || notes == "denied")
+        item.button?.toolTip = "Iris: Calendar \(describe(status)), Notes \(notes)"
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
-        refresh()
+        refresh(notes: notesPermission())
         menu.removeAllItems()
         menu.addItem(withTitle: "Calendar: \(describe(status))", action: nil, keyEquivalent: "")
         switch status {
@@ -61,6 +68,15 @@ final class MenuBar: NSObject, NSMenuDelegate {
             menu.addItem(action("Allow Calendar Access…", #selector(allowAccess)))
         case .denied, .writeOnly:
             menu.addItem(action("Open Privacy Settings…", #selector(openPrivacySettings)))
+        default:
+            break
+        }
+        menu.addItem(withTitle: "Notes: \(notes)", action: nil, keyEquivalent: "")
+        switch notes {
+        case "not determined":
+            menu.addItem(action("Allow Notes Access…", #selector(allowNotesAccess)))
+        case "denied":
+            menu.addItem(action("Open Automation Settings…", #selector(openAutomationSettings)))
         default:
             break
         }
@@ -96,12 +112,24 @@ final class MenuBar: NSObject, NSMenuDelegate {
             } catch {
                 showError(error)
             }
-            refresh()
+            refresh(notes: notes)
+        }
+    }
+
+    // The dialog blocks the caller until the person answers.
+    @objc private func allowNotesAccess() {
+        Task.detached { [weak self] in
+            let notes = notesPermission(ask: true)
+            await self?.refresh(notes: notes)
         }
     }
 
     @objc private func openPrivacySettings() {
         NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars")!)
+    }
+
+    @objc private func openAutomationSettings() {
+        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation")!)
     }
 
     @objc private func toggleOpenAtLogin() {
