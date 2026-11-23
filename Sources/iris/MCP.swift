@@ -7,7 +7,7 @@ struct MCP: ParsableCommand {
         abstract: "Serve the calendar and notes commands as MCP tools over stdio.",
         // Lines stay under 80 columns: help wraps at 80 when piped, and a wrapped command no longer pastes.
         discussion: """
-            Hosts start this, not people. Tools: calendars, events, add_event, update_event, delete_event, note_folders, notes, search_notes, show_note, with the fields of the commands. Each host adds iris with its own line; Claude Code, Codex and Grok CLI:
+            Hosts start this, not people. Tools: calendars, events, add_event, update_event, delete_event, note_folders, notes, search_notes, show_note, with the fields of the commands. A call still running after 60 seconds is stopped and returns an error, so the server keeps answering. Each host adds iris with its own line; Claude Code, Codex and Grok CLI:
 
               claude mcp add --scope user iris -- iris mcp
               codex mcp add iris -- iris mcp
@@ -143,6 +143,11 @@ private func failure(id: Any, code: Int, message: String, data: [String: Any]? =
     return ["jsonrpc": "2.0", "id": id, "error": error]
 }
 
+/// The server answers one request at a time, so a call that never ends (a permission dialog nobody
+/// answers, an app that does not respond) would silence it. The notes commands give Notes 30 seconds
+/// per request and then fail with a clearer message, so this sits above that; legitimate calls take seconds.
+private let toolDeadline = 60
+
 /// A tool call runs this same binary with the matching command line, so a tool does exactly
 /// what the command does. Bad input is a tool error the model can fix; an unknown tool is not.
 private func call(_ params: [String: Any]) throws -> [String: Any] {
@@ -170,16 +175,32 @@ private func call(_ params: [String: Any]) throws -> [String: Any] {
     let errors = Pipe()
     process.standardOutput = output
     process.standardError = errors
+    let exited = DispatchSemaphore(value: 0)
+    process.terminationHandler = { _ in exited.signal() }
     try process.run()
     // Both pipes are drained at once: either one can outgrow its buffer, and a full pipe
     // would stop the child before it closes the other.
+    var outputBytes = Data()
     var errorBytes = Data()
     let draining = DispatchGroup()
+    DispatchQueue.global().async(group: draining) { outputBytes = output.fileHandleForReading.readDataToEndOfFile() }
     DispatchQueue.global().async(group: draining) { errorBytes = errors.fileHandleForReading.readDataToEndOfFile() }
-    let out = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+    if exited.wait(timeout: .now() + .seconds(toolDeadline)) == .timedOut {
+        process.terminate()
+        if exited.wait(timeout: .now() + .seconds(2)) == .timedOut {
+            if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+            exited.wait()
+        }
+        // The child is the whole tree: the re-launch in becomeResponsible keeps its pid, and no
+        // command starts a process of its own, so its exit closes both pipes.
+        draining.wait()
+        return toolResult("\(name) did not finish within \(toolDeadline) seconds and was stopped. If a permission "
+            + "dialog is open on this Mac, answer it; if Calendar or Notes is not responding, open it; then try again.",
+            isError: true)
+    }
     draining.wait()
+    let out = String(decoding: outputBytes, as: UTF8.self)
     let err = String(decoding: errorBytes, as: UTF8.self)
-    process.waitUntilExit()
 
     if process.terminationStatus == 0 { return toolResult(out.trimmingCharacters(in: .whitespacesAndNewlines)) }
     // ArgumentParser follows a validation message with usage lines; those describe flags, not tool parameters.
