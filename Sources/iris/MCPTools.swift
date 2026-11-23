@@ -93,7 +93,8 @@ struct Parameter {
     private func string(_ value: Any) throws -> String {
         guard let string = value as? String else { throw IrisError("\(name) must be a string") }
         // A command-line word cannot carry NUL; Process would raise an exception Swift cannot catch.
-        guard !string.contains("\0") else { throw IrisError("\(name) must not contain NUL") }
+        // Checked on the bytes: a NUL followed by a combining mark is one character that is not "\0".
+        guard !string.utf8.contains(0) else { throw IrisError("\(name) must not contain NUL") }
         return string
     }
 
