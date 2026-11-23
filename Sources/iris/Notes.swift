@@ -109,11 +109,11 @@ struct NoteList: AsyncParsableCommand {
         commandName: "list",
         abstract: "List notes, newest first: id, title, folder, folderId, account, created, modified, locked, shared.",
         discussion: """
-            Filters apply first, then notes are sorted by modified, newest first, then --limit keeps the first \
-            ones (default 50). A note shown in several folders is listed once. folder is the folder the note is \
-            kept in; --folder lists the notes a folder shows, so a folder that only shows notes kept elsewhere, \
-            as a smart folder does, lists them with their own folder. folder, folderId and account are null for \
-            a note no folder shows. locked: the note is password protected; its title still shows. No note text \
+            Filters apply first, then notes are sorted by modified, newest first (equal dates by id), then \
+            --limit keeps the first ones (default 50). A note shown in several folders is listed once. folder is \
+            the folder the note is kept in; --folder lists the notes a folder shows, so a folder that only shows \
+            notes kept elsewhere, as a smart folder does, lists them with their own folder. folder, folderId and \
+            account are null when Notes names no listed folder for the note. locked: the note is password protected; its title still shows. No note text \
             is listed. The first run asks to let Iris control Notes; a denial is changed under System Settings › \
             Privacy & Security › Automation. Notes gets 30 seconds to answer each request.
             """
@@ -147,7 +147,8 @@ struct NoteList: AsyncParsableCommand {
                     && (start.map { note.modifiedDate >= $0 } ?? true)
                     && (title.map { note.title.range(of: $0, options: .caseInsensitive) != nil } ?? true)
             }
-            .sorted { $0.modifiedDate > $1.modifiedDate }
+            // Equal dates fall back to the id, so --limit keeps the same notes run to run.
+            .sorted { ($0.modifiedDate, $0.id) > ($1.modifiedDate, $1.id) }
             .prefix(limit)
         try emit(Array(listed))
     }
@@ -232,10 +233,6 @@ private func readNotes() throws -> ([NoteInfo], [ShownFolder]) {
     }
     let folderName = Dictionary(folders.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
     let accountOf = accountByFolder(accounts, accountFolders)
-    var firstShowing: [String: String] = [:]
-    for folder in folders {
-        for id in folder.noteIds where firstShowing[id] == nil { firstShowing[id] = folder.id }
-    }
 
     var notes: [NoteInfo] = []
     var seen: Set<String> = []
@@ -243,9 +240,10 @@ private func readNotes() throws -> ([NoteInfo], [ShownFolder]) {
         guard let createdDate = created[index].dateValue, let modifiedDate = modified[index].dateValue else {
             throw IrisError("Notes returned a note without a date; run again")
         }
-        // The folder the note is kept in; should Notes name one it does not list, the first folder showing it.
+        // The folder the note is kept in, or nil when Notes names no listed folder. Any folder showing the
+        // note would be a guess, and possibly a smart one.
         let home = containers[index].forKeyword(AEKeyword(keyAEKeyData))?.stringValue
-        let folderId = home.flatMap { folderName[$0] == nil ? nil : $0 } ?? firstShowing[ids[index]]
+        let folderId = home.flatMap { folderName[$0] == nil ? nil : $0 }
         notes.append(NoteInfo(id: ids[index], title: names[index],
                               folder: folderId.flatMap { folderName[$0] }, folderId: folderId,
                               account: folderId.flatMap { accountOf[$0] },

@@ -42,7 +42,7 @@ Dates in are `2026-10-13`, `2026-10-13T09:00` (local time) or ISO 8601 with an o
 
 ## Hosts
 
-`iris mcp` serves the calendar commands as MCP tools over stdio: `calendars`, `events`, `add_event`, `update_event`, `delete_event`, with the fields of the commands. Any host that starts local MCP servers can use it. Claude Code, Codex and Grok CLI:
+`iris mcp` serves the calendar and notes commands as MCP tools over stdio: `calendars`, `events`, `add_event`, `update_event`, `delete_event`, `note_folders`, `notes`, with the fields of the commands. Any host that starts local MCP servers can use it. Claude Code, Codex and Grok CLI:
 
     claude mcp add --scope user iris -- iris mcp
     codex mcp add iris -- iris mcp
