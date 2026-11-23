@@ -345,7 +345,8 @@ private func snippet(of text: String?, around words: [String]) -> String? {
     guard let hit = words.lazy.compactMap({ flat.range(of: $0, options: searchOptions) }).first else { return nil }
     let start = flat.index(hit.lowerBound, offsetBy: -60, limitedBy: flat.startIndex) ?? flat.startIndex
     let end = flat.index(start, offsetBy: 160, limitedBy: flat.endIndex) ?? flat.endIndex
-    return flat[start..<end].trimmingCharacters(in: .whitespaces)
+    // Only the spaces the collapse put in: `.whitespaces` would also strip a zero-width space a word may hold.
+    return flat[start..<end].trimmingCharacters(in: CharacterSet(charactersIn: " "))
 }
 
 struct NoteMatch: Encodable {
