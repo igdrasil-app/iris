@@ -67,7 +67,8 @@ private let serverInfo: [String: Any] = [
 private let instructions = """
     Apple Calendar and Apple Notes on this Mac. Use these tools for anything in Calendar or Notes, not the \
     apps' windows, AppleScript or screen control; use those only when none of these tools covers the task. \
-    Notes are read only: search_notes or notes finds a note and its id, show_note gives its text. \
+    Notes are read only: search_notes or notes finds a note and its id; show_note gives its text unless \
+    the note is password protected. \
     Dates in: 2026-10-13, 2026-10-13T09:00 (local time), or ISO 8601 with an offset or Z; \
     a bare date given as an end (to, end, until) includes that whole day. Dates out: ISO 8601 in the Mac's zone. \
     Changing or deleting a recurring event needs occurrence (one occurrence) or span future (the whole series). \
