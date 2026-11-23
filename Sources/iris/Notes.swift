@@ -342,7 +342,8 @@ struct NoteDetail: Encodable {
 }
 
 // `note id` is resolved once; each property after it is one Apple Event. Only a lookup that finds no note
-// answers missing value; any other error still fails. The folder lists join the note's container to a
+// answers missing value; any other error still fails. A locked note is never asked for its text or
+// attachments. The folder lists join the note's container to a
 // folder name and account, as `notes list` does.
 private func noteScript(_ id: String, html: Bool) -> String {
     """
@@ -353,10 +354,14 @@ private func noteScript(_ id: String, html: Bool) -> String {
             on error number -1728
                 return missing value
             end try
+            set isLocked to password protected of theNote
+            set {theText, theHtml, theNames} to {missing value, missing value, missing value}
+            if not isLocked then
+                set {theText, theHtml, theNames} to {plaintext of theNote, ¬
+                    \(html ? "body of theNote" : "missing value"), name of every attachment of theNote}
+            end if
             {name of theNote, creation date of theNote, modification date of theNote, ¬
-                password protected of theNote, shared of theNote, container of theNote, ¬
-                plaintext of theNote, \(html ? "body of theNote" : "missing value"), ¬
-                name of every attachment of theNote, ¬
+                isLocked, shared of theNote, container of theNote, theText, theHtml, theNames, ¬
                 id of every folder, name of every folder, name of every account, id of every folder of every account}
         end timeout
     end tell
