@@ -1,6 +1,6 @@
 import Foundation
 
-// Each tool is one calendar command. The table below is the only place a tool's parameters
+// Each tool is one calendar or notes command. The table below is the only place a tool's parameters
 // live: it produces the JSON schema the host reads and the command line the call runs, so
 // a new command option needs a new row here to reach MCP.
 
