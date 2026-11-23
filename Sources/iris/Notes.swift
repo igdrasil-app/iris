@@ -5,7 +5,7 @@ struct NotesCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "notes",
         abstract: "Read Apple Notes.",
-        subcommands: [NoteFolders.self, NoteList.self, NoteShow.self]
+        subcommands: [NoteFolders.self, NoteList.self, NoteSearch.self, NoteShow.self]
     )
 }
 
@@ -138,7 +138,7 @@ struct NoteList: AsyncParsableCommand {
     }
 
     func run() async throws {
-        let (notes, shown) = try await MainActor.run { try readNotes() }
+        let (notes, shown) = try await MainActor.run { try readNotes(withText: false) }
         let scope = try resolveFolders(folders, in: shown)
         let start = try since.map(parseDate)
         let listed = notes
@@ -164,6 +164,8 @@ struct NoteInfo: Encodable {
     let created: String
     let locked: Bool
     let shared: Bool
+    /// The plain text, read only for search and never for a locked note; not part of the output.
+    var text: String? = nil
 
     enum CodingKeys: CodingKey { case id, title, folder, folderId, account, created, modified, locked, shared }
 
@@ -193,22 +195,26 @@ struct ShownFolder {
 // several folders appears there once per folder. `id of container` answers missing value, but `container`
 // is a reference whose key is the id of the folder the note is kept in. The nested `every note of every
 // folder` order differs from the app-level order, so it is only used for membership, never by index.
-private let notesScript = """
+// The text of every note is the costly list, so only search asks for it; list gets missing value there.
+private func notesScript(withText: Bool) -> String {
+    """
     tell application "Notes"
         with timeout of 30 seconds
             {id of every note, name of every note, creation date of every note, ¬
                 modification date of every note, password protected of every note, shared of every note, ¬
                 container of every note, ¬
                 id of every folder, name of every folder, id of every note of every folder, ¬
-                name of every account, id of every folder of every account}
+                name of every account, id of every folder of every account, ¬
+                \(withText ? "plaintext of every note" : "missing value")}
         end timeout
     end tell
     """
+}
 
 @MainActor
-private func readNotes() throws -> ([NoteInfo], [ShownFolder]) {
-    let parts = items(try runNotesScript(notesScript))
-    guard parts.count == 12 else { throw IrisError("Notes returned \(parts.count) lists for notes, expected 12") }
+private func readNotes(withText: Bool) throws -> ([NoteInfo], [ShownFolder]) {
+    let parts = items(try runNotesScript(notesScript(withText: withText)))
+    guard parts.count == 13 else { throw IrisError("Notes returned \(parts.count) lists for notes, expected 13") }
     let ids = strings(parts[0])
     let names = strings(parts[1])
     let created = items(parts[2])
@@ -221,8 +227,10 @@ private func readNotes() throws -> ([NoteInfo], [ShownFolder]) {
     let noteLists = items(parts[9])
     let accounts = strings(parts[10])
     let accountFolders = items(parts[11])
+    let texts = withText ? items(parts[12]) : []
     guard [names.count, created.count, modified.count, locked.count, shared.count, containers.count]
             .allSatisfy({ $0 == ids.count }),
+          !withText || texts.count == ids.count,
           folderNames.count == folderIds.count, noteLists.count == folderIds.count,
           accountFolders.count == accounts.count else {
         throw IrisError("Notes changed while notes were read; run again")
@@ -244,11 +252,14 @@ private func readNotes() throws -> ([NoteInfo], [ShownFolder]) {
         // note would be a guess, and possibly a smart one.
         let home = containers[index].forKeyword(AEKeyword(keyAEKeyData))?.stringValue
         let folderId = home.flatMap { folderName[$0] == nil ? nil : $0 }
+        let isLocked = locked[index].booleanValue
         notes.append(NoteInfo(id: ids[index], title: names[index],
                               folder: folderId.flatMap { folderName[$0] }, folderId: folderId,
                               account: folderId.flatMap { accountOf[$0] },
                               modifiedDate: modifiedDate, created: iso(createdDate),
-                              locked: locked[index].booleanValue, shared: shared[index].booleanValue))
+                              locked: isLocked, shared: shared[index].booleanValue,
+                              // Decided here, not by what Notes returns, as in `notes show`.
+                              text: withText && !isLocked ? texts[index].stringValue : nil))
     }
     return (notes, folders)
 }
@@ -267,6 +278,93 @@ private func resolveFolders(_ tokens: [String], in folders: [ShownFolder]) throw
         throw IrisError("no folder named \(missing.joined(separator: ", ")); see `iris notes folders`")
     }
     return shown
+}
+
+struct NoteSearch: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "search",
+        abstract: "Find notes whose title or text contains every given word: id, title, folder, folderId, modified, snippet.",
+        discussion: """
+            The text is split on whitespace into words; a note matches when every word occurs in its title or \
+            its text, anywhere and in any order, as part of a longer word too. Case and diacritics are ignored: \
+            cafe finds café and café finds cafe. There is no ranking: matches are sorted by modified, newest \
+            first (equal dates by id), then --limit keeps the first ones (default 20). A note shown in several \
+            folders is listed once; folder, folderId and --folder mean what they mean in `iris notes list`. \
+            snippet is the note's text with every run of whitespace, newlines included, turned into one space: \
+            160 characters starting 60 before the first occurrence of the first word, in the order given, that \
+            occurs in the text, fewer at the start or end of the text, with no space at either end. snippet is \
+            null when the words occur only in the title. A locked note (password protected) is matched on its \
+            title only and its snippet is null. Each run reads the text of every note, so it takes longer than \
+            `iris notes list`. Text starting with - goes after --: iris notes search -- -word. The first run \
+            asks to let Iris control Notes; a denial is changed under System Settings › Privacy & Security › \
+            Automation. Notes gets 30 seconds to answer each request.
+            """
+    )
+
+    @Argument(help: "The words to find, in one argument: quote several words.")
+    var text: String
+
+    @Option(name: .customLong("folder"), help: "Folder id or name, from `iris notes folders`; repeat for several. A name in several accounts includes each; one that matches nothing is an error. Default: every folder.")
+    var folders: [String] = []
+
+    @Option(help: "At most this many notes.")
+    var limit = 20
+
+    func validate() throws {
+        // No words would match every note.
+        if words.isEmpty { throw ValidationError("the search text must contain a word") }
+        if limit < 1 { throw ValidationError("--limit must be at least 1") }
+    }
+
+    private var words: [String] { text.split(whereSeparator: \.isWhitespace).map(String.init) }
+
+    func run() async throws {
+        let (notes, shown) = try await MainActor.run { try readNotes(withText: true) }
+        let scope = try resolveFolders(folders, in: shown)
+        let found = notes
+            .filter { note in
+                (scope?.contains(note.id) ?? true)
+                    && words.allSatisfy { word in
+                        note.title.range(of: word, options: searchOptions) != nil
+                            || note.text?.range(of: word, options: searchOptions) != nil
+                    }
+            }
+            .sorted { ($0.modifiedDate, $0.id) > ($1.modifiedDate, $1.id) }
+            .prefix(limit)
+        try emit(found.map { NoteMatch(note: $0, snippet: snippet(of: $0.text, around: words)) })
+    }
+}
+
+private let searchOptions: String.CompareOptions = [.caseInsensitive, .diacriticInsensitive]
+
+/// The text with whitespace runs collapsed, cut to 160 characters starting 60 before the first word, in query
+/// order, that occurs in it, then trimmed. A word holds no whitespace, so collapsing moves none of its occurrences.
+private func snippet(of text: String?, around words: [String]) -> String? {
+    guard let text else { return nil }
+    let flat = text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    guard let hit = words.lazy.compactMap({ flat.range(of: $0, options: searchOptions) }).first else { return nil }
+    let start = flat.index(hit.lowerBound, offsetBy: -60, limitedBy: flat.startIndex) ?? flat.startIndex
+    let end = flat.index(start, offsetBy: 160, limitedBy: flat.endIndex) ?? flat.endIndex
+    // Only the spaces the collapse put in: `.whitespaces` would also strip a zero-width space a word may hold.
+    return flat[start..<end].trimmingCharacters(in: CharacterSet(charactersIn: " "))
+}
+
+struct NoteMatch: Encodable {
+    let note: NoteInfo
+    let snippet: String?
+
+    enum CodingKeys: CodingKey { case id, title, folder, folderId, modified, snippet }
+
+    // Written out so null fields keep their keys.
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(note.id, forKey: .id)
+        try container.encode(note.title, forKey: .title)
+        try container.encode(note.folder, forKey: .folder)
+        try container.encode(note.folderId, forKey: .folderId)
+        try container.encode(iso(note.modifiedDate), forKey: .modified)
+        try container.encode(snippet, forKey: .snippet)
+    }
 }
 
 struct NoteShow: AsyncParsableCommand {
