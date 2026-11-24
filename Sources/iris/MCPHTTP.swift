@@ -1,35 +1,48 @@
 import Foundation
 import Network
 
-/// The tools offered over HTTP: the read tools, by name. An allowlist, so a tool added to iris later
-/// stays off HTTP until it is named here. The calendar writes are never offered.
+/// The tools offered over HTTP: the read tools, by name, and the calendar writes (`httpWriteToolNames`)
+/// when the scope file turns them on. Allowlists, so a tool added to iris later stays off HTTP until it is
+/// named in one.
 let httpToolNames = ["calendars", "events", "note_folders", "notes", "search_notes", "show_note"]
 
 let defaultHTTPPort = 8765
 let defaultTokenFile = "~/Library/Application Support/Iris/http-token"
 
-/// `respond` does not narrow the instructions; over HTTP these sentences do. The same for every scope,
-/// so they say nothing about it.
+/// `respond` does not narrow the instructions; over HTTP these sentences do. They name no calendar or
+/// folder of the scope.
+private let scopeNote = " Only the calendars and note folders its owner chose are available here; any other "
+    + "does not exist for this endpoint."
 private let readOnlyNote = " This endpoint is read only: it offers \(httpToolNames.joined(separator: ", ")), "
-    + "and cannot create, change or delete anything. Only the calendars and note folders its owner chose are "
-    + "available here; any other does not exist for this endpoint."
+    + "and cannot create, change or delete anything." + scopeNote
+
+private func writableNote(_ offering: [Tool]) -> String {
+    " This endpoint offers \(offering.map(\.name).joined(separator: ", ")). Calendar events can be created, "
+        + "changed and deleted only in the calendars its owner chose, at most \(writesPerHour) write calls an hour; "
+        + "deleting all future occurrences of a recurring event (delete_event with span future) is not available "
+        + "here and must be done on the Mac. Notes are read only." + scopeNote
+}
 
 private let maxConnections = 16      // one more is closed as soon as it arrives
 private let maxToolCalls = 4
 private let slotWait = 5             // seconds a tool call waits for a free slot, then 503
 private let requestDeadline = 60     // seconds to send the head and the body, however slowly
 private let writeDeadline = 600      // seconds to take a reply: a note can run to megabytes
+private let replyWait = 10           // seconds a stopping server waits for write replies to be sent
 private let maxHead = (maxHeaders + 1) * (maxHeadLine + 2)
 
 // Under 2026-07-28 these JSON-RPC errors also carry an HTTP status (Streamable HTTP, Request Metadata).
 private let modernErrorStatus = [-32022: 400, -32020: 400, -32601: 404]
 
-/// Serves the read tools on 127.0.0.1 until SIGTERM or SIGINT, then stops any tool call still running.
-/// Every tool call is limited to the scope pinned here, at start.
-func serveHTTP(port: Int, tokenFile: String, scopeFile: String) throws {
+/// Serves the read tools, and the calendar writes when the scope file says so, on 127.0.0.1 until SIGTERM
+/// or SIGINT, then stops any tool call still running. Every tool call is limited to the scope pinned here,
+/// at start. `stateDir` holds the write record and the count of recent writes; with writes off it is not touched.
+func serveHTTP(port: Int, tokenFile: String, scopeFile: String, stateDir: String) throws {
     let token = try readToken((tokenFile as NSString).expandingTildeInPath)
     let scope = try readScope((scopeFile as NSString).expandingTildeInPath)
-    let offering = try tools.filter { httpToolNames.contains($0.name) }.map { try $0.limited(to: scope) }
+    let names = httpToolNames + (scope.writes ? httpWriteToolNames : [])
+    let offering = try tools.filter { names.contains($0.name) }.map { try $0.limited(to: scope) }
+    let writes = scope.writes ? try WriteGuard(stateDir: stateDir) : nil
     // A client gone mid-reply is an error on that one write, not the end of the server.
     signal(SIGPIPE, SIG_IGN)
     let stop = DispatchSemaphore(value: 0)
@@ -41,12 +54,32 @@ func serveHTTP(port: Int, tokenFile: String, scopeFile: String) throws {
         return source
     }
 
-    let server = HTTPServer(token: token, offering: offering)
-    let listener = try server.listen(on: port)
+    let server = HTTPServer(token: token, offering: offering, writes: writes,
+                            note: writes == nil ? readOnlyNote : writableNote(offering))
+    // Requests arrive as soon as the listener is up; a write waits until the count is read back. The turn
+    // is always given back: a semaphore freed while taken stops the process.
+    writes?.turn.wait()
+    // A listener that dies while serving ends the server the way a signal does, then with an error.
+    // Written on the listener's queue, read here; a signal can let this thread go on while it is written.
+    let failureLock = NSLock()
+    var listenerFailure: String?
+    let listener: NWListener
+    do {
+        listener = try server.listen(on: port) { message in
+            failureLock.withLock { listenerFailure = message }
+            stop.signal()
+        }
+    } catch {
+        writes?.turn.signal()
+        throw error
+    }
+    writes?.seed()
+    writes?.turn.signal()
     // How many calendars and folders are in scope, never which.
     let ready: [String: Any] = ["address": "127.0.0.1", "port": port, "tools": server.offering.map(\.name),
                                 "calendars": scope.calendars.map { $0.count as Any } ?? "all",
-                                "folders": scope.folders.map { $0.count as Any } ?? "all"]
+                                "folders": scope.folders.map { $0.count as Any } ?? "all",
+                                "writes": scope.writes]
     if let line = try? JSONSerialization.data(withJSONObject: ready, options: [.sortedKeys]) {
         try? FileHandle.standardOutput.write(contentsOf: line + Data("\n".utf8))
     }
@@ -54,7 +87,11 @@ func serveHTTP(port: Int, tokenFile: String, scopeFile: String) throws {
     stop.wait()
     listener.cancel()
     stopToolCalls()
+    // A write that started is recorded before its reply begins; its reply gets a bounded time to be sent.
+    // A client that takes longer to read it than that is left behind: the record still holds the outcome.
+    _ = writes?.replies.wait(timeout: .now() + .seconds(replyWait))
     signals.forEach { $0.cancel() }
+    if let failure = failureLock.withLock({ listenerFailure }) { throw IrisError(failure) }
 }
 
 /// The token, read once.
@@ -103,17 +140,22 @@ func readPrivateFile(_ path: String, noun: String, recipe: String, limit: Int) t
 private final class HTTPServer {
     let token: String
     let offering: [Tool]
+    let writes: WriteGuard?              // nil when writes are off
+    let note: String                     // appended to the instructions
     private let queue = DispatchQueue(label: "iris.http")
     private var open = 0                 // connections, counted on `queue`
     private let slots = DispatchSemaphore(value: maxToolCalls)
 
-    init(token: String, offering: [Tool]) {
+    init(token: String, offering: [Tool], writes: WriteGuard?, note: String) {
         self.token = token
         self.offering = offering
+        self.writes = writes
+        self.note = note
     }
 
-    /// Listening on 127.0.0.1 and nothing else, or an error that names the port.
-    func listen(on port: Int) throws -> NWListener {
+    /// Listening on 127.0.0.1 and nothing else, or an error that names the port. If the listener dies later,
+    /// `stopped` gets the message.
+    func listen(on port: Int, stopped: @escaping (String) -> Void) throws -> NWListener {
         guard let number = NWEndpoint.Port(rawValue: UInt16(port)) else { throw IrisError("no such port: \(port)") }
         let parameters = NWParameters.tcp
         parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: number)
@@ -131,9 +173,7 @@ private final class HTTPServer {
             case .failed(let error), .waiting(let error):
                 guard listening else { failure = error; settled.signal(); return }
                 // The listener died while serving: nothing more can arrive, so the server ends.
-                writeError("iris: stopped listening on 127.0.0.1:\(port): \(error)")
-                stopToolCalls()
-                exit(1)
+                stopped("stopped listening on 127.0.0.1:\(port): \(error)")
             default:
                 break
             }
@@ -172,14 +212,19 @@ private final class HTTPServer {
         let started = DispatchTime.now()
         var entry = LogEntry()
         guard let reply = handle(connection, &entry) else { connection.cancel(); return }
+        // A stopping server waits for a write's reply until its connection is closed, not only sent.
+        defer { if reply.holdsWriteTurn { writes?.replies.leave() } }
+        // A write is over once its reply begins: a client reading it slowly must not hold up the next write.
+        if reply.holdsWriteTurn { writes?.turn.signal() }
         let sent = DispatchSemaphore(value: 0)
         connection.send(content: reply.encoded, contentContext: .finalMessage, isComplete: true,
                         completion: .contentProcessed { _ in sent.signal() })
         let delivered = sent.wait(timeout: .now() + .seconds(writeDeadline)) == .success
         if reply.holdsSlot { slots.signal() }
         let seconds = Double(DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1e9
-        writeError([iso(Date()), entry.httpMethod, entry.rpcMethod, entry.tool, String(reply.status),
-                    String(format: "%.3fs", seconds)].joined(separator: " ") + (delivered ? "" : " write-timeout"))
+        writeError(([iso(Date()), entry.httpMethod, entry.rpcMethod, entry.tool, String(reply.status),
+                     String(format: "%.3fs", seconds)] + entry.marks + (delivered ? [] : ["write-timeout"]))
+            .joined(separator: " "))
         guard delivered else { connection.forceCancel(); return }
         // Input left unread at close makes the kernel send a reset, which can destroy the reply before
         // the client reads it; so whatever else the client sends is read and dropped, for 2 seconds at most.
@@ -250,16 +295,42 @@ private final class HTTPServer {
         if let problem = headerProblem(head, method, params, modern: modern) {
             return failure(400, id: id, modern ? -32020 : -32600, problem)
         }
+        // respond reads the same text the same way, so this is the tool it will call.
+        guard method == "tools/call", let writes, let name = params["name"] as? String,
+              httpWriteToolNames.contains(name) else {
+            return reply(to: text, method, id: id, modern: modern, &entry)
+        }
+        // One write at a time, waited for before a tool-call slot.
+        guard writes.turn.wait(timeout: .now() + .seconds(slotWait)) == .success else {
+            entry.marks.append("write-busy")
+            return failure(503, id: id, -32603, "busy: another calendar change is still running, and this one "
+                + "was not made; try again shortly")
+        }
+        // Counted out in serve once the reply is sent; a stopping server waits for that.
+        writes.replies.enter()
+        var written = reply(to: text, method, id: id, modern: modern, &entry)
+        written.holdsWriteTurn = true
+        return written
+    }
+
+    private func reply(to text: String, _ method: String?, id: Any, modern: Bool, _ entry: inout LogEntry) -> Reply {
         // A slot is held until the reply is written, so clients that read slowly cannot pile up replies.
         let holdsSlot = method == "tools/call"
         if holdsSlot && slots.wait(timeout: .now() + .seconds(slotWait)) == .timedOut {
             return failure(503, id: id, -32603, "busy; try again shortly")
         }
-        guard var response = respond(to: text, offering: offering) else { return Reply(status: 202, holdsSlot: holdsSlot) }
+        var marks: [String] = []
+        var guarded: ToolCallGuard?
+        if let writes {
+            guarded = { tool, arguments, run in try writes.call(tool, arguments, run, marks: &marks) }
+        }
+        let answered = respond(to: text, offering: offering, guarded: guarded)
+        entry.marks += marks
+        guard var response = answered else { return Reply(status: 202, holdsSlot: holdsSlot) }
 
         if let method, ["initialize", "server/discover", "tools/list"].contains(method),
            var result = response["result"] as? [String: Any] {
-            if let instructions = result["instructions"] as? String { result["instructions"] = instructions + readOnlyNote }
+            if let instructions = result["instructions"] as? String { result["instructions"] = instructions + note }
             // The list is this endpoint's, not every client's of iris.
             if result["cacheScope"] != nil { result["cacheScope"] = "private" }
             response["result"] = result
@@ -326,6 +397,7 @@ private struct Reply {
     var status: Int
     var body: Data? = nil
     var holdsSlot = false
+    var holdsWriteTurn = false
 
     var encoded: Data {
         var head = "HTTP/1.1 \(status) \(reasons[status] ?? "")\r\n"
@@ -343,6 +415,8 @@ private struct LogEntry {
     var httpMethod = "-"
     var rpcMethod = "-"
     var tool = "-"
+    /// Fixed words for what the write guards did: write-busy, span-refused, write-limit, times-failed, record-failed.
+    var marks: [String] = []
 }
 
 private let httpMethods = ["GET", "HEAD", "POST", "PUT", "DELETE", "CONNECT", "OPTIONS", "TRACE", "PATCH"]

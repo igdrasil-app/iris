@@ -9,8 +9,9 @@ iris is a macOS binary that gives coding agents (Claude Code, Cursor, Codex, Ope
 - The binary must never depend on the current directory; agents run it from anywhere.
 - CLI contract: JSON on stdout; errors on stderr, exit 1 at runtime and 64 for usage; dates in ISO 8601 with the Mac's offset. `--help` is the documentation agents read; keep it complete.
 - `iris mcp` serves the calendar and notes commands as tools over stdio and writes nothing else to stdout. A tool is its command: a new option needs a row in the table in `Sources/iris/MCPTools.swift`.
-- `iris mcp --http` offers only the read tools named in `Sources/iris/MCPHTTP.swift`, on 127.0.0.1 only, behind a token read from a file (never an argument or the environment). Its stdout is one ready line; the request log goes to stderr and never holds arguments, results or the token.
+- `iris mcp --http` offers the read tools named in `Sources/iris/MCPHTTP.swift`, and the calendar writes only when the scope file says `"writes": true`, on 127.0.0.1 only, behind a token read from a file (never an argument or the environment). Its stdout is one ready line; the request log goes to stderr and never holds arguments, results or the token.
 - Over HTTP, unless its scope-file key is "all", every tool call carries the scope file's ids, pinned at start, as `--allowed-calendars` or `--allowed-folders`; the commands enforce them, and out of scope answers exactly like nonexistent.
+- Over HTTP every write passes the guards in `Sources/iris/MCPHTTPWrites.swift`: one at a time, counted and saved before it runs, never a series delete, recorded after. The state folder is locked by one server and must be the user's alone; its files are mode 600 with no ACL.
 - A calendar name that matches nothing is an error, never a silent widening to every calendar.
 - Writes change one event per call and print the result. A recurring event needs `--occurrence` or `--span future`; placeholder ids and read-only calendars are refused.
 - Notes are read only, through batched Apple Events: one event per property, never one per note. The only caller text ever put into a script is a note id that passed the id check.

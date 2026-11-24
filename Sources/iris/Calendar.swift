@@ -167,12 +167,8 @@ func grantedStore() async throws -> EKEventStore {
 }
 
 /// Match by id or title, among the allowed calendars only. A name that matches nothing is an error, never a
-/// silent widening to every calendar; nil is every calendar, and only without a scope.
-func resolveCalendars(_ tokens: [String], in store: EKEventStore) throws -> [EKCalendar]? {
-    try resolveCalendars(tokens, among: store.calendars(for: .event), allowed: nil)
-}
-
-/// The same among these calendars, which a command with nothing allowed gets without asking Calendar.
+/// silent widening to every calendar; nil is every calendar, and only without a scope. A command with
+/// nothing allowed passes no calendars, without asking Calendar.
 func resolveCalendars(_ tokens: [String], among calendars: [EKCalendar], allowed: Set<String>?) throws -> [EKCalendar]? {
     let (found, missing) = pick(tokens, from: calendars, allowed: allowed, id: \.calendarIdentifier, name: \.title)
     guard missing.isEmpty else {

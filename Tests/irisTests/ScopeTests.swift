@@ -12,8 +12,19 @@ final class ScopeTests: XCTestCase {
         XCTAssertEqual(try parse(#"{"calendars": "all", "folders": "all"}"#), ScopeFile(calendars: nil, folders: nil))
         XCTAssertEqual(try parse(#"{"calendars": [], "folders": "all"}"#), ScopeFile(calendars: [], folders: nil))
 
-        // Each is refused: nothing is assumed, least of all "all".
+        // Writes are off unless the file says true.
+        XCTAssertFalse(try parse(#"{"calendars": [], "folders": []}"#).writes)
+        XCTAssertTrue(try parse(#"{"calendars": [], "folders": [], "writes": true}"#).writes)
+        XCTAssertFalse(try parse(#"{"calendars": [], "folders": [], "writes": false}"#).writes)
+
+        // Each is refused: nothing is assumed, least of all "all" or writes.
         let refused = [
+            "writes 1": #"{"calendars": [], "folders": [], "writes": 1}"#,
+            "writes 0": #"{"calendars": [], "folders": [], "writes": 0}"#,
+            "writes a string": #"{"calendars": [], "folders": [], "writes": "true"}"#,
+            "writes null": #"{"calendars": [], "folders": [], "writes": null}"#,
+            "writes a list": #"{"calendars": [], "folders": [], "writes": [true]}"#,
+            "Writes": #"{"calendars": [], "folders": [], "Writes": true}"#,
             "missing key": #"{"calendars": "all"}"#,
             "no keys": "{}",
             "unknown key": #"{"calendars": [], "folders": [], "calender": []}"#,
@@ -101,10 +112,10 @@ final class ScopeTests: XCTestCase {
         let notes = try XCTUnwrap(tools.first { $0.name == "notes" })
         XCTAssertEqual(try notes.limited(to: scope).command, ["notes", "list"], "folders: all")
         // A tool whose command takes no scope option is refused, even when the scope says all.
-        let add = try XCTUnwrap(tools.first { $0.name == "add_event" })
-        XCTAssertThrowsError(try add.limited(to: HTTPScope(calendars: nil, folders: nil)))
+        let unscoped = Tool(name: "unscoped", description: "", command: ["calendar", "add"], scope: nil, parameters: [])
+        XCTAssertThrowsError(try unscoped.limited(to: HTTPScope(calendars: nil, folders: nil)))
         // Every tool offered over HTTP can be limited.
-        for name in httpToolNames {
+        for name in httpToolNames + httpWriteToolNames {
             let tool = try XCTUnwrap(tools.first { $0.name == name })
             XCTAssertNoThrow(try tool.limited(to: scope), name)
         }
@@ -154,6 +165,35 @@ final class ScopeTests: XCTestCase {
             XCTAssertEqual(try allowedIds(parsed.allowedCalendars, "--allowed-calendars"), ids)
             XCTAssertEqual(parsed.calendars, [smuggled])
             XCTAssertEqual(parsed.title, smuggled)
+        }
+    }
+
+    func testWriteScopeSurvivesCallerArguments() throws {
+        let smuggled = #"--allowed-calendars=["outside"]"#
+        func limited(_ name: String, _ ids: Set<String>, _ arguments: [String: Any]) throws -> [String] {
+            let argv = try XCTUnwrap(tools.first { $0.name == name })
+                .limited(to: HTTPScope(calendars: ids, folders: nil)).argv(arguments)
+            // After "--" every word is a value, so only the words before it can be the option.
+            XCTAssertEqual(argv.prefix { $0 != "--" }.filter { $0.hasPrefix("--allowed-calendars") }.count, 1, name)
+            return Array(argv.dropFirst(2))
+        }
+        for ids: Set<String> in [[], ["c1"], ["c1", "c2"]] {
+            let add = try AddEvent.parse(try limited("add_event", ids, [
+                "calendar": smuggled, "title": smuggled, "start": "2026-10-13", "location": smuggled]))
+            XCTAssertEqual(try allowedIds(add.allowedCalendars, "--allowed-calendars"), ids)
+            XCTAssertEqual(add.calendar, smuggled)
+            XCTAssertEqual(add.title, smuggled)
+
+            let update = try UpdateEvent.parse(try limited("update_event", ids, [
+                "id": smuggled, "calendar": smuggled, "title": smuggled, "notes": smuggled]))
+            XCTAssertEqual(try allowedIds(update.allowedCalendars, "--allowed-calendars"), ids)
+            XCTAssertEqual(update.id, smuggled)
+            XCTAssertEqual(update.calendar, smuggled)
+
+            let delete = try DeleteEvent.parse(try limited("delete_event", ids, ["id": smuggled, "occurrence": smuggled]))
+            XCTAssertEqual(try allowedIds(delete.allowedCalendars, "--allowed-calendars"), ids)
+            XCTAssertEqual(delete.id, smuggled)
+            XCTAssertEqual(delete.span, "this")
         }
     }
 }
