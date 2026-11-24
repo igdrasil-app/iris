@@ -39,6 +39,7 @@ While it runs, the menu bar app updates Iris itself: it checks once a day, offer
     iris notes search "dentist invoice" --limit 5                   # every word in title or text; snippet of the text
     iris notes show <id>                                            # one note with its text; --html adds the HTML body
     iris mcp                                                        # MCP server over stdio; hosts start it, see below
+    iris mcp --http                                                 # the read tools over HTTP on 127.0.0.1:8765, behind a token
 
 Dates in are `2026-10-13`, `2026-10-13T09:00` (local time) or ISO 8601 with an offset or `Z`, seconds and fractions optional; a bare date given as an end (`--to`, `--end`, `--until`) includes that whole day. Dates out are ISO 8601 in the Mac's zone.
 
@@ -69,12 +70,22 @@ Muse Code (`~/.config/muse/settings.json`):
 
     { "schema_version": 1, "mcpServers": { "iris": { "command": "iris", "args": ["mcp"] } } }
 
-Assistants that run in a vendor's cloud, such as Grok Bot, the Meta Muse app and Hark Pro, cannot start a process on this Mac and are not served.
+### Over HTTP
+
+`iris mcp --http` serves only the read tools (`calendars`, `events`, `note_folders`, `notes`, `search_notes`, `show_note`) at `http://127.0.0.1:8765/mcp` (a request gets one JSON reply and a notification an empty 202), for a host that cannot start a process on this Mac. It listens on 127.0.0.1 and nowhere else, and every request needs `Authorization: Bearer <token>`, with the token read at start from `~/Library/Application Support/Iris/http-token` (or `--token-file`; `--port` changes the port). Iris never creates the token file; this does:
+
+    mkdir -p ~/Library/Application\ Support/Iris
+    (umask 077; openssl rand -base64 32 > ~/Library/Application\ Support/Iris/http-token)
+
+The token stops a web page in your browser (which is also refused for sending an Origin header), another user of this Mac, and anything arriving through a proxy of yours. It does not stop a process running as you on this Mac, which can read the file or run iris itself. `iris help mcp` has the rest.
+
+Assistants that run in a vendor's cloud, such as Grok Bot, the Meta Muse app and Hark Pro, cannot start a process on this Mac. They can be served only if you put a proxy of your own in front of `iris mcp --http`, which makes your calendar and notes reachable from the internet behind that one token; Iris does not do that for you.
 
 ## Build and release
 
     make app                     # universal swift build, bundle as build/Iris.app, codesign; needs a Developer ID certificate
     build/Iris.app/Contents/MacOS/iris status
+    swift test                   # the HTTP gate: who gets past the token, Origin, path, method and body framing
     ./release.sh                 # the version in Info.plist: notarize, tar, GitHub release, bump the cask and the Sparkle appcast
                                  # bump CFBundleVersion with the version; Sparkle compares only that, and release.sh refuses a repeat
                                  # over SSH or from an agent, where the keychain cannot prompt: NOTARY_KEY=<p8> NOTARY_KEY_ID=<id> NOTARY_ISSUER=<uuid> SPARKLE_KEY=<file> ./release.sh

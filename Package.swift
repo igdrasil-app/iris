@@ -16,5 +16,7 @@ let package = Package(
                 .product(name: "Sparkle", package: "Sparkle"),
             ]
         ),
+        // The HTTP gate only: who gets past it could change silently, and no hand check would notice.
+        .testTarget(name: "irisTests", dependencies: ["iris"]),
     ]
 )
