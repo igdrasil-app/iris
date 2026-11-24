@@ -193,11 +193,12 @@ private let toolProcessesLock = NSLock()
 private var toolProcesses: Set<Process> = []
 private var toolCallsStopped = false
 
-/// Ends every tool process still running and returns once each has exited, so nothing a tool call
-/// started outlives the server: each is in a process group of its own, out of reach of a signal aimed
-/// at the server's group. Each gets SIGTERM; one still running 2 seconds later gets SIGKILL, and after
-/// 2 more seconds this returns whatever is left, so it takes 4 seconds at most. Only a process still
-/// running is signalled: the pid of one that has exited may already belong to another process.
+/// Stops new tool calls and ends the ones running, so a server on its way out leaves none behind: each
+/// is in a process group of its own, out of reach of a signal aimed at the server's group. Each gets
+/// SIGTERM; one still running 2 seconds later gets SIGKILL, and after 2 more seconds this returns, so
+/// it takes 4 seconds at most. Best effort at the edges: only a process still running is signalled,
+/// since the pid of one that has exited may belong to another process, but that check and the signal
+/// are two steps; and a process that survives SIGKILL for 2 seconds is left.
 func stopToolCalls() {
     toolProcessesLock.lock()
     toolCallsStopped = true
@@ -210,8 +211,8 @@ func stopToolCalls() {
 }
 
 private func waitForExit(_ processes: Set<Process>, seconds: Double) {
-    let deadline = Date().addingTimeInterval(seconds)
-    while processes.contains(where: \.isRunning) && Date() < deadline { usleep(10_000) }
+    let deadline = DispatchTime.now() + seconds
+    while processes.contains(where: \.isRunning) && DispatchTime.now() < deadline { usleep(10_000) }
 }
 
 /// A tool call runs this same binary with the matching command line, so a tool does exactly
