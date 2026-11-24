@@ -60,11 +60,13 @@ func serveHTTP(port: Int, tokenFile: String, scopeFile: String, stateDir: String
     // is always given back: a semaphore freed while taken stops the process.
     writes?.turn.wait()
     // A listener that dies while serving ends the server the way a signal does, then with an error.
+    // Written on the listener's queue, read here; a signal can let this thread go on while it is written.
+    let failureLock = NSLock()
     var listenerFailure: String?
     let listener: NWListener
     do {
         listener = try server.listen(on: port) { message in
-            listenerFailure = message
+            failureLock.withLock { listenerFailure = message }
             stop.signal()
         }
     } catch {
@@ -86,9 +88,10 @@ func serveHTTP(port: Int, tokenFile: String, scopeFile: String, stateDir: String
     listener.cancel()
     stopToolCalls()
     // A write that started is recorded before its reply begins; its reply gets a bounded time to be sent.
+    // A client that takes longer to read it than that is left behind: the record still holds the outcome.
     _ = writes?.replies.wait(timeout: .now() + .seconds(replyWait))
     signals.forEach { $0.cancel() }
-    if let listenerFailure { throw IrisError(listenerFailure) }
+    if let failure = failureLock.withLock({ listenerFailure }) { throw IrisError(failure) }
 }
 
 /// The token, read once.
@@ -209,13 +212,14 @@ private final class HTTPServer {
         let started = DispatchTime.now()
         var entry = LogEntry()
         guard let reply = handle(connection, &entry) else { connection.cancel(); return }
+        // A stopping server waits for a write's reply until its connection is closed, not only sent.
+        defer { if reply.holdsWriteTurn { writes?.replies.leave() } }
         // A write is over once its reply begins: a client reading it slowly must not hold up the next write.
         if reply.holdsWriteTurn { writes?.turn.signal() }
         let sent = DispatchSemaphore(value: 0)
         connection.send(content: reply.encoded, contentContext: .finalMessage, isComplete: true,
                         completion: .contentProcessed { _ in sent.signal() })
         let delivered = sent.wait(timeout: .now() + .seconds(writeDeadline)) == .success
-        if reply.holdsWriteTurn { writes?.replies.leave() }
         if reply.holdsSlot { slots.signal() }
         let seconds = Double(DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1e9
         writeError(([iso(Date()), entry.httpMethod, entry.rpcMethod, entry.tool, String(reply.status),

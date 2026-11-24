@@ -28,8 +28,11 @@ func deletesPastOne(_ arguments: [String: Any]) -> Bool {
 /// and the wall clock is never used, because setting it must not reopen the allowance.
 func savedWriteTimes(_ text: String, boot: String, now: Double, window: Double = writeWindow,
                      limit: Int = writesPerHour) -> [Double] {
-    var lines = text.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }
-        .filter { !$0.isEmpty }
+    guard !text.isEmpty else { return [] }
+    // A blank line is kept: it is a line that is not a time. Only the last line's own newline is dropped.
+    var lines = text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline)
+        .map { $0.trimmingCharacters(in: .whitespaces) }
+    if text.last?.isNewline == true { lines.removeLast() }
     let saidBoot = lines.first.flatMap { UUID(uuidString: $0) } != nil
     let sameBoot = saidBoot && lines.first == boot
     if saidBoot { lines.removeFirst() }

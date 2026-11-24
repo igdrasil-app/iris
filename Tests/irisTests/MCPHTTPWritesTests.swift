@@ -38,6 +38,10 @@ final class MCPHTTPWritesTests: XCTestCase {
         XCTAssertEqual(saved(["junk", "\(now - 3000)"]), justMade)
         XCTAssertEqual(saved([boot, "\(now - 3000)", "nan"]), justMade)
         XCTAssertEqual(saved([boot, "\(now - 3000)", "x"]), justMade)
+        // A blank line is a line that is not a time; the file's own last newline, also as CRLF, is not a line.
+        XCTAssertEqual(saved([boot, "", "\(now - 3000)"]), justMade)
+        XCTAssertEqual(saved(["", boot, "\(now - 3000)"]).count, 3)
+        XCTAssertEqual(savedWriteTimes("\(boot)\r\n\(now - 10)\r\n", boot: boot, now: now), [now - 10])
     }
 
     // WriteGuard itself, in a folder of its own, with a stand-in for the command: no Calendar.
@@ -96,6 +100,15 @@ final class MCPHTTPWritesTests: XCTestCase {
         XCTAssertEqual(marks, ["times-failed"])
         // Nothing left behind: the temporary file is removed when the save fails.
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: folder.path).sorted(), ["http-write-times"])
+        // Not counted: once the file can be saved again, the next write is the first one.
+        try FileManager.default.removeItem(at: times)
+        var ran = false
+        _ = try guarding.call(try tool("add_event"), [:], {
+            ran = true
+            XCTAssertEqual(try self.counted(folder), 1)
+            return ToolCall(result: toolResult("{}"), started: true)
+        }, marks: &marks)
+        XCTAssertTrue(ran)
     }
 
     func testOneGuardPerFolder() throws {
