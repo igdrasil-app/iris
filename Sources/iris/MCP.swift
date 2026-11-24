@@ -284,6 +284,26 @@ private func call(_ params: [String: Any], _ offering: [Tool]) throws -> [String
         toolProcesses.remove(process)
         toolProcessesLock.unlock()
     }
+    guard let finished = collect(process, output, errors, exited: exited, within: toolDeadline) else {
+        // No "try again": a write may have been saved before the child was stopped, and repeating it would double it.
+        return toolResult("\(name) did not finish within \(toolDeadline) seconds and was stopped; whether it took "
+            + "effect is not known. Before repeating a change, check with events that it was not made. If a permission "
+            + "dialog is open on this Mac, answer it; if Calendar or Notes is not responding, open it.",
+            isError: true)
+    }
+    let out = String(decoding: finished.output, as: UTF8.self)
+    let err = String(decoding: finished.errors, as: UTF8.self)
+
+    if process.terminationStatus == 0 { return toolResult(out.trimmingCharacters(in: .whitespacesAndNewlines)) }
+    // ArgumentParser follows a validation message with usage lines; those describe flags, not tool parameters.
+    let message = err.split(separator: "\n").prefix { !$0.hasPrefix("Usage:") }.joined(separator: "\n")
+    return toolResult(message.trimmingCharacters(in: .whitespacesAndNewlines), isError: true)
+}
+
+/// What a started child of this binary wrote, once it exits; `exited` is signalled by its termination handler.
+/// A child still running after `seconds` gets SIGTERM, and SIGKILL 2 seconds later; then this answers nil.
+func collect(_ process: Process, _ output: Pipe, _ errors: Pipe, exited: DispatchSemaphore,
+             within seconds: Int) -> (output: Data, errors: Data)? {
     // Both pipes are drained at once: either one can outgrow its buffer, and a full pipe
     // would stop the child before it closes the other.
     var outputBytes = Data()
@@ -291,7 +311,7 @@ private func call(_ params: [String: Any], _ offering: [Tool]) throws -> [String
     let draining = DispatchGroup()
     DispatchQueue.global().async(group: draining) { outputBytes = output.fileHandleForReading.readDataToEndOfFile() }
     DispatchQueue.global().async(group: draining) { errorBytes = errors.fileHandleForReading.readDataToEndOfFile() }
-    if exited.wait(timeout: .now() + .seconds(toolDeadline)) == .timedOut {
+    if exited.wait(timeout: .now() + .seconds(seconds)) == .timedOut {
         process.terminate()
         if exited.wait(timeout: .now() + .seconds(2)) == .timedOut {
             if process.isRunning { kill(process.processIdentifier, SIGKILL) }
@@ -300,20 +320,10 @@ private func call(_ params: [String: Any], _ offering: [Tool]) throws -> [String
         // The child is the whole tree: the re-launch in becomeResponsible keeps its pid, and no
         // command starts a process of its own, so its exit closes both pipes.
         draining.wait()
-        // No "try again": a write may have been saved before the child was stopped, and repeating it would double it.
-        return toolResult("\(name) did not finish within \(toolDeadline) seconds and was stopped; whether it took "
-            + "effect is not known. Before repeating a change, check with events that it was not made. If a permission "
-            + "dialog is open on this Mac, answer it; if Calendar or Notes is not responding, open it.",
-            isError: true)
+        return nil
     }
     draining.wait()
-    let out = String(decoding: outputBytes, as: UTF8.self)
-    let err = String(decoding: errorBytes, as: UTF8.self)
-
-    if process.terminationStatus == 0 { return toolResult(out.trimmingCharacters(in: .whitespacesAndNewlines)) }
-    // ArgumentParser follows a validation message with usage lines; those describe flags, not tool parameters.
-    let message = err.split(separator: "\n").prefix { !$0.hasPrefix("Usage:") }.joined(separator: "\n")
-    return toolResult(message.trimmingCharacters(in: .whitespacesAndNewlines), isError: true)
+    return (outputBytes, errorBytes)
 }
 
 private func toolResult(_ text: String, isError: Bool = false) -> [String: Any] {

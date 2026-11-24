@@ -16,8 +16,8 @@ struct NoteFolders: AsyncParsableCommand {
         discussion: """
             Every folder of every account, subfolders included. Names can repeat; \
             the id tells folders apart. parent is the id of the folder it sits in, or null at the top of \
-            its account. noteCount is what the folder shows: a note shown in several folders, as a smart \
-            folder does, counts in each. The first run asks to let Iris control Notes; a denial is changed \
+            its account or when the folder it sits in is outside --allowed-folders. noteCount is what the \
+            folder shows: a note shown in several folders, as a smart folder does, counts in each. The first run asks to let Iris control Notes; a denial is changed \
             under System Settings › Privacy & Security › Automation. Notes gets 30 seconds to answer each request.
             """
     )
@@ -57,7 +57,8 @@ struct FolderInfo: Encodable {
 }
 
 // One Apple Event per property, each covering every folder: one event per folder costs ~46 ms.
-// The order of `every folder` is the same in each, so the lists line up by index.
+// The lists line up by index while `every folder` keeps its order; the ids asked for again last
+// show that it did (see `unshifted`).
 // Without the timeout a stalled Notes holds the call for the default 120 seconds. The timeout is per
 // event, so a stalled Notes fails on the first one at 30 s.
 private let foldersScript = """
@@ -65,16 +66,19 @@ private let foldersScript = """
         with timeout of 30 seconds
             {id of every folder, name of every folder, id of every note of every folder, ¬
                 id of container of every folder, ¬
-                name of every account, id of every account, id of every folder of every account}
+                name of every account, id of every account, id of every folder of every account, ¬
+                id of every folder}
         end timeout
     end tell
     """
 
 /// Every folder, or only the allowed ones; a folder whose parent is not allowed then shows parent null.
+/// An empty allowed set answers without asking Notes.
 @MainActor
 private func readFolders(allowed: Set<String>?) throws -> [FolderInfo] {
+    if allowed?.isEmpty == true { return [] }
     let parts = items(try runNotesScript(foldersScript))
-    guard parts.count == 7 else { throw IrisError("Notes returned \(parts.count) lists for folders, expected 7") }
+    guard parts.count == 8 else { throw IrisError("Notes returned \(parts.count) lists for folders, expected 8") }
     let ids = strings(parts[0])
     let names = strings(parts[1])
     let noteLists = items(parts[2])
@@ -82,7 +86,8 @@ private func readFolders(allowed: Set<String>?) throws -> [FolderInfo] {
     let accounts = strings(parts[4])
     let accountIds = Set(strings(parts[5]))
     let accountFolders = items(parts[6])
-    guard names.count == ids.count, noteLists.count == ids.count, containers.count == ids.count,
+    guard unshifted(ids, strings(parts[7])),
+          names.count == ids.count, noteLists.count == ids.count, containers.count == ids.count,
           accountIds.count == accounts.count, accountFolders.count == accounts.count else {
         throw IrisError("Notes changed while folders were read; run again")
     }
@@ -90,19 +95,26 @@ private func readFolders(allowed: Set<String>?) throws -> [FolderInfo] {
     let accountOf = accountByFolder(accounts, accountFolders)
 
     var folders: [FolderInfo] = []
-    for index in ids.indices {
+    // A folder outside the scope is skipped before it is checked, so it cannot turn the reply into an error.
+    for index in ids.indices where allowed?.contains(ids[index]) ?? true {
         // A folder sits in another folder or, at the top, in its account.
         let container = containers[index]
         guard let account = accountOf[ids[index]],
               folderIds.contains(container) || accountIds.contains(container) else {
             throw IrisError("Notes changed while folders were read; run again")
         }
-        guard allowed?.contains(ids[index]) ?? true else { continue }
         folders.append(FolderInfo(id: ids[index], name: names[index], account: account,
                                   parent: folderIds.contains(container) && (allowed?.contains(container) ?? true) ? container : nil,
                                   noteCount: noteLists[index].numberOfItems))
     }
     return folders
+}
+
+/// Whether the lists a script read between its first and its last request still line up. Equal counts do
+/// not show it: a note added and another removed between two requests keeps every count. So each script
+/// asks for the ids again as its last item, and the two must be the same, element for element.
+func unshifted(_ first: [String], _ last: [String]) -> Bool {
+    first == last
 }
 
 /// Folders join their account by id: names repeat across accounts and parents.
@@ -123,7 +135,8 @@ struct NoteList: AsyncParsableCommand {
             --limit keeps the first ones (default 50). A note shown in several folders is listed once. folder is \
             the folder the note is kept in; --folder lists the notes a folder shows, so a folder that only shows \
             notes kept elsewhere, as a smart folder does, lists them with their own folder. folder, folderId and \
-            account are null when Notes names no listed folder for the note. locked: the note is password protected; its title still shows. No note text \
+            account are null when Notes names no listed folder for the note, or that folder is outside \
+            --allowed-folders. locked: the note is password protected; its title still shows. No note text \
             is listed. The first run asks to let Iris control Notes; a denial is changed under System Settings › \
             Privacy & Security › Automation. Notes gets 30 seconds to answer each request.
             """
@@ -211,26 +224,32 @@ struct ShownFolder {
 // is a reference whose key is the id of the folder the note is kept in. The nested `every note of every
 // folder` order differs from the app-level order, so it is only used for membership, never by index.
 // The text of every note is the costly list, so only search asks for it; list gets missing value there.
+// AppleScript sends the requests in the order written. Which folders show which notes, what the scope is
+// decided by, comes after the text and the properties it lets through, so it is never older than them;
+// the folder ids, then the note ids, are asked for again last (see `unshifted`). This is not an atomic
+// snapshot: a note that leaves the allowed folders and comes back between two requests goes unseen.
 private func notesScript(withText: Bool) -> String {
     """
     tell application "Notes"
         with timeout of 30 seconds
             {id of every note, name of every note, creation date of every note, ¬
                 modification date of every note, password protected of every note, shared of every note, ¬
-                container of every note, ¬
-                id of every folder, name of every folder, id of every note of every folder, ¬
+                container of every note, \(withText ? "plaintext of every note" : "missing value"), ¬
                 name of every account, id of every folder of every account, ¬
-                \(withText ? "plaintext of every note" : "missing value")}
+                id of every folder, name of every folder, id of every note of every folder, ¬
+                id of every folder, id of every note}
         end timeout
     end tell
     """
 }
 
-/// Every note, with the folder it is kept in only when that folder is allowed.
+/// Every note, or only those an allowed folder shows, with the folder it is kept in only when that folder
+/// is allowed. An empty allowed set answers without asking Notes.
 @MainActor
 private func readNotes(withText: Bool, allowed: Set<String>?) throws -> ([NoteInfo], [ShownFolder]) {
+    if allowed?.isEmpty == true { return ([], []) }
     let parts = items(try runNotesScript(notesScript(withText: withText)))
-    guard parts.count == 13 else { throw IrisError("Notes returned \(parts.count) lists for notes, expected 13") }
+    guard parts.count == 15 else { throw IrisError("Notes returned \(parts.count) lists for notes, expected 15") }
     let ids = strings(parts[0])
     let names = strings(parts[1])
     let created = items(parts[2])
@@ -238,13 +257,14 @@ private func readNotes(withText: Bool, allowed: Set<String>?) throws -> ([NoteIn
     let locked = items(parts[4])
     let shared = items(parts[5])
     let containers = items(parts[6])
-    let folderIds = strings(parts[7])
-    let folderNames = strings(parts[8])
-    let noteLists = items(parts[9])
-    let accounts = strings(parts[10])
-    let accountFolders = items(parts[11])
-    let texts = withText ? items(parts[12]) : []
-    guard [names.count, created.count, modified.count, locked.count, shared.count, containers.count]
+    let texts = withText ? items(parts[7]) : []
+    let accounts = strings(parts[8])
+    let accountFolders = items(parts[9])
+    let folderIds = strings(parts[10])
+    let folderNames = strings(parts[11])
+    let noteLists = items(parts[12])
+    guard unshifted(folderIds, strings(parts[13])), unshifted(ids, strings(parts[14])),
+          [names.count, created.count, modified.count, locked.count, shared.count, containers.count]
             .allSatisfy({ $0 == ids.count }),
           !withText || texts.count == ids.count,
           folderNames.count == folderIds.count, noteLists.count == folderIds.count,
@@ -257,10 +277,12 @@ private func readNotes(withText: Bool, allowed: Set<String>?) throws -> ([NoteIn
     }
     let folderName = Dictionary(folders.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
     let accountOf = accountByFolder(accounts, accountFolders)
+    let inScope = try resolveFolders([], in: folders, allowed: allowed)
 
     var notes: [NoteInfo] = []
     var seen: Set<String> = []
-    for index in ids.indices where seen.insert(ids[index]).inserted {
+    // A note outside the scope is skipped before it is checked, so it cannot turn the reply into an error.
+    for index in ids.indices where (inScope?.contains(ids[index]) ?? true) && seen.insert(ids[index]).inserted {
         guard let createdDate = created[index].dateValue, let modifiedDate = modified[index].dateValue else {
             throw IrisError("Notes returned a note without a date; run again")
         }
@@ -396,8 +418,8 @@ struct NoteShow: AsyncParsableCommand {
         discussion: """
             The id comes from `iris notes list`. body is the note's plain text. attachments are the names of \
             its attachments, null for one Notes gives no name. folder, folderId and account are null when \
-            Notes names no listed folder for the note. A locked note (password protected) prints locked: true \
-            and null for body, html and attachments, even when it is unlocked in Notes. --html adds html, the \
+            Notes names no listed folder for the note, or that folder is outside --allowed-folders. A locked \
+            note (password protected) prints locked: true and null for body, html and attachments, even when it is unlocked in Notes. --html adds html, the \
             note's HTML body, which can be large. An id that is not a note id is a usage error; a note id \
             that matches no note is an error. The first run asks to let Iris control Notes; a denial is \
             changed under System Settings › Privacy & Security › Automation. Notes gets 30 seconds to answer \
@@ -422,12 +444,14 @@ struct NoteShow: AsyncParsableCommand {
     func run() async throws {
         let allowed = try allowedIds(allowedFolders, "--allowed-folders")
         let note = try await MainActor.run { () throws -> NoteDetail in
+            guard let allowed else { return try readNote(id, html: html, allowed: nil) }
             // A note no allowed folder shows is not looked at: it fails as a note that does not exist.
-            if let allowed {
-                let inScope = try resolveFolders([], in: readShownFolders(), allowed: allowed) ?? []
-                if !inScope.contains(id) { throw noSuchNote(id) }
-            }
-            return try readNote(id, html: html, allowed: allowed)
+            guard try shownNotes(allowed).contains(id) else { throw noSuchNote(id) }
+            let read = Result { try readNote(id, html: html, allowed: allowed) }
+            // Asked again once the note is read, so a note moved out while it was read is not shown either,
+            // nor its read error. Not an atomic snapshot: one that leaves and comes back in between goes unseen.
+            guard try shownNotes(allowed).contains(id) else { throw noSuchNote(id) }
+            return try read.get()
         }
         try emit(note)
     }
@@ -441,22 +465,25 @@ private func noSuchNote(_ id: String) -> IrisError {
 private let shownFoldersScript = """
     tell application "Notes"
         with timeout of 30 seconds
-            {id of every folder, name of every folder, id of every note of every folder}
+            {id of every folder, name of every folder, id of every note of every folder, id of every folder}
         end timeout
     end tell
     """
 
+/// The ids of the notes the allowed folders show. An empty allowed set answers without asking Notes.
 @MainActor
-private func readShownFolders() throws -> [ShownFolder] {
+private func shownNotes(_ allowed: Set<String>) throws -> Set<String> {
+    if allowed.isEmpty { return [] }
     let parts = items(try runNotesScript(shownFoldersScript))
-    guard parts.count == 3 else { throw IrisError("Notes returned \(parts.count) lists for folders, expected 3") }
+    guard parts.count == 4 else { throw IrisError("Notes returned \(parts.count) lists for folders, expected 4") }
     let ids = strings(parts[0])
     let names = strings(parts[1])
     let noteLists = items(parts[2])
-    guard names.count == ids.count, noteLists.count == ids.count else {
+    guard unshifted(ids, strings(parts[3])), names.count == ids.count, noteLists.count == ids.count else {
         throw IrisError("Notes changed while folders were read; run again")
     }
-    return ids.indices.map { ShownFolder(id: ids[$0], name: names[$0], noteIds: strings(noteLists[$0])) }
+    let folders = ids.indices.map { ShownFolder(id: ids[$0], name: names[$0], noteIds: strings(noteLists[$0])) }
+    return try resolveFolders([], in: folders, allowed: allowed) ?? []
 }
 
 /// The id is pasted into the script, so it must be exactly the form Notes prints, nothing more.
@@ -502,7 +529,7 @@ struct NoteDetail: Encodable {
 // `note id` is resolved once; each property after it is one Apple Event. Only a lookup that finds no note
 // answers missing value; any other error still fails. A locked note is never asked for its text or
 // attachments. The folder lists join the note's container to a
-// folder name and account, as `notes list` does.
+// folder name and account, as `notes list` does; the folder ids are asked for again last (see `unshifted`).
 private func noteScript(_ id: String, html: Bool) -> String {
     """
     tell application "Notes"
@@ -520,7 +547,8 @@ private func noteScript(_ id: String, html: Bool) -> String {
             end if
             {name of theNote, creation date of theNote, modification date of theNote, ¬
                 isLocked, shared of theNote, container of theNote, theText, theHtml, theNames, ¬
-                id of every folder, name of every folder, name of every account, id of every folder of every account}
+                id of every folder, name of every folder, name of every account, id of every folder of every account, ¬
+                id of every folder}
         end timeout
     end tell
     """
@@ -531,12 +559,12 @@ private func readNote(_ id: String, html: Bool, allowed: Set<String>?) throws ->
     let result = try runNotesScript(noteScript(id, html: html))
     guard result.descriptorType == typeAEList else { throw noSuchNote(id) }
     let parts = items(result)
-    guard parts.count == 13 else { throw IrisError("Notes returned \(parts.count) items for a note, expected 13") }
+    guard parts.count == 14 else { throw IrisError("Notes returned \(parts.count) items for a note, expected 14") }
     let folderIds = strings(parts[9])
     let folderNames = strings(parts[10])
     let accounts = strings(parts[11])
     let accountFolders = items(parts[12])
-    guard let created = parts[1].dateValue, let modified = parts[2].dateValue,
+    guard let created = parts[1].dateValue, let modified = parts[2].dateValue, unshifted(folderIds, strings(parts[13])),
           folderNames.count == folderIds.count, accountFolders.count == accounts.count else {
         throw IrisError("Notes changed while the note was read; run again")
     }

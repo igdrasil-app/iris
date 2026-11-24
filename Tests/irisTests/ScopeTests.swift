@@ -109,4 +109,51 @@ final class ScopeTests: XCTestCase {
             XCTAssertNoThrow(try tool.limited(to: scope), name)
         }
     }
+
+    func testShiftedBatchIsCaught() {
+        XCTAssertTrue(unshifted(["n1", "n2", "n3"], ["n1", "n2", "n3"]))
+        XCTAssertTrue(unshifted([], []))
+        // n2 removed and n4 added between the first and the last request: the count is the same.
+        XCTAssertFalse(unshifted(["n1", "n2", "n3"], ["n1", "n3", "n4"]))
+        // The same notes in another order would join one note's text to another's id.
+        XCTAssertFalse(unshifted(["n1", "n2"], ["n2", "n1"]))
+        XCTAssertFalse(unshifted(["n1", "n2"], ["n1"]))
+    }
+
+    // A caller's value that spells the scope option stays a value: the command still gets the pinned ids.
+    private let smuggled = #"--allowed-folders=["outside"]"#
+
+    func testFolderScopeSurvivesCallerArguments() throws {
+        let notes = try XCTUnwrap(tools.first { $0.name == "notes" })
+        let search = try XCTUnwrap(tools.first { $0.name == "search_notes" })
+        for ids: Set<String> in [[], ["f1"], ["f1", "f2"]] {
+            let scope = HTTPScope(calendars: nil, folders: ids)
+            let listing = try notes.limited(to: scope).argv(["folders": [smuggled], "title": smuggled])
+            XCTAssertEqual(listing.filter { $0.hasPrefix("--allowed-folders") }.count, 1)
+            let list = try NoteList.parse(Array(listing.dropFirst(2)))
+            XCTAssertEqual(try allowedIds(list.allowedFolders, "--allowed-folders"), ids)
+            XCTAssertEqual(list.folders, [smuggled])
+            XCTAssertEqual(list.title, smuggled)
+
+            let searching = try search.limited(to: scope).argv(["text": smuggled, "folders": [smuggled]])
+            let found = try NoteSearch.parse(Array(searching.dropFirst(2)))
+            XCTAssertEqual(try allowedIds(found.allowedFolders, "--allowed-folders"), ids)
+            XCTAssertEqual(found.text, smuggled)
+            XCTAssertEqual(found.folders, [smuggled])
+        }
+    }
+
+    func testCalendarScopeSurvivesCallerArguments() throws {
+        let smuggled = #"--allowed-calendars=["outside"]"#
+        let events = try XCTUnwrap(tools.first { $0.name == "events" })
+        for ids: Set<String> in [[], ["c1"], ["c1", "c2"]] {
+            let argv = try events.limited(to: HTTPScope(calendars: ids, folders: nil))
+                .argv(["calendars": [smuggled], "title": smuggled])
+            XCTAssertEqual(argv.filter { $0.hasPrefix("--allowed-calendars") }.count, 1)
+            let parsed = try Events.parse(Array(argv.dropFirst(2)))
+            XCTAssertEqual(try allowedIds(parsed.allowedCalendars, "--allowed-calendars"), ids)
+            XCTAssertEqual(parsed.calendars, [smuggled])
+            XCTAssertEqual(parsed.title, smuggled)
+        }
+    }
 }

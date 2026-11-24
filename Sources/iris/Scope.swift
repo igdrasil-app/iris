@@ -89,6 +89,10 @@ private func pin(_ entries: [String], listing: [String], nameKey: String, noun: 
     return Set((found ?? []).map(\.id))
 }
 
+/// How long the scope may take to pin: the listing waits on Calendar or Notes, and on a permission dialog
+/// nobody answers it would wait for ever, with the server not yet listening.
+private let scopeDeadline = 60
+
 /// This binary with these arguments, its stdout, or an error with its stderr.
 private func runIris(_ arguments: [String]) throws -> Data {
     guard let path = executablePath() else { throw IrisError("cannot find the iris binary") }
@@ -100,18 +104,21 @@ private func runIris(_ arguments: [String]) throws -> Data {
     let errors = Pipe()
     process.standardOutput = output
     process.standardError = errors
+    let exited = DispatchSemaphore(value: 0)
+    process.terminationHandler = { _ in exited.signal() }
     try process.run()
-    var errorBytes = Data()
-    let draining = DispatchGroup()
-    DispatchQueue.global().async(group: draining) { errorBytes = errors.fileHandleForReading.readDataToEndOfFile() }
-    let outputBytes = output.fileHandleForReading.readDataToEndOfFile()
-    draining.wait()
-    process.waitUntilExit()
-    guard process.terminationStatus == 0 else {
-        let message = String(decoding: errorBytes, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-        throw IrisError("iris \(arguments.joined(separator: " ")) failed: \(message)")
+    let command = "iris \(arguments.joined(separator: " "))"
+    guard let finished = collect(process, output, errors, exited: exited, within: scopeDeadline) else {
+        let app = arguments.first == "calendar" ? "Calendar" : "Notes"
+        throw IrisError("\(command) did not finish within \(scopeDeadline) seconds and was stopped, so the scope file "
+            + "could not be pinned and the server did not start. If a permission dialog for \(app) is open on this "
+            + "Mac, answer it; if \(app) is not responding, open it; then start again.")
     }
-    return outputBytes
+    guard process.terminationStatus == 0 else {
+        let message = String(decoding: finished.errors, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        throw IrisError("\(command) failed: \(message)")
+    }
+    return finished.output
 }
 
 /// The items a caller's --calendar or --folder values name, matched by id or name, in the order named; a
