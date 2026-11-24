@@ -8,9 +8,11 @@ let httpToolNames = ["calendars", "events", "note_folders", "notes", "search_not
 let defaultHTTPPort = 8765
 let defaultTokenFile = "~/Library/Application Support/Iris/http-token"
 
-/// `respond` does not narrow the instructions; over HTTP this sentence does.
+/// `respond` does not narrow the instructions; over HTTP these sentences do. The same for every scope,
+/// so they say nothing about it.
 private let readOnlyNote = " This endpoint is read only: it offers \(httpToolNames.joined(separator: ", ")), "
-    + "and cannot create, change or delete anything."
+    + "and cannot create, change or delete anything. Only the calendars and note folders its owner chose are "
+    + "available here; any other does not exist for this endpoint."
 
 private let maxConnections = 16      // one more is closed as soon as it arrives
 private let maxToolCalls = 4
@@ -23,8 +25,11 @@ private let maxHead = (maxHeaders + 1) * (maxHeadLine + 2)
 private let modernErrorStatus = [-32022: 400, -32020: 400, -32601: 404]
 
 /// Serves the read tools on 127.0.0.1 until SIGTERM or SIGINT, then stops any tool call still running.
-func serveHTTP(port: Int, tokenFile: String) throws {
+/// Every tool call is limited to the scope pinned here, at start.
+func serveHTTP(port: Int, tokenFile: String, scopeFile: String) throws {
     let token = try readToken((tokenFile as NSString).expandingTildeInPath)
+    let scope = try readScope((scopeFile as NSString).expandingTildeInPath)
+    let offering = try tools.filter { httpToolNames.contains($0.name) }.map { try $0.limited(to: scope) }
     // A client gone mid-reply is an error on that one write, not the end of the server.
     signal(SIGPIPE, SIG_IGN)
     let stop = DispatchSemaphore(value: 0)
@@ -36,9 +41,12 @@ func serveHTTP(port: Int, tokenFile: String) throws {
         return source
     }
 
-    let server = HTTPServer(token: token, offering: tools.filter { httpToolNames.contains($0.name) })
+    let server = HTTPServer(token: token, offering: offering)
     let listener = try server.listen(on: port)
-    let ready: [String: Any] = ["address": "127.0.0.1", "port": port, "tools": server.offering.map(\.name)]
+    // How many calendars and folders are in scope, never which.
+    let ready: [String: Any] = ["address": "127.0.0.1", "port": port, "tools": server.offering.map(\.name),
+                                "calendars": scope.calendars.map { $0.count as Any } ?? "all",
+                                "folders": scope.folders.map { $0.count as Any } ?? "all"]
     if let line = try? JSONSerialization.data(withJSONObject: ready, options: [.sortedKeys]) {
         try? FileHandle.standardOutput.write(contentsOf: line + Data("\n".utf8))
     }
@@ -49,21 +57,32 @@ func serveHTTP(port: Int, tokenFile: String) throws {
     signals.forEach { $0.cancel() }
 }
 
-/// The token, read once. The file must be a regular file of this user's that no one else may read.
+/// The token, read once.
 func readToken(_ path: String) throws -> String {
     let directory = (path as NSString).deletingLastPathComponent
     let recipe = "create one: mkdir -p \"\(directory)\" && (umask 077; openssl rand -base64 32 > \"\(path)\")"
+    let data = try readPrivateFile(path, noun: "token file", recipe: recipe, limit: 4096)
+    let token = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+    guard token.count >= 32, token.utf8.allSatisfy({ (0x21...0x7E).contains($0) }) else {
+        throw IrisError("\(path) must hold a token of at least 32 characters, ASCII without spaces; \(recipe)")
+    }
+    return token
+}
+
+/// A file of at most `limit` bytes that must be a regular file of this user's that no one else may read.
+/// `noun` and `recipe` say in the errors what the file is and how to make one.
+func readPrivateFile(_ path: String, noun: String, recipe: String, limit: Int) throws -> Data {
     // Non-blocking, so a FIFO without a writer cannot hold the open; the check below refuses it.
     let descriptor = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC)
     guard descriptor >= 0 else {
-        if errno == ENOENT { throw IrisError("no token file at \(path); \(recipe)") }
-        throw IrisError("cannot read the token file \(path): \(String(cString: strerror(errno)))")
+        if errno == ENOENT { throw IrisError("no \(noun) at \(path); \(recipe)") }
+        throw IrisError("cannot read the \(noun) \(path): \(String(cString: strerror(errno)))")
     }
     let file = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
     // Checked on the open file, so what is checked is what is read.
     var info = stat()
-    guard fstat(descriptor, &info) == 0, info.st_mode & S_IFMT == S_IFREG, info.st_size <= 4096 else {
-        throw IrisError("\(path) is not a token file; \(recipe)")
+    guard fstat(descriptor, &info) == 0, info.st_mode & S_IFMT == S_IFREG, info.st_size <= limit else {
+        throw IrisError("\(path) is not a \(noun); \(recipe)")
     }
     guard info.st_uid == getuid(), info.st_mode & 0o077 == 0 else {
         throw IrisError("\(path) must be yours and readable by you only: chmod 600 \"\(path)\"")
@@ -78,11 +97,7 @@ func readToken(_ path: String) throws -> String {
     } else if errno != ENOENT {
         throw IrisError("cannot read the access control list of \(path): \(String(cString: strerror(errno)))")
     }
-    let token = String(decoding: try file.readToEnd() ?? Data(), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-    guard token.count >= 32, token.utf8.allSatisfy({ (0x21...0x7E).contains($0) }) else {
-        throw IrisError("\(path) must hold a token of at least 32 characters, ASCII without spaces; \(recipe)")
-    }
-    return token
+    return try file.readToEnd() ?? Data()
 }
 
 private final class HTTPServer {

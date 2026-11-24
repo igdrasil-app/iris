@@ -77,15 +77,22 @@ Muse Code (`~/.config/muse/settings.json`):
     mkdir -p ~/Library/Application\ Support/Iris
     (umask 077; openssl rand -base64 32 > ~/Library/Application\ Support/Iris/http-token)
 
+A caller sees only the calendars and note folders named in `~/Library/Application Support/Iris/http-scope` (or `--scope-file`), and without that file the server does not start. It is JSON with both keys; each holds names or ids, `"all"`, or `[]` for none:
+
+    (umask 077; echo '{"calendars": ["Work"], "folders": "all"}' \
+      > ~/Library/Application\ Support/Iris/http-scope)
+
+Anything else does not exist for the caller: naming it gets the same error as a name that matches nothing, and a note is there only when an allowed folder shows it, smart folders included. Names are matched to ids at start, so restart the server after changing the file; a calendar or folder created later is not included, even under an allowed name, unless the key says `"all"`.
+
 The token stops a web page in your browser (which is also refused for sending an Origin header), another user of this Mac, and anything arriving through a proxy of yours. It does not stop a process running as you on this Mac, which can read the file or run iris itself. `iris help mcp` has the rest.
 
-Assistants that run in a vendor's cloud, such as Grok Bot, the Meta Muse app and Hark Pro, cannot start a process on this Mac. They can be served only if you put a proxy of your own in front of `iris mcp --http`, which makes your calendar and notes reachable from the internet behind that one token; Iris does not do that for you.
+Assistants that run in a vendor's cloud, such as Grok Bot, the Meta Muse app and Hark Pro, cannot start a process on this Mac. They can be served only if you put a proxy of your own in front of `iris mcp --http`, which makes the calendars and notes in its scope reachable from the internet behind that one token; Iris does not do that for you.
 
 ## Build and release
 
     make app                     # universal swift build, bundle as build/Iris.app, codesign; needs a Developer ID certificate
     build/Iris.app/Contents/MacOS/iris status
-    swift test                   # the HTTP gate: who gets past the token, Origin, path, method and body framing
+    swift test                   # the HTTP gate (token, Origin, path, method, body framing) and scope (who sees what)
     ./release.sh                 # the version in Info.plist: notarize, tar, GitHub release, bump the cask and the Sparkle appcast
                                  # bump CFBundleVersion with the version; Sparkle compares only that, and release.sh refuses a repeat
                                  # over SSH or from an agent, where the keychain cannot prompt: NOTARY_KEY=<p8> NOTARY_KEY_ID=<id> NOTARY_ISSUER=<uuid> SPARKLE_KEY=<file> ./release.sh

@@ -13,9 +13,18 @@ struct CalendarCommand: ParsableCommand {
 struct Calendars: AsyncParsableCommand {
     static let configuration = CommandConfiguration(abstract: "List calendars.")
 
+    @Option(help: allowedHelp(.calendars))
+    var allowedCalendars: String?
+
+    func validate() throws {
+        _ = try allowedIds(allowedCalendars, "--allowed-calendars")
+    }
+
     func run() async throws {
         let store = try await grantedStore()
+        let allowed = try allowedIds(allowedCalendars, "--allowed-calendars")
         let calendars = store.calendars(for: .event)
+            .filter { allowed?.contains($0.calendarIdentifier) ?? true }
             .sorted { $0.title < $1.title }
             .map { CalendarInfo(id: $0.calendarIdentifier, title: $0.title,
                                 writable: $0.allowsContentModifications, source: $0.source.title) }
@@ -46,16 +55,23 @@ struct Events: AsyncParsableCommand {
     @Option(help: "Only events whose title contains this text, ignoring case. Default: every event.")
     var title: String?
 
+    @Option(help: allowedHelp(.calendars))
+    var allowedCalendars: String?
+
     func validate() throws {
         _ = try range()
         if title == "" { throw ValidationError("--title must not be empty") }
+        _ = try allowedIds(allowedCalendars, "--allowed-calendars")
     }
 
     func run() async throws {
         let store = try await grantedStore()
         let (start, end) = try range()
-        let scope = try resolveCalendars(calendars, in: store)
-        let events = fetchEvents(in: store, from: start, to: end, calendars: scope)
+        let allowed = try allowedIds(allowedCalendars, "--allowed-calendars")
+        let scope = try resolveCalendars(calendars, in: store, allowed: allowed)
+        // EventKit is never given an empty list: what it does with one is not documented.
+        let events = (scope?.isEmpty == true ? [] : fetchEvents(in: store, from: start, to: end, calendars: scope))
+            .filter { allowed?.contains($0.calendar.calendarIdentifier) ?? true }
             .filter(matches)
             .sorted { $0.startDate < $1.startDate }
             .map(EventInfo.init)
@@ -143,16 +159,11 @@ func grantedStore() async throws -> EKEventStore {
     return store
 }
 
-/// Match by id or title. A name that matches nothing is an error, never a silent widening to every calendar.
-func resolveCalendars(_ tokens: [String], in store: EKEventStore) throws -> [EKCalendar]? {
-    if tokens.isEmpty { return nil }
-    let all = store.calendars(for: .event)
-    var found: [EKCalendar] = []
-    var missing: [String] = []
-    for token in tokens {
-        let hits = all.filter { $0.calendarIdentifier == token || $0.title == token }
-        if hits.isEmpty { missing.append(token) } else { found += hits }
-    }
+/// Match by id or title, among the allowed calendars only. A name that matches nothing is an error, never a
+/// silent widening to every calendar; nil is every calendar, and only without a scope.
+func resolveCalendars(_ tokens: [String], in store: EKEventStore, allowed: Set<String>? = nil) throws -> [EKCalendar]? {
+    let (found, missing) = pick(tokens, from: store.calendars(for: .event), allowed: allowed,
+                                id: \.calendarIdentifier, name: \.title)
     guard missing.isEmpty else {
         throw IrisError("no calendar named \(missing.joined(separator: ", ")); see `iris calendar calendars`")
     }

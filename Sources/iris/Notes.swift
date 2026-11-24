@@ -22,8 +22,16 @@ struct NoteFolders: AsyncParsableCommand {
             """
     )
 
+    @Option(help: allowedHelp(.folders))
+    var allowedFolders: String?
+
+    func validate() throws {
+        _ = try allowedIds(allowedFolders, "--allowed-folders")
+    }
+
     func run() async throws {
-        let folders = try await MainActor.run { try readFolders() }
+        let allowed = try allowedIds(allowedFolders, "--allowed-folders")
+        let folders = try await MainActor.run { try readFolders(allowed: allowed) }
         try emit(folders)
     }
 }
@@ -62,8 +70,9 @@ private let foldersScript = """
     end tell
     """
 
+/// Every folder, or only the allowed ones; a folder whose parent is not allowed then shows parent null.
 @MainActor
-private func readFolders() throws -> [FolderInfo] {
+private func readFolders(allowed: Set<String>?) throws -> [FolderInfo] {
     let parts = items(try runNotesScript(foldersScript))
     guard parts.count == 7 else { throw IrisError("Notes returned \(parts.count) lists for folders, expected 7") }
     let ids = strings(parts[0])
@@ -88,8 +97,9 @@ private func readFolders() throws -> [FolderInfo] {
               folderIds.contains(container) || accountIds.contains(container) else {
             throw IrisError("Notes changed while folders were read; run again")
         }
+        guard allowed?.contains(ids[index]) ?? true else { continue }
         folders.append(FolderInfo(id: ids[index], name: names[index], account: account,
-                                  parent: folderIds.contains(container) ? container : nil,
+                                  parent: folderIds.contains(container) && (allowed?.contains(container) ?? true) ? container : nil,
                                   noteCount: noteLists[index].numberOfItems))
     }
     return folders
@@ -131,15 +141,20 @@ struct NoteList: AsyncParsableCommand {
     @Option(help: "At most this many notes.")
     var limit = 50
 
+    @Option(help: allowedHelp(.folders))
+    var allowedFolders: String?
+
     func validate() throws {
         _ = try since.map(parseDate)
         if title == "" { throw ValidationError("--title must not be empty") }
         if limit < 1 { throw ValidationError("--limit must be at least 1") }
+        _ = try allowedIds(allowedFolders, "--allowed-folders")
     }
 
     func run() async throws {
-        let (notes, shown) = try await MainActor.run { try readNotes(withText: false) }
-        let scope = try resolveFolders(folders, in: shown)
+        let allowed = try allowedIds(allowedFolders, "--allowed-folders")
+        let (notes, shown) = try await MainActor.run { try readNotes(withText: false, allowed: allowed) }
+        let scope = try resolveFolders(folders, in: shown, allowed: allowed)
         let start = try since.map(parseDate)
         let listed = notes
             .filter { note in
@@ -211,8 +226,9 @@ private func notesScript(withText: Bool) -> String {
     """
 }
 
+/// Every note, with the folder it is kept in only when that folder is allowed.
 @MainActor
-private func readNotes(withText: Bool) throws -> ([NoteInfo], [ShownFolder]) {
+private func readNotes(withText: Bool, allowed: Set<String>?) throws -> ([NoteInfo], [ShownFolder]) {
     let parts = items(try runNotesScript(notesScript(withText: withText)))
     guard parts.count == 13 else { throw IrisError("Notes returned \(parts.count) lists for notes, expected 13") }
     let ids = strings(parts[0])
@@ -251,7 +267,7 @@ private func readNotes(withText: Bool) throws -> ([NoteInfo], [ShownFolder]) {
         // The folder the note is kept in, or nil when Notes names no listed folder. Any folder showing the
         // note would be a guess, and possibly a smart one.
         let home = containers[index].forKeyword(AEKeyword(keyAEKeyData))?.stringValue
-        let folderId = home.flatMap { folderName[$0] == nil ? nil : $0 }
+        let folderId = homeFolder(home, among: folderName, allowed: allowed)
         let isLocked = locked[index].booleanValue
         notes.append(NoteInfo(id: ids[index], title: names[index],
                               folder: folderId.flatMap { folderName[$0] }, folderId: folderId,
@@ -266,18 +282,19 @@ private func readNotes(withText: Bool) throws -> ([NoteInfo], [ShownFolder]) {
 
 /// The ids of the notes the named folders show; nil for every note. Match by id or name: a name in several
 /// accounts takes each folder, and a name that matches nothing is an error, never every folder.
-private func resolveFolders(_ tokens: [String], in folders: [ShownFolder]) throws -> Set<String>? {
-    if tokens.isEmpty { return nil }
-    var shown: Set<String> = []
-    var missing: [String] = []
-    for token in tokens {
-        let hits = folders.filter { $0.id == token || $0.name == token }
-        if hits.isEmpty { missing.append(token) } else { hits.forEach { shown.formUnion($0.noteIds) } }
-    }
+/// Under a scope only allowed folders can be named, and no names means every allowed folder: so with no
+/// names this is the one rule for which notes are in scope, for list, search and show alike.
+func resolveFolders(_ tokens: [String], in folders: [ShownFolder], allowed: Set<String>?) throws -> Set<String>? {
+    let (found, missing) = pick(tokens, from: folders, allowed: allowed, id: \.id, name: \.name)
     guard missing.isEmpty else {
         throw IrisError("no folder named \(missing.joined(separator: ", ")); see `iris notes folders`")
     }
-    return shown
+    return found.map { Set($0.flatMap(\.noteIds)) }
+}
+
+/// The id of the folder a note is kept in, or nil when Notes names no listed folder or it is not allowed.
+private func homeFolder(_ home: String?, among folderName: [String: String], allowed: Set<String>?) -> String? {
+    home.flatMap { folderName[$0] == nil || !(allowed?.contains($0) ?? true) ? nil : $0 }
 }
 
 struct NoteSearch: AsyncParsableCommand {
@@ -310,17 +327,22 @@ struct NoteSearch: AsyncParsableCommand {
     @Option(help: "At most this many notes.")
     var limit = 20
 
+    @Option(help: allowedHelp(.folders))
+    var allowedFolders: String?
+
     func validate() throws {
         // No words would match every note.
         if words.isEmpty { throw ValidationError("the search text must contain a word") }
         if limit < 1 { throw ValidationError("--limit must be at least 1") }
+        _ = try allowedIds(allowedFolders, "--allowed-folders")
     }
 
     private var words: [String] { text.split(whereSeparator: \.isWhitespace).map(String.init) }
 
     func run() async throws {
-        let (notes, shown) = try await MainActor.run { try readNotes(withText: true) }
-        let scope = try resolveFolders(folders, in: shown)
+        let allowed = try allowedIds(allowedFolders, "--allowed-folders")
+        let (notes, shown) = try await MainActor.run { try readNotes(withText: true, allowed: allowed) }
+        let scope = try resolveFolders(folders, in: shown, allowed: allowed)
         let found = notes
             .filter { note in
                 (scope?.contains(note.id) ?? true)
@@ -389,14 +411,52 @@ struct NoteShow: AsyncParsableCommand {
     @Flag(help: "Add html, the note's HTML body.")
     var html = false
 
+    @Option(help: allowedHelp(.folders))
+    var allowedFolders: String?
+
     func validate() throws {
         guard isNoteId(id) else { throw ValidationError("not a note id; note ids come from `iris notes list`") }
+        _ = try allowedIds(allowedFolders, "--allowed-folders")
     }
 
     func run() async throws {
-        let note = try await MainActor.run { try readNote(id, html: html) }
+        let allowed = try allowedIds(allowedFolders, "--allowed-folders")
+        let note = try await MainActor.run { () throws -> NoteDetail in
+            // A note no allowed folder shows is not looked at: it fails as a note that does not exist.
+            if let allowed {
+                let inScope = try resolveFolders([], in: readShownFolders(), allowed: allowed) ?? []
+                if !inScope.contains(id) { throw noSuchNote(id) }
+            }
+            return try readNote(id, html: html, allowed: allowed)
+        }
         try emit(note)
     }
+}
+
+private func noSuchNote(_ id: String) -> IrisError {
+    IrisError("no note with id \(id); see `iris notes list`")
+}
+
+// Which notes each folder shows, for a limited `notes show`. A fixed script: no caller text goes in.
+private let shownFoldersScript = """
+    tell application "Notes"
+        with timeout of 30 seconds
+            {id of every folder, name of every folder, id of every note of every folder}
+        end timeout
+    end tell
+    """
+
+@MainActor
+private func readShownFolders() throws -> [ShownFolder] {
+    let parts = items(try runNotesScript(shownFoldersScript))
+    guard parts.count == 3 else { throw IrisError("Notes returned \(parts.count) lists for folders, expected 3") }
+    let ids = strings(parts[0])
+    let names = strings(parts[1])
+    let noteLists = items(parts[2])
+    guard names.count == ids.count, noteLists.count == ids.count else {
+        throw IrisError("Notes changed while folders were read; run again")
+    }
+    return ids.indices.map { ShownFolder(id: ids[$0], name: names[$0], noteIds: strings(noteLists[$0])) }
 }
 
 /// The id is pasted into the script, so it must be exactly the form Notes prints, nothing more.
@@ -467,9 +527,9 @@ private func noteScript(_ id: String, html: Bool) -> String {
 }
 
 @MainActor
-private func readNote(_ id: String, html: Bool) throws -> NoteDetail {
+private func readNote(_ id: String, html: Bool, allowed: Set<String>?) throws -> NoteDetail {
     let result = try runNotesScript(noteScript(id, html: html))
-    guard result.descriptorType == typeAEList else { throw IrisError("no note with id \(id); see `iris notes list`") }
+    guard result.descriptorType == typeAEList else { throw noSuchNote(id) }
     let parts = items(result)
     guard parts.count == 13 else { throw IrisError("Notes returned \(parts.count) items for a note, expected 13") }
     let folderIds = strings(parts[9])
@@ -482,7 +542,7 @@ private func readNote(_ id: String, html: Bool) throws -> NoteDetail {
     }
     let folderName = Dictionary(zip(folderIds, folderNames), uniquingKeysWith: { first, _ in first })
     let home = parts[5].forKeyword(AEKeyword(keyAEKeyData))?.stringValue
-    let folderId = home.flatMap { folderName[$0] == nil ? nil : $0 }
+    let folderId = homeFolder(home, among: folderName, allowed: allowed)
     // Decided here, not by what Notes returns: once the note is unlocked in Notes, Notes hands out its text.
     let locked = parts[3].booleanValue
     return NoteDetail(id: id, title: parts[0].stringValue ?? "",
