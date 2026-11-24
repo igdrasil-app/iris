@@ -4,7 +4,7 @@ import Foundation
 struct MCP: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "mcp",
-        abstract: "Serve the calendar and notes commands as MCP tools over stdio.",
+        abstract: "Serve the calendar and notes commands as MCP tools over stdio, or the read tools over HTTP.",
         // Lines stay under 80 columns: help wraps at 80 when piped, and a wrapped command no longer pastes.
         discussion: """
             Hosts start this, not people. Tools: calendars, events, add_event, update_event, delete_event, note_folders, notes, search_notes, show_note, with the fields of the commands. A call still running after 60 seconds is stopped and returns an error, so the server keeps answering. Each host adds iris with its own line; Claude Code, Codex and Grok CLI:
@@ -38,10 +38,45 @@ struct MCP: ParsableCommand {
 
               { "schema_version": 1, "mcpServers": { "iris": {
                   "command": "iris", "args": ["mcp"] } } }
+
+            Over HTTP, for a host that cannot start a process on this Mac:
+
+              iris mcp --http
+
+            serves only the read tools (calendars, events, note_folders, notes, search_notes, show_note) at http://127.0.0.1:8765/mcp, one JSON reply per POST, with no sessions; at most 16 connections and 4 tool calls at a time, and 60 seconds for a request to arrive. It prints one JSON line on stdout once it listens, then one line per request on stderr: time, methods, tool, status, duration; never arguments, results or the token. It listens on 127.0.0.1 only. Iris never makes it reachable from another machine; a proxy of your own can, and then your calendar and notes are reachable from wherever that proxy is, behind one token.
+
+            Every request needs the header Authorization: Bearer <token>. The token is read once at start from --token-file, by default ~/Library/Application Support/Iris/http-token: a file of yours that only you can read (mode 600), holding at least 32 characters. Iris never creates it; this does:
+
+              mkdir -p ~/Library/Application\\ Support/Iris
+              (umask 077; openssl rand -base64 32 \\
+                > ~/Library/Application\\ Support/Iris/http-token)
+
+            Who can call it: a web page in your browser is stopped by the token, and by the refusal of every request that carries an Origin header. Another user of this Mac, and anything that arrives through your own proxy, is stopped by the token. A process running as you on this Mac is not stopped: it can read the token file, or run iris itself.
+
+            A host adds it by URL and header; for Claude Code:
+
+              claude mcp add --transport http iris-http \\
+                http://127.0.0.1:8765/mcp \\
+                --header "Authorization: Bearer <token>"
             """
     )
 
+    @Flag(help: "Serve the read tools over HTTP on 127.0.0.1 instead of stdio.")
+    var http = false
+
+    @Option(help: "With --http: the port. Default: 8765.")
+    var port: Int?
+
+    @Option(help: "With --http: the file that holds the token. Default: ~/Library/Application Support/Iris/http-token.")
+    var tokenFile: String?
+
+    func validate() throws {
+        if !http && (port != nil || tokenFile != nil) { throw ValidationError("--port and --token-file need --http") }
+        if let port, !(1...65535).contains(port) { throw ValidationError("--port must be between 1 and 65535") }
+    }
+
     func run() throws {
+        if http { return try serveHTTP(port: port ?? defaultHTTPPort, tokenFile: tokenFile ?? defaultTokenFile) }
         // One JSON-RPC message per line in, one per line out. EOF is the host saying goodbye.
         while let line = readLine() {
             if line.allSatisfy(\.isWhitespace) { continue }
@@ -55,9 +90,9 @@ struct MCP: ParsableCommand {
 // Two generations of the protocol are in use. Since 2026-07-28 every request carries its
 // version in `_meta` and there is no handshake; before that a client sends `initialize`
 // once. Claude Code probes with the new form and falls back to the old one, so we answer both.
-private let modernVersion = "2026-07-28"
-private let legacyVersions = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"]
-private let versionKey = "io.modelcontextprotocol/protocolVersion"
+let modernVersion = "2026-07-28"
+let legacyVersions = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"]
+let versionKey = "io.modelcontextprotocol/protocolVersion"
 
 private let serverInfo: [String: Any] = [
     "name": "iris",
@@ -151,6 +186,21 @@ private func failure(id: Any, code: Int, message: String, data: [String: Any]? =
 /// per request and then fail with a clearer message, so this sits above that; legitimate calls take seconds.
 private let toolDeadline = 60
 
+/// Tool processes running now, so a server on its way out can stop them; once stopped, none starts.
+private let toolProcessesLock = NSLock()
+private var toolProcesses: Set<Process> = []
+private var toolCallsStopped = false
+
+/// Kills every tool process still running, by pid: each one is in a process group of its own, out of
+/// reach of a kill aimed at the server's group. Nothing a tool call started outlives the server.
+func stopToolCalls() {
+    toolProcessesLock.lock()
+    toolCallsStopped = true
+    let running = toolProcesses
+    toolProcessesLock.unlock()
+    for process in running { kill(process.processIdentifier, SIGKILL) }
+}
+
 /// A tool call runs this same binary with the matching command line, so a tool does exactly
 /// what the command does. Bad input is a tool error the model can fix; an unknown tool is not.
 private func call(_ params: [String: Any], _ offering: [Tool]) throws -> [String: Any] {
@@ -170,6 +220,14 @@ private func call(_ params: [String: Any], _ offering: [Tool]) throws -> [String
     }
 
     guard let path = executablePath() else { throw RPCError(code: -32603, message: "cannot find the iris binary") }
+    // Past 4096 arguments, or past the system's limit on arguments and environment together, Process
+    // raises an exception Swift cannot catch and the server dies. Each word costs its bytes, a NUL and
+    // a pointer; a call is held to half the limit, far beyond any real one.
+    let environment = ProcessInfo.processInfo.environment.map { "\($0.key)=\($0.value)" }
+    let size = ([path] + argv + environment).reduce(0) { $0 + $1.utf8.count + 1 + MemoryLayout<UnsafeRawPointer>.size }
+    guard argv.count <= 4096, size < sysconf(_SC_ARG_MAX) / 2 else {
+        return toolResult("the arguments are too long for one call", isError: true)
+    }
     let process = Process()
     process.executableURL = URL(fileURLWithPath: path)
     process.arguments = argv
@@ -180,7 +238,26 @@ private func call(_ params: [String: Any], _ offering: [Tool]) throws -> [String
     process.standardError = errors
     let exited = DispatchSemaphore(value: 0)
     process.terminationHandler = { _ in exited.signal() }
-    try process.run()
+    // Started and registered under one lock, so stopToolCalls cannot miss a process that is starting.
+    toolProcessesLock.lock()
+    if toolCallsStopped {
+        toolProcessesLock.unlock()
+        throw RPCError(code: -32603, message: "the server is stopping")
+    }
+    do {
+        try process.run()
+    } catch {
+        toolProcessesLock.unlock()
+        throw error
+    }
+    toolProcesses.insert(process)
+    toolProcessesLock.unlock()
+    // Every way out below waits for the exit first, so a process leaves the set only once it is gone.
+    defer {
+        toolProcessesLock.lock()
+        toolProcesses.remove(process)
+        toolProcessesLock.unlock()
+    }
     // Both pipes are drained at once: either one can outgrow its buffer, and a full pipe
     // would stop the child before it closes the other.
     var outputBytes = Data()
