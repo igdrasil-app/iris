@@ -28,6 +28,7 @@ private let maxToolCalls = 4
 private let slotWait = 5             // seconds a tool call waits for a free slot, then 503
 private let requestDeadline = 60     // seconds to send the head and the body, however slowly
 private let writeDeadline = 600      // seconds to take a reply: a note can run to megabytes
+private let replyWait = 10           // seconds a stopping server waits for write replies to be sent
 private let maxHead = (maxHeaders + 1) * (maxHeadLine + 2)
 
 // Under 2026-07-28 these JSON-RPC errors also carry an HTTP status (Streamable HTTP, Request Metadata).
@@ -58,9 +59,14 @@ func serveHTTP(port: Int, tokenFile: String, scopeFile: String, stateDir: String
     // Requests arrive as soon as the listener is up; a write waits until the count is read back. The turn
     // is always given back: a semaphore freed while taken stops the process.
     writes?.turn.wait()
+    // A listener that dies while serving ends the server the way a signal does, then with an error.
+    var listenerFailure: String?
     let listener: NWListener
     do {
-        listener = try server.listen(on: port)
+        listener = try server.listen(on: port) { message in
+            listenerFailure = message
+            stop.signal()
+        }
     } catch {
         writes?.turn.signal()
         throw error
@@ -79,9 +85,10 @@ func serveHTTP(port: Int, tokenFile: String, scopeFile: String, stateDir: String
     stop.wait()
     listener.cancel()
     stopToolCalls()
-    // A write cut short records what is known of it before its reply begins; it gets a moment for that.
-    if writes?.turn.wait(timeout: .now() + .seconds(5)) == .success { writes?.turn.signal() }
+    // A write that started is recorded before its reply begins; its reply gets a bounded time to be sent.
+    _ = writes?.replies.wait(timeout: .now() + .seconds(replyWait))
     signals.forEach { $0.cancel() }
+    if let listenerFailure { throw IrisError(listenerFailure) }
 }
 
 /// The token, read once.
@@ -143,8 +150,9 @@ private final class HTTPServer {
         self.note = note
     }
 
-    /// Listening on 127.0.0.1 and nothing else, or an error that names the port.
-    func listen(on port: Int) throws -> NWListener {
+    /// Listening on 127.0.0.1 and nothing else, or an error that names the port. If the listener dies later,
+    /// `stopped` gets the message.
+    func listen(on port: Int, stopped: @escaping (String) -> Void) throws -> NWListener {
         guard let number = NWEndpoint.Port(rawValue: UInt16(port)) else { throw IrisError("no such port: \(port)") }
         let parameters = NWParameters.tcp
         parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: number)
@@ -162,9 +170,7 @@ private final class HTTPServer {
             case .failed(let error), .waiting(let error):
                 guard listening else { failure = error; settled.signal(); return }
                 // The listener died while serving: nothing more can arrive, so the server ends.
-                writeError("iris: stopped listening on 127.0.0.1:\(port): \(error)")
-                stopToolCalls()
-                exit(1)
+                stopped("stopped listening on 127.0.0.1:\(port): \(error)")
             default:
                 break
             }
@@ -209,6 +215,7 @@ private final class HTTPServer {
         connection.send(content: reply.encoded, contentContext: .finalMessage, isComplete: true,
                         completion: .contentProcessed { _ in sent.signal() })
         let delivered = sent.wait(timeout: .now() + .seconds(writeDeadline)) == .success
+        if reply.holdsWriteTurn { writes?.replies.leave() }
         if reply.holdsSlot { slots.signal() }
         let seconds = Double(DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1e9
         writeError(([iso(Date()), entry.httpMethod, entry.rpcMethod, entry.tool, String(reply.status),
@@ -295,6 +302,8 @@ private final class HTTPServer {
             return failure(503, id: id, -32603, "busy: another calendar change is still running, and this one "
                 + "was not made; try again shortly")
         }
+        // Counted out in serve once the reply is sent; a stopping server waits for that.
+        writes.replies.enter()
         var written = reply(to: text, method, id: id, modern: modern, &entry)
         written.holdsWriteTurn = true
         return written

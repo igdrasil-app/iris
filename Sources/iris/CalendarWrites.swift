@@ -317,6 +317,10 @@ func findEvent(_ id: String, occurrence: String?, span: EKSpan, in store: EKEven
         .filter { $0.startDate >= dayStart && $0.startDate < dayEnd && isAllowed($0) }
         .min { abs($0.startDate.timeIntervalSince(date)) < abs($1.startDate.timeIntervalSince(date)) }
     guard let nearest else { throw IrisError("no occurrence of \(id) on \(iso(dayStart).prefix(10))") }
+    // Checked on the occurrence itself too, not only on its series.
+    guard nearest.calendar.allowsContentModifications else {
+        throw IrisError("calendar \(nearest.calendar.title) is read-only")
+    }
     return nearest
 }
 
