@@ -45,7 +45,7 @@ struct MCP: ParsableCommand {
         // One JSON-RPC message per line in, one per line out. EOF is the host saying goodbye.
         while let line = readLine() {
             if line.allSatisfy(\.isWhitespace) { continue }
-            guard let response = respond(to: line) else { continue }
+            guard let response = respond(to: line, offering: tools) else { continue }
             let data = try JSONSerialization.data(withJSONObject: response, options: [.sortedKeys, .withoutEscapingSlashes])
             FileHandle.standardOutput.write(data + Data("\n".utf8))
         }
@@ -81,8 +81,11 @@ struct RPCError: Error {
     let message: String
 }
 
-/// The reply to one line, or nil when none is due: a notification, or a stray response.
-private func respond(to line: String) -> [String: Any]? {
+/// The reply to one message, or nil when none is due: a notification, or a stray response.
+/// `offering` is every tool this caller may list or call: one outside it is not listed, and a call
+/// to it is an unknown tool, answered before any process starts. The instructions and the tools'
+/// own descriptions are not narrowed; a caller that offers fewer tools has to see to those itself.
+func respond(to line: String, offering: [Tool]) -> [String: Any]? {
     guard let json = try? JSONSerialization.jsonObject(with: Data(line.utf8)) else {
         return failure(id: NSNull(), code: -32700, message: "parse error")
     }
@@ -99,7 +102,7 @@ private func respond(to line: String) -> [String: Any]? {
                        data: ["supported": [modernVersion], "requested": requested])
     }
     do {
-        var result = try handle(method, params)
+        var result = try handle(method, params, offering)
         if requested != nil {
             result["resultType"] = "complete"
             result["_meta"] = ["io.modelcontextprotocol/serverInfo": serverInfo]
@@ -112,7 +115,7 @@ private func respond(to line: String) -> [String: Any]? {
     }
 }
 
-private func handle(_ method: String, _ params: [String: Any]) throws -> [String: Any] {
+private func handle(_ method: String, _ params: [String: Any], _ offering: [Tool]) throws -> [String: Any] {
     switch method {
     case "server/discover":
         return cacheable(["supportedVersions": [modernVersion], "capabilities": ["tools": [:]], "instructions": instructions])
@@ -123,9 +126,9 @@ private func handle(_ method: String, _ params: [String: Any]) throws -> [String
     case "ping":
         return [:]
     case "tools/list":
-        return cacheable(["tools": tools.map(\.definition)])
+        return cacheable(["tools": offering.map(\.definition)])
     case "tools/call":
-        return try call(params)
+        return try call(params, offering)
     default:
         throw RPCError(code: -32601, message: "method not found: \(method)")
     }
@@ -150,9 +153,9 @@ private let toolDeadline = 60
 
 /// A tool call runs this same binary with the matching command line, so a tool does exactly
 /// what the command does. Bad input is a tool error the model can fix; an unknown tool is not.
-private func call(_ params: [String: Any]) throws -> [String: Any] {
+private func call(_ params: [String: Any], _ offering: [Tool]) throws -> [String: Any] {
     let name = params["name"] as? String ?? ""
-    guard let tool = tools.first(where: { $0.name == name }) else {
+    guard let tool = offering.first(where: { $0.name == name }) else {
         throw RPCError(code: -32602, message: "unknown tool: \(name)")
     }
     let arguments = params["arguments"] ?? [String: Any]()
