@@ -72,7 +72,7 @@ Muse Code (`~/.config/muse/settings.json`):
 
 ### Over HTTP
 
-`iris mcp --http` serves only the read tools (`calendars`, `events`, `note_folders`, `notes`, `search_notes`, `show_note`) at `http://127.0.0.1:8765/mcp`, one JSON reply per POST, for a host that cannot start a process on this Mac. It listens on 127.0.0.1 and nowhere else, and every request needs `Authorization: Bearer <token>`, with the token read at start from `~/Library/Application Support/Iris/http-token` (or `--token-file`; `--port` changes the port). Iris never creates the token file; this does:
+`iris mcp --http` serves only the read tools (`calendars`, `events`, `note_folders`, `notes`, `search_notes`, `show_note`) at `http://127.0.0.1:8765/mcp` (a request gets one JSON reply and a notification an empty 202), for a host that cannot start a process on this Mac. It listens on 127.0.0.1 and nowhere else, and every request needs `Authorization: Bearer <token>`, with the token read at start from `~/Library/Application Support/Iris/http-token` (or `--token-file`; `--port` changes the port). Iris never creates the token file; this does:
 
     mkdir -p ~/Library/Application\ Support/Iris
     (umask 077; openssl rand -base64 32 > ~/Library/Application\ Support/Iris/http-token)

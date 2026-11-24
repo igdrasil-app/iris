@@ -47,6 +47,41 @@ final class MCPHTTPGateTests: XCTestCase {
         XCTAssertEqual(gate(head(signed([("Accept", "text/event-stream"), ("Content-Length", "2")])), token: token), .refuse(status: 406))
         XCTAssertEqual(gate(head(signed([("Accept", "application/json, text/event-stream"), ("Content-Length", "2")])), token: token),
                        .accept(bodyLength: 2))
+        for wildcard in ["application/*", "*/*"] {
+            XCTAssertEqual(gate(head(signed([("Accept", wildcard), ("Content-Length", "2")])), token: token), .accept(bodyLength: 2), wildcard)
+        }
+    }
+
+    func testExpect() {
+        XCTAssertEqual(gate(head(signed([("Expect", "100-continue"), ("Content-Length", "2")])), token: token), .refuse(status: 417))
+        XCTAssertEqual(gate(head([("Expect", "100-continue"), ("Content-Length", "2")]), token: token), .refuse(status: 401))
+    }
+
+    func testParseHead() {
+        let valid = "POST /mcp HTTP/1.1\r\nHost: x\r\nContent-Length: 2"
+        let parsed = parseHead(Array(valid.utf8))
+        XCTAssertEqual(parsed?.method, "POST")
+        XCTAssertEqual(parsed?.target, "/mcp")
+        XCTAssertEqual(parsed?.values("content-length"), ["2"])
+
+        // Each differs from the valid head in one thing.
+        let refused = [
+            "space before the colon": "POST /mcp HTTP/1.1\r\nHost : x\r\nContent-Length: 2",
+            "empty header name": "POST /mcp HTTP/1.1\r\n: x\r\nContent-Length: 2",
+            "tab in the request line": "POST\t/mcp HTTP/1.1\r\nHost: x\r\nContent-Length: 2",
+            "bare LF": "POST /mcp HTTP/1.1\nHost: x\r\nContent-Length: 2",
+            "folded line": "POST /mcp HTTP/1.1\r\nHost: x\r\n y\r\nContent-Length: 2",
+            "NUL": "POST /mcp HTTP/1.1\r\nHost: x\0\r\nContent-Length: 2",
+        ]
+        for (name, raw) in refused { XCTAssertNil(parseHead(Array(raw.utf8)), name) }
+
+        // The limits, each next to the largest head it still accepts.
+        let line = { (length: Int) in "POST /mcp HTTP/1.1\r\nX: " + String(repeating: "x", count: length - 3) }
+        XCTAssertNotNil(parseHead(Array(line(maxHeadLine).utf8)))
+        XCTAssertNil(parseHead(Array(line(maxHeadLine + 1).utf8)))
+        let headers = { (count: Int) in "POST /mcp HTTP/1.1" + String(repeating: "\r\nX: x", count: count) }
+        XCTAssertNotNil(parseHead(Array(headers(maxHeaders).utf8)))
+        XCTAssertNil(parseHead(Array(headers(maxHeaders + 1).utf8)))
     }
 
     func testFraming() {

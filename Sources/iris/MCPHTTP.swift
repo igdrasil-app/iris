@@ -53,7 +53,8 @@ func serveHTTP(port: Int, tokenFile: String) throws {
 func readToken(_ path: String) throws -> String {
     let directory = (path as NSString).deletingLastPathComponent
     let recipe = "create one: mkdir -p \"\(directory)\" && (umask 077; openssl rand -base64 32 > \"\(path)\")"
-    let descriptor = open(path, O_RDONLY)
+    // Non-blocking, so a FIFO without a writer cannot hold the open; the check below refuses it.
+    let descriptor = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC)
     guard descriptor >= 0 else {
         if errno == ENOENT { throw IrisError("no token file at \(path); \(recipe)") }
         throw IrisError("cannot read the token file \(path): \(String(cString: strerror(errno)))")
@@ -66,6 +67,16 @@ func readToken(_ path: String) throws -> String {
     }
     guard info.st_uid == getuid(), info.st_mode & 0o077 == 0 else {
         throw IrisError("\(path) must be yours and readable by you only: chmod 600 \"\(path)\"")
+    }
+    // An extended ACL can let others read a file whatever its mode. No ACL is nil with ENOENT.
+    errno = 0
+    if let acl = acl_get_fd_np(descriptor, ACL_TYPE_EXTENDED) {
+        var entry: acl_entry_t?
+        let hasEntry = acl_get_entry(acl, ACL_FIRST_ENTRY.rawValue, &entry) == 0
+        acl_free(UnsafeMutableRawPointer(acl))
+        if hasEntry { throw IrisError("\(path) has an access control list, which can let others read it; remove it: chmod -N \"\(path)\"") }
+    } else if errno != ENOENT {
+        throw IrisError("cannot read the access control list of \(path): \(String(cString: strerror(errno)))")
     }
     let token = String(decoding: try file.readToEnd() ?? Data(), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
     guard token.count >= 32, token.utf8.allSatisfy({ (0x21...0x7E).contains($0) }) else {
@@ -186,7 +197,7 @@ private final class HTTPServer {
         // Until the head is whole and parsed its token cannot be seen, so the refusals above and this
         // 400 are the only answers given without one.
         guard let headEnd, let head = parseHead(Array(buffer[..<headEnd.lowerBound])) else { return Reply(status: 400) }
-        entry.httpMethod = label(head.method)
+        entry.httpMethod = label(head.method, among: httpMethods)
 
         switch gate(head, token: token) {
         case .refuse(let status):
@@ -215,8 +226,8 @@ private final class HTTPServer {
         guard let message = value as? [String: Any] else { return failure(400, id: NSNull(), -32600, "invalid request") }
         let method = message["method"] as? String
         let params = message["params"] as? [String: Any] ?? [:]
-        entry.rpcMethod = label(message["method"])
-        if method == "tools/call" { entry.tool = label(params["name"]) }
+        entry.rpcMethod = label(message["method"], among: rpcMethods)
+        if method == "tools/call" { entry.tool = label(params["name"], among: offering.map(\.name)) }
         // A notification or a client's response: accepted, and there is nothing to do.
         guard message["method"] != nil, let id = message["id"] else { return Reply(status: 202) }
 
@@ -293,7 +304,7 @@ private func decodedName(_ value: String) -> String? {
 private let reasons = [
     200: "OK", 202: "Accepted", 400: "Bad Request", 401: "Unauthorized", 403: "Forbidden", 404: "Not Found",
     405: "Method Not Allowed", 406: "Not Acceptable", 408: "Request Timeout", 413: "Content Too Large",
-    431: "Request Header Fields Too Large", 500: "Internal Server Error", 503: "Service Unavailable",
+    417: "Expectation Failed", 431: "Request Header Fields Too Large", 500: "Internal Server Error", 503: "Service Unavailable",
 ]
 
 private struct Reply {
@@ -319,11 +330,14 @@ private struct LogEntry {
     var tool = "-"
 }
 
-/// A name the client chose, cut down to something harmless in a log line.
-private func label(_ value: Any?) -> String {
+private let httpMethods = ["GET", "HEAD", "POST", "PUT", "DELETE", "CONNECT", "OPTIONS", "TRACE", "PATCH"]
+private let rpcMethods = ["initialize", "server/discover", "ping", "tools/list", "tools/call"]
+
+/// A name the client sent, logged only if it is one of the names this server knows: anything else,
+/// a token pasted in the wrong place included, is "-".
+private func label(_ value: Any?, among known: [String]) -> String {
     guard let text = value as? String else { return "-" }
-    let cleaned = String(text.prefix(64).map { ($0.isASCII && ($0.isLetter || $0.isNumber)) || "_/-.".contains($0) ? $0 : "?" })
-    return cleaned.isEmpty ? "-" : cleaned
+    return known.first { $0 == text } ?? "-"
 }
 
 private enum Received {

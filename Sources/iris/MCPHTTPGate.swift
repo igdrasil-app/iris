@@ -64,7 +64,7 @@ enum Gate: Equatable {
 }
 
 /// Every parsed request passes this before its body is read, in this order: the token, Origin, path,
-/// method, Accept, and the body's framing. Without the right token the answer is 401 whatever else is
+/// method, Accept, Expect, and the body's framing. Without the right token the answer is 401 whatever else is
 /// wrong. The honest exception: a head `parseHead` refuses is answered 400 before its token is seen.
 func gate(_ head: RequestHead, token: String) -> Gate {
     guard authorized(head, token: token) else { return .refuse(status: 401) }
@@ -76,6 +76,8 @@ func gate(_ head: RequestHead, token: String) -> Gate {
     if !accept.isEmpty && !["application/json", "application/*", "*/*"].contains(where: accept.joined(separator: ",").contains) {
         return .refuse(status: 406)
     }
+    // A client that sent Expect waits for 100 Continue before its body, and none is ever sent.
+    guard head.values("expect").isEmpty else { return .refuse(status: 417) }
 
     // One Content-Length of ASCII digits and no Transfer-Encoding: a body framed two ways is refused.
     let lengths = head.values("content-length")
