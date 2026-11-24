@@ -8,6 +8,8 @@ struct Tool {
     let name: String
     let description: String
     let command: [String]
+    /// Which scope option the command takes; nil for none, and then the tool cannot be offered over HTTP.
+    let scope: ScopeKind?
     let parameters: [Parameter]
 
     var definition: [String: Any] {
@@ -134,10 +136,10 @@ private let span = Parameter(
 
 let tools: [Tool] = [
     Tool(name: "calendars", description: "List calendars: id, title, writable, source.",
-         command: ["calendar", "calendars"], parameters: []),
+         command: ["calendar", "calendars"], scope: .calendars, parameters: []),
 
     Tool(name: "events", description: "List events in a date range, earliest first.",
-         command: ["calendar", "events"], parameters: [
+         command: ["calendar", "events"], scope: .calendars, parameters: [
         Parameter(name: "from", kind: .string, description: "Range start: \(dateFormats). Default: start of today."),
         Parameter(name: "to", kind: .string, description: "Range end, same formats; a bare date includes that whole day. Default: 7 days after from."),
         Parameter(name: "calendars", kind: .strings, description: "Calendar ids or titles. Default: every calendar.", flag: "calendar"),
@@ -145,7 +147,7 @@ let tools: [Tool] = [
     ]),
 
     Tool(name: "add_event", description: "Create an event. Returns the created event.",
-         command: ["calendar", "add"], parameters: [
+         command: ["calendar", "add"], scope: nil, parameters: [
         Parameter(name: "calendar", kind: .string, description: "Calendar id or title to create the event in. Must be writable (see calendars).", required: true),
         Parameter(name: "title", kind: .string, description: "Event title.", required: true),
         Parameter(name: "start", kind: .string, description: "Start: \(dateFormats). With allDay only the day counts.", required: true),
@@ -164,7 +166,7 @@ let tools: [Tool] = [
     ]),
 
     Tool(name: "update_event", description: "Change an event. Only the fields you name change. Returns the updated event.",
-         command: ["calendar", "update"], parameters: [
+         command: ["calendar", "update"], scope: nil, parameters: [
         eventId,
         Parameter(name: "title", kind: .string, description: "New title."),
         Parameter(name: "start", kind: .string, description: "New start: \(dateFormats). The end moves with it, keeping the duration, unless you pass end."),
@@ -182,15 +184,15 @@ let tools: [Tool] = [
     ]),
 
     Tool(name: "delete_event", description: "Delete an event. Returns {deleted, title, start, span}.",
-         command: ["calendar", "delete"], parameters: [eventId, occurrence, span]),
+         command: ["calendar", "delete"], scope: nil, parameters: [eventId, occurrence, span]),
 
     Tool(name: "note_folders",
          description: "List Apple Notes folders: id, name, account, parent (folder id, null at the top), noteCount. Subfolders included; names can repeat, ids cannot.",
-         command: ["notes", "folders"], parameters: []),
+         command: ["notes", "folders"], scope: .folders, parameters: []),
 
     Tool(name: "notes",
          description: "List Apple Notes, newest modified first: id, title, folder, folderId, account, created, modified, locked, shared. No note text. Filters apply first, then the sort, then limit. A note shown in several folders is listed once, with the folder it is kept in.",
-         command: ["notes", "list"], parameters: [
+         command: ["notes", "list"], scope: .folders, parameters: [
         Parameter(name: "folders", kind: .strings, description: "Folder ids or names, from note_folders: the notes those folders show, smart folders included. A name that matches nothing is an error. Default: every folder.", flag: "folder"),
         Parameter(name: "since", kind: .string, description: "Only notes modified at or after this time: \(dateFormats). Default: any time."),
         Parameter(name: "title", kind: .string, description: "Only notes whose title contains this text, ignoring case. Default: every note."),
@@ -199,7 +201,7 @@ let tools: [Tool] = [
 
     Tool(name: "search_notes",
          description: "Find Apple Notes whose title or text contains every word of text, ignoring case and diacritics: id, title, folder, folderId, modified, snippet. No ranking: newest modified first, then limit. snippet is 160 characters of the text, whitespace collapsed, from 60 before the first word found there; null when the words are only in the title. A locked note is matched on its title only. Reads every note's text on each call.",
-         command: ["notes", "search"], parameters: [
+         command: ["notes", "search"], scope: .folders, parameters: [
         Parameter(name: "text", kind: .positional, description: "The words to find, separated by spaces; every one must occur.", required: true),
         Parameter(name: "folders", kind: .strings, description: "Folder ids or names, from note_folders: the notes those folders show, smart folders included. A name that matches nothing is an error. Default: every folder.", flag: "folder"),
         Parameter(name: "limit", kind: .integer, description: "At most this many notes. Default: 20."),
@@ -207,7 +209,7 @@ let tools: [Tool] = [
 
     Tool(name: "show_note",
          description: "Show one Apple Note: id, title, folder, folderId, account, created, modified, locked, shared, body (plain text, can run to megabytes), attachments (names; null for an unnamed one). A locked note gives locked true and null body and attachments.",
-         command: ["notes", "show"], parameters: [
+         command: ["notes", "show"], scope: .folders, parameters: [
         // --html stays CLI-only: HTML bodies embed images as data URIs and run to tens of megabytes.
         Parameter(name: "id", kind: .positional, description: "Note id, from notes.", required: true),
     ]),

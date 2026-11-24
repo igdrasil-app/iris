@@ -43,13 +43,20 @@ struct MCP: ParsableCommand {
 
               iris mcp --http
 
-            serves only the read tools (calendars, events, note_folders, notes, search_notes, show_note) at http://127.0.0.1:8765/mcp, with no sessions: a request gets one JSON reply and a notification an empty 202; a request with an Expect header is refused (417). At most 16 connections and 4 tool calls at a time, and 60 seconds for a request to arrive. It prints one JSON line on stdout once it listens, then one line per request on stderr: time, methods, tool, status, duration; never arguments, results or the token. It listens on 127.0.0.1 only. Iris never makes it reachable from another machine; a proxy of your own can, and then your calendar and notes are reachable from wherever that proxy is, behind one token.
+            serves only the read tools (calendars, events, note_folders, notes, search_notes, show_note) at http://127.0.0.1:8765/mcp, with no sessions: a request gets one JSON reply and a notification an empty 202; a request with an Expect header is refused (417). At most 16 connections and 4 tool calls at a time, and 60 seconds for a request to arrive. It prints one JSON line on stdout once it listens, then one line per request on stderr: time, methods, tool, status, duration; never arguments, results or the token. It listens on 127.0.0.1 only. Iris never makes it reachable from another machine; a proxy of your own can, and then the calendars and notes in its scope are reachable from wherever that proxy is, behind one token.
 
             Every request needs the header Authorization: Bearer <token>. The token is read once at start from --token-file, by default ~/Library/Application Support/Iris/http-token: a file of yours that only you can read (mode 600), holding at least 32 characters. Iris never creates it; this does:
 
               mkdir -p ~/Library/Application\\ Support/Iris
               (umask 077; openssl rand -base64 32 \\
                 > ~/Library/Application\\ Support/Iris/http-token)
+
+            Callers see only the calendars and note folders named in the scope file, read once at start from --scope-file, by default ~/Library/Application Support/Iris/http-scope. Without one the server does not start. Any other calendar or folder does not exist for them: naming it, or the id of a note no allowed folder shows, gets the same error as a name or id that matches nothing. A note is in scope when an allowed folder shows it, smart folders included; its folder, folderId and account are null when the folder it is kept in is not allowed, and a folder's parent is null when that is not allowed. The file is JSON, a file of yours that only you can read (mode 600); Iris never creates it; this does:
+
+              (umask 077; echo '{"calendars": ["Work"], "folders": "all"}' \\
+                > ~/Library/Application\\ Support/Iris/http-scope)
+
+            Both keys must be there. Each holds a list of names or ids, from iris calendar calendars and iris notes folders, or "all"; [] allows none. A name that several calendars or folders share includes each; one that matches nothing stops the start. Names are matched to ids at start, so restart the server after changing the file. A calendar or folder renamed later stays in scope, one deleted later drops out, and one created later is not in scope, even under an allowed name; "all" is every one, those created later included.
 
             Who can call it: a web page in your browser is stopped by the token, and by the refusal of every request that carries an Origin header. Another user of this Mac, and anything that arrives through your own proxy, is stopped by the token. A process running as you on this Mac is not stopped: it can read the token file, or run iris itself.
 
@@ -70,13 +77,21 @@ struct MCP: ParsableCommand {
     @Option(help: "With --http: the file that holds the token. Default: ~/Library/Application Support/Iris/http-token.")
     var tokenFile: String?
 
+    @Option(help: "With --http: the file that names the calendars and note folders callers may read. Default: ~/Library/Application Support/Iris/http-scope.")
+    var scopeFile: String?
+
     func validate() throws {
-        if !http && (port != nil || tokenFile != nil) { throw ValidationError("--port and --token-file need --http") }
+        if !http && (port != nil || tokenFile != nil || scopeFile != nil) {
+            throw ValidationError("--port, --token-file and --scope-file need --http")
+        }
         if let port, !(1...65535).contains(port) { throw ValidationError("--port must be between 1 and 65535") }
     }
 
     func run() throws {
-        if http { return try serveHTTP(port: port ?? defaultHTTPPort, tokenFile: tokenFile ?? defaultTokenFile) }
+        if http {
+            return try serveHTTP(port: port ?? defaultHTTPPort, tokenFile: tokenFile ?? defaultTokenFile,
+                                 scopeFile: scopeFile ?? defaultScopeFile)
+        }
         // One JSON-RPC message per line in, one per line out. EOF is the host saying goodbye.
         while let line = readLine() {
             if line.allSatisfy(\.isWhitespace) { continue }
@@ -269,6 +284,26 @@ private func call(_ params: [String: Any], _ offering: [Tool]) throws -> [String
         toolProcesses.remove(process)
         toolProcessesLock.unlock()
     }
+    guard let finished = collect(process, output, errors, exited: exited, within: toolDeadline) else {
+        // No "try again": a write may have been saved before the child was stopped, and repeating it would double it.
+        return toolResult("\(name) did not finish within \(toolDeadline) seconds and was stopped; whether it took "
+            + "effect is not known. Before repeating a change, check with events that it was not made. If a permission "
+            + "dialog is open on this Mac, answer it; if Calendar or Notes is not responding, open it.",
+            isError: true)
+    }
+    let out = String(decoding: finished.output, as: UTF8.self)
+    let err = String(decoding: finished.errors, as: UTF8.self)
+
+    if process.terminationStatus == 0 { return toolResult(out.trimmingCharacters(in: .whitespacesAndNewlines)) }
+    // ArgumentParser follows a validation message with usage lines; those describe flags, not tool parameters.
+    let message = err.split(separator: "\n").prefix { !$0.hasPrefix("Usage:") }.joined(separator: "\n")
+    return toolResult(message.trimmingCharacters(in: .whitespacesAndNewlines), isError: true)
+}
+
+/// What a started child of this binary wrote, once it exits; `exited` is signalled by its termination handler.
+/// A child still running after `seconds` gets SIGTERM, and SIGKILL 2 seconds later; then this answers nil.
+func collect(_ process: Process, _ output: Pipe, _ errors: Pipe, exited: DispatchSemaphore,
+             within seconds: Int) -> (output: Data, errors: Data)? {
     // Both pipes are drained at once: either one can outgrow its buffer, and a full pipe
     // would stop the child before it closes the other.
     var outputBytes = Data()
@@ -276,7 +311,7 @@ private func call(_ params: [String: Any], _ offering: [Tool]) throws -> [String
     let draining = DispatchGroup()
     DispatchQueue.global().async(group: draining) { outputBytes = output.fileHandleForReading.readDataToEndOfFile() }
     DispatchQueue.global().async(group: draining) { errorBytes = errors.fileHandleForReading.readDataToEndOfFile() }
-    if exited.wait(timeout: .now() + .seconds(toolDeadline)) == .timedOut {
+    if exited.wait(timeout: .now() + .seconds(seconds)) == .timedOut {
         process.terminate()
         if exited.wait(timeout: .now() + .seconds(2)) == .timedOut {
             if process.isRunning { kill(process.processIdentifier, SIGKILL) }
@@ -285,20 +320,10 @@ private func call(_ params: [String: Any], _ offering: [Tool]) throws -> [String
         // The child is the whole tree: the re-launch in becomeResponsible keeps its pid, and no
         // command starts a process of its own, so its exit closes both pipes.
         draining.wait()
-        // No "try again": a write may have been saved before the child was stopped, and repeating it would double it.
-        return toolResult("\(name) did not finish within \(toolDeadline) seconds and was stopped; whether it took "
-            + "effect is not known. Before repeating a change, check with events that it was not made. If a permission "
-            + "dialog is open on this Mac, answer it; if Calendar or Notes is not responding, open it.",
-            isError: true)
+        return nil
     }
     draining.wait()
-    let out = String(decoding: outputBytes, as: UTF8.self)
-    let err = String(decoding: errorBytes, as: UTF8.self)
-
-    if process.terminationStatus == 0 { return toolResult(out.trimmingCharacters(in: .whitespacesAndNewlines)) }
-    // ArgumentParser follows a validation message with usage lines; those describe flags, not tool parameters.
-    let message = err.split(separator: "\n").prefix { !$0.hasPrefix("Usage:") }.joined(separator: "\n")
-    return toolResult(message.trimmingCharacters(in: .whitespacesAndNewlines), isError: true)
+    return (outputBytes, errorBytes)
 }
 
 private func toolResult(_ text: String, isError: Bool = false) -> [String: Any] {
