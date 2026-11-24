@@ -147,7 +147,7 @@ let tools: [Tool] = [
     ]),
 
     Tool(name: "add_event", description: "Create an event. Returns the created event.",
-         command: ["calendar", "add"], scope: nil, parameters: [
+         command: ["calendar", "add"], scope: .calendars, parameters: [
         Parameter(name: "calendar", kind: .string, description: "Calendar id or title to create the event in. Must be writable (see calendars).", required: true),
         Parameter(name: "title", kind: .string, description: "Event title.", required: true),
         Parameter(name: "start", kind: .string, description: "Start: \(dateFormats). With allDay only the day counts.", required: true),
@@ -166,7 +166,7 @@ let tools: [Tool] = [
     ]),
 
     Tool(name: "update_event", description: "Change an event. Only the fields you name change. Returns the updated event.",
-         command: ["calendar", "update"], scope: nil, parameters: [
+         command: ["calendar", "update"], scope: .calendars, parameters: [
         eventId,
         Parameter(name: "title", kind: .string, description: "New title."),
         Parameter(name: "start", kind: .string, description: "New start: \(dateFormats). The end moves with it, keeping the duration, unless you pass end."),
@@ -184,7 +184,7 @@ let tools: [Tool] = [
     ]),
 
     Tool(name: "delete_event", description: "Delete an event. Returns {deleted, title, start, span}.",
-         command: ["calendar", "delete"], scope: nil, parameters: [eventId, occurrence, span]),
+         command: ["calendar", "delete"], scope: .calendars, parameters: [eventId, occurrence, span]),
 
     Tool(name: "note_folders",
          description: "List Apple Notes folders: id, name, account, parent (folder id, null at the top), noteCount. Subfolders included; names can repeat, ids cannot.",

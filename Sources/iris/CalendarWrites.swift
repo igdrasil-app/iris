@@ -53,7 +53,11 @@ struct AddEvent: AsyncParsableCommand {
     @Option(help: "With --repeat: stop after this many occurrences. Not with --until. Default: no limit.")
     var count: Int?
 
+    @Option(help: allowedHelp(.calendars))
+    var allowedCalendars: String?
+
     func validate() throws {
+        _ = try allowedIds(allowedCalendars, "--allowed-calendars")
         _ = try availability.map(parseAvailability)
         if alarms.contains(where: { $0 < 0 }) { throw ValidationError("--alarm takes minutes of 0 or more") }
         if let url, URL(string: url)?.scheme == nil { throw ValidationError("--url needs a scheme, like https://example.com") }
@@ -72,7 +76,8 @@ struct AddEvent: AsyncParsableCommand {
 
     func run() async throws {
         let store = try await grantedStore()
-        let target = try writableCalendar(calendar, in: store)
+        let allowed = try allowedIds(allowedCalendars, "--allowed-calendars")
+        let target = try writableCalendar(calendar, in: store, allowed: allowed)
         let (startDate, endDate) = try dates()
 
         let event = EKEvent(eventStore: store)
@@ -172,7 +177,11 @@ struct UpdateEvent: AsyncParsableCommand {
     @Option(help: "this or future. this: only the targeted occurrence. future: the targeted occurrence and all after it; without --occurrence, the whole series. Default: this.")
     var span = "this"
 
+    @Option(help: allowedHelp(.calendars))
+    var allowedCalendars: String?
+
     func validate() throws {
+        _ = try allowedIds(allowedCalendars, "--allowed-calendars")
         _ = try parseSpan(span)
         _ = try availability.map(parseAvailability)
         _ = try occurrence.map(parseDate)
@@ -197,14 +206,16 @@ struct UpdateEvent: AsyncParsableCommand {
     func run() async throws {
         let store = try await grantedStore()
         let span = try parseSpan(span)
-        let event = try findEvent(id, occurrence: occurrence, span: span, in: store)
+        let allowed = try allowedIds(allowedCalendars, "--allowed-calendars")
+        let event = try findEvent(id, occurrence: occurrence, span: span, in: store, allowed: allowed)
+        let target = try calendar.map { try writableCalendar($0, in: store, allowed: allowed) }
 
         if let title { event.title = title }
         if let location { event.location = location }
         if let notes { event.notes = notes }
         if let url { event.url = url.isEmpty ? nil : URL(string: url) }
         if let availability { event.availability = try parseAvailability(availability) }
-        if let calendar { event.calendar = try writableCalendar(calendar, in: store) }
+        if let target { event.calendar = target }
         if noAlarms { setAlarms([], on: event) } else if !alarms.isEmpty { setAlarms(alarms, on: event) }
 
         // Moving the start keeps the length: in seconds for timed events, in calendar days for
@@ -249,14 +260,19 @@ struct DeleteEvent: AsyncParsableCommand {
     @Option(help: "this or future. this: only the targeted occurrence. future: the targeted occurrence and all after it; without --occurrence, the whole series. Default: this.")
     var span = "this"
 
+    @Option(help: allowedHelp(.calendars))
+    var allowedCalendars: String?
+
     func validate() throws {
+        _ = try allowedIds(allowedCalendars, "--allowed-calendars")
         _ = try parseSpan(span)
     }
 
     func run() async throws {
         let store = try await grantedStore()
         let span = try parseSpan(span)
-        let event = try findEvent(id, occurrence: occurrence, span: span, in: store)
+        let allowed = try allowedIds(allowedCalendars, "--allowed-calendars")
+        let event = try findEvent(id, occurrence: occurrence, span: span, in: store, allowed: allowed)
         let result = DeletedInfo(deleted: id, title: event.title ?? "", start: iso(event.startDate), span: self.span)
         do {
             try store.remove(event, span: span, commit: true)
@@ -276,11 +292,14 @@ struct DeletedInfo: Encodable {
 
 /// Finds the event to change. `event(withIdentifier:)` returns a recurring series' first occurrence,
 /// so a recurring event needs --occurrence or --span future to say what the caller means.
-func findEvent(_ id: String, occurrence: String?, span: EKSpan, in store: EKEventStore) throws -> EKEvent {
+/// An event in a calendar outside `allowed` is not found, before anything else is said about it.
+func findEvent(_ id: String, occurrence: String?, span: EKSpan, in store: EKEventStore,
+               allowed: Set<String>?) throws -> EKEvent {
     if id.contains("NativeStorePersistentID") {
         throw IrisError("event has no stable id (Birthdays and similar calendars) and cannot be changed")
     }
-    guard let event = store.event(withIdentifier: id) else { throw IrisError("no event with id \(id)") }
+    let isAllowed = { (event: EKEvent) in allowed?.contains(event.calendar.calendarIdentifier) ?? true }
+    guard let event = store.event(withIdentifier: id), isAllowed(event) else { throw IrisError("no event with id \(id)") }
     guard event.calendar.allowsContentModifications else { throw IrisError("calendar \(event.calendar.title) is read-only") }
     if event.hasRecurrenceRules, occurrence == nil, span != .futureEvents {
         throw IrisError("recurring event; pass --occurrence <date> to change one occurrence, or --span future to change the whole series")
@@ -295,14 +314,15 @@ func findEvent(_ id: String, occurrence: String?, span: EKSpan, in store: EKEven
     // An occurrence edited earlier is detached and carries the series id plus "/RID=…".
     let nearest = store.events(matching: predicate)
         .filter { $0.eventIdentifier == id || $0.eventIdentifier?.hasPrefix(id + "/") == true }
-        .filter { $0.startDate >= dayStart && $0.startDate < dayEnd }
+        .filter { $0.startDate >= dayStart && $0.startDate < dayEnd && isAllowed($0) }
         .min { abs($0.startDate.timeIntervalSince(date)) < abs($1.startDate.timeIntervalSince(date)) }
     guard let nearest else { throw IrisError("no occurrence of \(id) on \(iso(dayStart).prefix(10))") }
     return nearest
 }
 
-func writableCalendar(_ token: String, in store: EKEventStore) throws -> EKCalendar {
-    let hits = try resolveCalendars([token], in: store) ?? []
+/// The one writable calendar `token` names among the allowed ones; any other is not found.
+func writableCalendar(_ token: String, in store: EKEventStore, allowed: Set<String>?) throws -> EKCalendar {
+    let hits = try resolveCalendars([token], among: store.calendars(for: .event), allowed: allowed) ?? []
     guard hits.count == 1 else { throw IrisError("calendar name \(token) is ambiguous; use its id from `iris calendar calendars`") }
     guard hits[0].allowsContentModifications else { throw IrisError("calendar \(token) is read-only") }
     return hits[0]

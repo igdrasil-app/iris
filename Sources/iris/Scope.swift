@@ -14,30 +14,43 @@ enum ScopeKind {
     var option: String { self == .calendars ? "--allowed-calendars" : "--allowed-folders" }
 }
 
-/// The scope file as written: names or ids per kind, nil where it says "all".
+/// The scope file as written: names or ids per kind, nil where it says "all"; and whether callers may
+/// create, change and delete events in the calendars it names.
 struct ScopeFile: Equatable {
     let calendars: [String]?
     let folders: [String]?
+    var writes = false
 }
 
 /// The scope as pinned at start: ids per kind, nil where the file says "all".
 struct HTTPScope {
     let calendars: Set<String>?
     let folders: Set<String>?
+    var writes = false
 
     func ids(_ kind: ScopeKind) -> Set<String>? { kind == .calendars ? calendars : folders }
 }
 
 let scopeExample = #"{"calendars": ["Work"], "folders": "all"}"#
-private let scopeShape = #"each key holds a list of names or ids, [] for none, or "all" for every one"#
+private let scopeShape = #"each key holds a list of names or ids, [] for none, or "all" for every one; "#
+    + #"an optional "writes": true lets callers change events in those calendars"#
 
-/// Two keys, calendars and folders, each "all" or a list of strings; anything else is an error.
+/// Two keys, calendars and folders, each "all" or a list of strings, and an optional writes, true or
+/// false; anything else is an error.
 func parseScopeFile(_ data: Data) throws -> ScopeFile {
     guard let object = try? JSONSerialization.jsonObject(with: data), let keys = object as? [String: Any] else {
         throw IrisError("not a JSON object")
     }
-    if let extra = keys.keys.sorted().first(where: { !["calendars", "folders"].contains($0) }) {
+    if let extra = keys.keys.sorted().first(where: { !["calendars", "folders", "writes"].contains($0) }) {
         throw IrisError("unknown key \(extra)")
+    }
+    // JSON true and 1 both arrive as NSNumber, so the type is checked before the value.
+    var writes = false
+    if let value = keys["writes"] {
+        guard CFGetTypeID(value as CFTypeRef) == CFBooleanGetTypeID(), let flag = value as? Bool else {
+            throw IrisError("writes must be true or false")
+        }
+        writes = flag
     }
     func entries(_ key: String) throws -> [String]? {
         guard let value = keys[key] else { throw IrisError("no \(key) key") }
@@ -47,7 +60,7 @@ func parseScopeFile(_ data: Data) throws -> ScopeFile {
         }
         return names
     }
-    return ScopeFile(calendars: try entries("calendars"), folders: try entries("folders"))
+    return ScopeFile(calendars: try entries("calendars"), folders: try entries("folders"), writes: writes)
 }
 
 /// Reads the scope file and pins its names to the ids they match now. Only a kind given as a list is
@@ -65,7 +78,8 @@ func readScope(_ path: String) throws -> HTTPScope {
     }
     return HTTPScope(
         calendars: try file.calendars.map { try pin($0, listing: ["calendar", "calendars"], nameKey: "title", noun: "calendar", path) },
-        folders: try file.folders.map { try pin($0, listing: ["notes", "folders"], nameKey: "name", noun: "folder", path) })
+        folders: try file.folders.map { try pin($0, listing: ["notes", "folders"], nameKey: "name", noun: "folder", path) },
+        writes: file.writes)
 }
 
 struct Named {
