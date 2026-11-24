@@ -82,8 +82,9 @@ struct RPCError: Error {
 }
 
 /// The reply to one message, or nil when none is due: a notification, or a stray response.
-/// `offering` is every tool this caller may see: one outside it is not listed, and a call to it
-/// is an unknown tool, answered before any process starts.
+/// `offering` is every tool this caller may list or call: one outside it is not listed, and a call
+/// to it is an unknown tool, answered before any process starts. The instructions and the tools'
+/// own descriptions are not narrowed; a caller that offers fewer tools has to see to those itself.
 func respond(to line: String, offering: [Tool]) -> [String: Any]? {
     guard let json = try? JSONSerialization.jsonObject(with: Data(line.utf8)) else {
         return failure(id: NSNull(), code: -32700, message: "parse error")
