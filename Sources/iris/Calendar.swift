@@ -52,7 +52,7 @@ struct Events: AsyncParsableCommand {
             event's own order; each is {name, email, status, role, type, isCurrentUser}. status: accepted, \
             declined, tentative, pending, delegated, completed, in process or unknown. role: required, optional, \
             chair, non-participant or unknown. type: person, room, resource, group or unknown. name and email \
-            can be null; email is set only when Calendar gives a mailto: address, so expect null often. \
+            can be null; email is set only when Calendar gives a mailto: address. \
             The organizer may also be among the attendees. isCurrentUser marks the account's owner, who \
             need not be among them.
             """
