@@ -127,7 +127,7 @@ private let eventId = Parameter(name: "id", kind: .positional, description: "Eve
 
 private let occurrence = Parameter(
     name: "occurrence", kind: .string,
-    description: "For a recurring event: the day of the occurrence to target; add a time if there are several that day.")
+    description: "For a recurring event: the day of the occurrence to target; add a time if there are several that day: the one nearest it is taken, and a tie is refused.")
 
 private let span = Parameter(
     name: "span", kind: .string,
