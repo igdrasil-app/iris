@@ -150,6 +150,85 @@ final class AttendeeTests: XCTestCase {
         XCTAssertEqual(sortedAttendees(attendees).map(label), ["straße@example.com Ann", "STRASSE@example.com Zed"])
     }
 
+    // Who counts as other people for --only-mine: anyone on the event who is not the current user.
+    func testOtherPeopleOnAnEvent() {
+        let me = Attendee(name: "Me", email: "me@example.com", status: "accepted", role: "chair", type: "person",
+                          isCurrentUser: true)
+        let ada = attendee(email: "ada@example.com", name: "Ada")
+        let bob = attendee(email: "bob@example.com", name: "Bob")
+        let room = Attendee(name: "Room 1", email: nil, status: "accepted", role: "non-participant", type: "room",
+                            isCurrentUser: false)
+        let iOrganize = Organizer(name: "Me", email: "me@example.com", isCurrentUser: true)
+        let adaOrganizes = Organizer(name: "Ada", email: "ADA@example.com", isCurrentUser: false)
+        let someoneOrganizes = Organizer(name: nil, email: nil, isCurrentUser: false)
+
+        let cases: [(String, Organizer?, [Attendee], Int)] = [
+            ("no participants", nil, [], 0),
+            ("only me as attendee", nil, [me], 0),
+            ("me as organizer and attendee", iOrganize, [me], 0),
+            ("me as organizer, no attendees", iOrganize, [], 0),
+            ("me as organizer with another attendee", iOrganize, [me, ada], 1),
+            ("someone else organizes, only me attending", adaOrganizes, [me], 1),
+            ("someone else organizes, no attendees", adaOrganizes, [], 1),
+            ("organizer also an attendee, email in another case", adaOrganizes, [me, ada], 1),
+            ("organizer not among the attendees", adaOrganizes, [me, bob], 2),
+            ("organizer without an email", someoneOrganizes, [ada], 2),
+            ("several others", iOrganize, [me, ada, bob], 2),
+            ("a room counts as someone else", nil, [me, room], 1),
+        ]
+        for (name, organizer, attendees, expected) in cases {
+            XCTAssertEqual(otherPeople(organizer: organizer, attendees: attendees), expected, name)
+        }
+    }
+
+    // The refusal says how many others, never who.
+    func testOnlyMineRefusesASharedEvent() {
+        let me = Attendee(name: "Me", email: "me@example.com", status: "accepted", role: "chair", type: "person",
+                          isCurrentUser: true)
+        let ada = attendee(email: "ada@example.com", name: "Ada")
+        let bob = attendee(email: "bob@example.com", name: "Bob")
+        XCTAssertNoThrow(try refuseShared(organizer: nil, attendees: [me], changing: "changing", "changed"))
+        XCTAssertThrowsError(try refuseShared(organizer: nil, attendees: [me, ada], changing: "changing", "changed")) {
+            XCTAssertEqual("\($0)", "this event has 1 other person on it, and changing it would affect them, so nothing "
+                + "was changed. With only-mine on, only events that are the Mac owner's alone can be changed; this one "
+                + "has to be changed in Calendar on the Mac.")
+        }
+        let organizer = Organizer(name: "Cy", email: "cy@example.com", isCurrentUser: false)
+        XCTAssertThrowsError(try refuseShared(organizer: organizer, attendees: [me, ada, bob], changing: "deleting", "deleted")) {
+            let text = "\($0)"
+            XCTAssertTrue(text.hasPrefix("this event has 3 other people on it, and deleting it would affect them, "
+                + "so nothing was deleted."), text)
+            XCTAssertFalse(["Ada", "Bob", "Cy", "@"].contains { text.contains($0) }, text)
+        }
+    }
+
+    // An event with no one on it passes --only-mine.
+    func testOnlyMinePassesAnEventWithoutParticipants() {
+        let store = EKEventStore()
+        let event = EKEvent(eventStore: store)
+        event.calendar = EKCalendar(for: .event, eventStore: store)
+        event.startDate = Date(timeIntervalSince1970: 1_800_000_000)
+        event.endDate = event.startDate.addingTimeInterval(3600)
+        XCTAssertNoThrow(try refuseShared(event, span: .thisEvent, changing: "changing", "changed"))
+        XCTAssertNoThrow(try refuseShared(event, span: .futureEvents, changing: "changing", "changed"))
+    }
+
+    // With --only-mine a change to all future occurrences is refused: later occurrences cannot be checked.
+    func testOnlyMineRefusesAllFutureOccurrences() {
+        for (recurring, detached) in [(true, false), (false, true), (true, true)] {
+            XCTAssertThrowsError(try refuseUncheckedSpan(.futureEvents, recurring: recurring, detached: detached,
+                                                         changing: "deleting", "deleted")) {
+                XCTAssertTrue("\($0)".contains("deleting all future occurrences is refused"))
+                XCTAssertTrue("\($0)".contains("nothing was deleted"))
+            }
+            XCTAssertNoThrow(try refuseUncheckedSpan(.thisEvent, recurring: recurring, detached: detached,
+                                                     changing: "changing", "changed"))
+        }
+        // An event that does not repeat has no later occurrences.
+        XCTAssertNoThrow(try refuseUncheckedSpan(.futureEvents, recurring: false, detached: false,
+                                                 changing: "changing", "changed"))
+    }
+
     private func attendee(email: String?, name: String?, status: String = "accepted") -> Attendee {
         Attendee(name: name, email: email, status: status, role: "required", type: "person", isCurrentUser: false)
     }

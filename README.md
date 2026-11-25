@@ -90,7 +90,15 @@ Writes are off unless the scope file also says `"writes": true`:
       '{"calendars": ["Work"], "folders": "all", "writes": true}' \
       > ~/Library/Application\ Support/Iris/http-scope)
 
-Then `add_event`, `update_event` and `delete_event` are offered too, in the scope's calendars only: any other calendar, and any event in one, answers as one that does not exist, and nothing is changed. Notes stay read only. The guards are for a mistaken or misled assistant: one write at a time; at most 20 write calls an hour, a refused one included, counted across restarts in `http-write-times`; and `delete_event` never deletes a whole series (`span future` is refused; do that on the Mac). `update_event` with `span future` and `add_event` with `repeat` still change or create a whole series in one call. Every write that reached its command is recorded in `http-writes.log` with the text iris returned, the changed event for a success, so a wrong change can be undone by hand; that file holds calendar content and is trimmed to its newest lines when it passes 4 MB, the newest entry always kept whole. Both files are owner-only (mode 600, no access control list), in `~/Library/Application Support/Iris` or `--state-dir`. That folder must be yours and writable by you only, and one server with writes on uses it at a time; otherwise the server does not start.
+Then `add_event`, `update_event` and `delete_event` are offered too, in the scope's calendars only: any other calendar, and any event in one, answers as one that does not exist, and nothing is changed. Notes stay read only. The guards are for a mistaken or misled assistant: one write at a time; at most 20 write calls an hour, a refused one included, counted across restarts in `http-write-times`; and `delete_event` never deletes a whole series (`span future` is refused; do that on the Mac). `add_event` with `repeat` still creates a whole series in one call; changing a whole series with `update_event` and `span future` needs `"sharedEvents": true`. Every write that reached its command is recorded in `http-writes.log` with the text iris returned, the changed event for a success, so a wrong change can be undone by hand; that file holds calendar content and is trimmed to its newest lines when it passes 4 MB, the newest entry always kept whole. Both files are owner-only (mode 600, no access control list), in `~/Library/Application Support/Iris` or `--state-dir`. That folder must be yours and writable by you only, and one server with writes on uses it at a time; otherwise the server does not start.
+
+`update_event` and `delete_event` over HTTP refuse an event that has anyone on it but you (an attendee, or an organizer who is not you), with nothing changed: changing or deleting it can notify them or cancel their meeting. A change to all future occurrences of a repeating event (`span future`) is refused too, since the people on later occurrences cannot be checked. Every such call carries `--only-mine`, which the caller cannot remove. To allow those events too, add `"sharedEvents": true` (it needs `"writes": true`):
+
+    (umask 077; echo '{"calendars": ["Work"], "folders": "all",
+      "writes": true, "sharedEvents": true}' \
+      > ~/Library/Application\ Support/Iris/http-scope)
+
+On the CLI and over stdio nothing is refused for this unless you pass `--only-mine` (`onlyMine` in the tools).
 
 The token stops a web page in your browser (which is also refused for sending an Origin header), another user of this Mac, and anything arriving through a proxy of yours. It does not stop a process running as you on this Mac, which can read the file or run iris itself. `iris help mcp` has the rest.
 
@@ -100,7 +108,7 @@ Assistants that run in a vendor's cloud, such as Grok Bot, the Meta Muse app and
 
     make app                     # universal swift build, bundle as build/Iris.app, codesign; needs a Developer ID certificate
     build/Iris.app/Contents/MacOS/iris status
-    swift test                   # the HTTP gate (token, Origin, path, method, body framing), scope (who sees what), write guards, alarm minutes, availability, attendees
+    swift test                   # the HTTP gate (token, Origin, path, method, body framing), scope (who sees what), write guards, events with other people on them, alarm minutes, availability, attendees
     ./release.sh                 # the version in Info.plist: notarize, tar, GitHub release, bump the cask and the Sparkle appcast
                                  # bump CFBundleVersion with the version; Sparkle compares only that, and release.sh refuses a repeat
                                  # over SSH or from an agent, where the keychain cannot prompt: NOTARY_KEY=<p8> NOTARY_KEY_ID=<id> NOTARY_ISSUER=<uuid> SPARKLE_KEY=<file> ./release.sh

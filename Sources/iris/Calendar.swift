@@ -245,10 +245,16 @@ struct Organizer: Encodable {
     let email: String?
     let isCurrentUser: Bool
 
+    init(name: String?, email: String?, isCurrentUser: Bool) {
+        self.name = name
+        self.email = email
+        self.isCurrentUser = isCurrentUser
+    }
+
     init(_ participant: EKParticipant) {
-        name = participant.name.flatMap { $0.isEmpty ? nil : $0 }
-        email = participantEmail(participant)
-        isCurrentUser = participant.isCurrentUser
+        self.init(name: participant.name.flatMap { $0.isEmpty ? nil : $0 },
+                  email: participantEmail(participant),
+                  isCurrentUser: participant.isCurrentUser)
     }
 
     enum CodingKeys: CodingKey { case name, email, isCurrentUser }

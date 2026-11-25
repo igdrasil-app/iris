@@ -134,6 +134,15 @@ private let span = Parameter(
     description: "this: only the targeted occurrence. future: the targeted occurrence and all after it; without occurrence, the whole series. Default: this.",
     choices: ["this", "future"])
 
+/// Over HTTP this parameter is dropped and --only-mine pinned in its place, unless the scope file allows
+/// shared events (`Tool.limited(to:)`).
+let onlyMineParameter = Parameter(
+    name: "onlyMine", kind: .flag,
+    description: "Refuse, with nothing changed, an event that has anyone on it besides the Mac's owner: an attendee or an organizer who is not the owner; and span future on a repeating event, since the people on later occurrences cannot be checked. Default: off.",
+    flag: "only-mine")
+
+private let sharedNote = " An event with other people on it can be refused, with nothing changed, where changing such events is not allowed."
+
 let tools: [Tool] = [
     Tool(name: "calendars", description: "List calendars: id, title, writable, source.",
          command: ["calendar", "calendars"], scope: .calendars, parameters: []),
@@ -165,7 +174,7 @@ let tools: [Tool] = [
         Parameter(name: "count", kind: .integer, description: "With repeat: stop after this many occurrences. Not with until. Default: no limit."),
     ]),
 
-    Tool(name: "update_event", description: "Change an event. Only the fields you name change. Returns the updated event.",
+    Tool(name: "update_event", description: "Change an event. Only the fields you name change. Returns the updated event." + sharedNote,
          command: ["calendar", "update"], scope: .calendars, parameters: [
         eventId,
         Parameter(name: "title", kind: .string, description: "New title."),
@@ -181,10 +190,11 @@ let tools: [Tool] = [
         Parameter(name: "noAlarms", kind: .flag, description: "Remove all alarms. Default: alarms unchanged.", flag: "no-alarms"),
         occurrence,
         span,
+        onlyMineParameter,
     ]),
 
-    Tool(name: "delete_event", description: "Delete an event. Returns {deleted, title, start, span}.",
-         command: ["calendar", "delete"], scope: .calendars, parameters: [eventId, occurrence, span]),
+    Tool(name: "delete_event", description: "Delete an event. Returns {deleted, title, start, span}." + sharedNote,
+         command: ["calendar", "delete"], scope: .calendars, parameters: [eventId, occurrence, span, onlyMineParameter]),
 
     Tool(name: "note_folders",
          description: "List Apple Notes folders: id, name, account, parent (folder id, null at the top), noteCount. Subfolders included; names can repeat, ids cannot.",
