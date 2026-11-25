@@ -27,7 +27,12 @@ struct Calendars: AsyncParsableCommand {
         let store = try await grantedStore()
         let calendars = store.calendars(for: .event)
             .filter { allowed?.contains($0.calendarIdentifier) ?? true }
-            .sorted { $0.title < $1.title }
+            .sorted { a, b in
+                if a.title != b.title { return a.title < b.title }
+                // Titles can repeat, and two that Swift calls equal can still differ in their bytes.
+                return [a.title, a.calendarIdentifier].lexicographicallyPrecedes(
+                    [b.title, b.calendarIdentifier], by: bytesPrecede)
+            }
             .map { CalendarInfo(id: $0.calendarIdentifier, title: $0.title,
                                 writable: $0.allowsContentModifications, source: $0.source.title) }
         try emit(calendars)
@@ -36,7 +41,7 @@ struct Calendars: AsyncParsableCommand {
 
 struct Events: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
-        abstract: "List events in a date range, earliest first.",
+        abstract: "List events in a date range, earliest first; a tie by end, then title, calendar id and id.",
         discussion: """
             recurring: the event repeats, so changing or deleting it needs --occurrence or --span future. \
             detached: one occurrence of a repeating event that was changed on its own; it has its own id and \
@@ -94,8 +99,9 @@ struct Events: AsyncParsableCommand {
         let events = (scope?.isEmpty == true ? [] : fetchEvents(in: store, from: start, to: end, calendars: scope))
             .filter { allowed?.contains($0.calendar.calendarIdentifier) ?? true }
             .filter(matches)
-            .sorted { $0.startDate < $1.startDate }
-            .map(EventInfo.init)
+            .map { (key: EventKey($0), event: $0) }
+            .sorted { $0.key.precedes($1.key) }
+            .map { EventInfo($0.event) }
         try emit(events)
     }
 
@@ -127,6 +133,40 @@ func fetchEvents(in store: EKEventStore, from start: Date, to end: Date, calenda
         cursor = next
     }
     return events
+}
+
+/// What events are listed by: start, then end, title, calendar id and id, the strings byte by byte, so two
+/// events tie only when all five are the same. EventKit promises no order of its own.
+struct EventKey {
+    let start: Date
+    let end: Date
+    let title: String
+    let calendarId: String
+    let id: String
+
+    init(start: Date, end: Date, title: String, calendarId: String, id: String) {
+        self.start = start
+        self.end = end
+        self.title = title
+        self.calendarId = calendarId
+        self.id = id
+    }
+
+    init(_ event: EKEvent) {
+        self.init(start: event.startDate, end: event.endDate, title: event.title ?? "",
+                  calendarId: event.calendar.calendarIdentifier, id: event.eventIdentifier ?? "")
+    }
+
+    func precedes(_ other: EventKey) -> Bool {
+        if start != other.start { return start < other.start }
+        if end != other.end { return end < other.end }
+        return [title, calendarId, id].lexicographicallyPrecedes(
+            [other.title, other.calendarId, other.id], by: bytesPrecede)
+    }
+}
+
+func bytesPrecede(_ a: String, _ b: String) -> Bool {
+    a.utf8.lexicographicallyPrecedes(b.utf8)
 }
 
 struct CalendarInfo: Encodable {
