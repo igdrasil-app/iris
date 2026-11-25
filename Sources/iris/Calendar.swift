@@ -48,6 +48,13 @@ struct Events: AsyncParsableCommand {
             at or leaving a place is left out, so [] is no timed alarms.
             availability: busy, free, tentative or unavailable; "not supported" when the event's calendar has no \
             availability; "unknown" is a value Iris cannot name.
+            organizer: {name, email, isCurrentUser}, or null. attendees: always there, [] for none, in the \
+            event's own order; each is {name, email, status, role, type, isCurrentUser}. status: accepted, \
+            declined, tentative, pending, delegated, completed, in process or unknown. role: required, optional, \
+            chair, non-participant or unknown. type: person, room, resource, group or unknown. name and email \
+            can be null; email is set only when Calendar gives a mailto: address. \
+            The organizer may also be among the attendees. isCurrentUser marks the account's owner, who \
+            need not be among them.
             """
     )
 
@@ -142,6 +149,8 @@ struct EventInfo: Encodable {
     let detached: Bool
     let availability: String
     let alarms: [Int]
+    let organizer: Organizer?
+    let attendees: [Attendee]
 
     init(_ event: EKEvent) {
         id = event.eventIdentifier ?? ""
@@ -157,7 +166,101 @@ struct EventInfo: Encodable {
         detached = event.isDetached
         availability = describe(event.availability)
         alarms = alarmMinutes(event.alarms ?? [], start: event.startDate)
+        organizer = event.organizer.map(Organizer.init)
+        attendees = (event.attendees ?? []).map(Attendee.init)
     }
+
+    enum CodingKeys: CodingKey {
+        case id, title, start, end, allDay, calendar, calendarId, location, notes, recurring, detached
+        case availability, alarms, organizer, attendees
+    }
+
+    // Written out so an event without an organizer carries "organizer": null; location and notes
+    // are still left out when empty.
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(title, forKey: .title)
+        try container.encode(start, forKey: .start)
+        try container.encode(end, forKey: .end)
+        try container.encode(allDay, forKey: .allDay)
+        try container.encode(calendar, forKey: .calendar)
+        try container.encode(calendarId, forKey: .calendarId)
+        try container.encodeIfPresent(location, forKey: .location)
+        try container.encodeIfPresent(notes, forKey: .notes)
+        try container.encode(recurring, forKey: .recurring)
+        try container.encode(detached, forKey: .detached)
+        try container.encode(availability, forKey: .availability)
+        try container.encode(alarms, forKey: .alarms)
+        try container.encode(organizer, forKey: .organizer)
+        try container.encode(attendees, forKey: .attendees)
+    }
+}
+
+struct Organizer: Encodable {
+    let name: String?
+    let email: String?
+    let isCurrentUser: Bool
+
+    init(_ participant: EKParticipant) {
+        name = participant.name.flatMap { $0.isEmpty ? nil : $0 }
+        email = emailAddress(participantURL(participant))
+        isCurrentUser = participant.isCurrentUser
+    }
+
+    enum CodingKeys: CodingKey { case name, email, isCurrentUser }
+
+    // Written out so a missing name or email reads null instead of dropping the key.
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(name, forKey: .name)
+        try container.encode(email, forKey: .email)
+        try container.encode(isCurrentUser, forKey: .isCurrentUser)
+    }
+}
+
+struct Attendee: Encodable {
+    let name: String?
+    let email: String?
+    let status: String
+    let role: String
+    let type: String
+    let isCurrentUser: Bool
+
+    init(_ participant: EKParticipant) {
+        name = participant.name.flatMap { $0.isEmpty ? nil : $0 }
+        email = emailAddress(participantURL(participant))
+        status = describe(participant.participantStatus)
+        role = describe(participant.participantRole)
+        type = describe(participant.participantType)
+        isCurrentUser = participant.isCurrentUser
+    }
+
+    enum CodingKeys: CodingKey { case name, email, status, role, type, isCurrentUser }
+
+    // Written out so a missing name or email reads null instead of dropping the key.
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(name, forKey: .name)
+        try container.encode(email, forKey: .email)
+        try container.encode(status, forKey: .status)
+        try container.encode(role, forKey: .role)
+        try container.encode(type, forKey: .type)
+        try container.encode(isCurrentUser, forKey: .isCurrentUser)
+    }
+}
+
+/// The header promises a URL; read as optional so a nil one, never seen, cannot stop the whole listing.
+private func participantURL(_ participant: EKParticipant) -> URL? {
+    participant.value(forKey: "URL") as? URL
+}
+
+/// The address of a mailto: URL, percent-decoded, without the scheme or a query. Any other URL is nil,
+/// so it is never shown as if it were an address.
+func emailAddress(_ url: URL?) -> String? {
+    guard let url, let parts = URLComponents(url: url, resolvingAgainstBaseURL: false),
+          parts.scheme?.lowercased() == "mailto", !parts.path.isEmpty else { return nil }
+    return parts.path
 }
 
 /// Each alarm in whole minutes before `start`, the unit --alarm takes, earliest alarm first.
@@ -254,6 +357,42 @@ func describe(_ availability: EKEventAvailability) -> String {
     case .tentative: return "tentative"
     case .unavailable: return "unavailable"
     case .notSupported: return "not supported"
+    @unknown default: return "unknown"
+    }
+}
+
+func describe(_ status: EKParticipantStatus) -> String {
+    switch status {
+    case .accepted: return "accepted"
+    case .declined: return "declined"
+    case .tentative: return "tentative"
+    case .pending: return "pending"
+    case .delegated: return "delegated"
+    case .completed: return "completed"
+    case .inProcess: return "in process"
+    case .unknown: return "unknown"
+    @unknown default: return "unknown"
+    }
+}
+
+func describe(_ role: EKParticipantRole) -> String {
+    switch role {
+    case .required: return "required"
+    case .optional: return "optional"
+    case .chair: return "chair"
+    case .nonParticipant: return "non-participant"
+    case .unknown: return "unknown"
+    @unknown default: return "unknown"
+    }
+}
+
+func describe(_ type: EKParticipantType) -> String {
+    switch type {
+    case .person: return "person"
+    case .room: return "room"
+    case .resource: return "resource"
+    case .group: return "group"
+    case .unknown: return "unknown"
     @unknown default: return "unknown"
     }
 }
