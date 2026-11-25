@@ -42,6 +42,8 @@ struct Events: AsyncParsableCommand {
             detached: one occurrence of a repeating event that was changed on its own; it has its own id and \
             recurring is false. By that id, the default --span this changes or deletes only this occurrence; \
             --span future still reaches the occurrences after it.
+            alarms: one entry per alarm, in minutes before the start as --alarm takes them, earliest first; \
+            negative is after the start, and [] is none.
             """
     )
 
@@ -135,6 +137,7 @@ struct EventInfo: Encodable {
     let recurring: Bool
     let detached: Bool
     let availability: String
+    let alarms: [Int]
 
     init(_ event: EKEvent) {
         id = event.eventIdentifier ?? ""
@@ -149,7 +152,21 @@ struct EventInfo: Encodable {
         recurring = event.hasRecurrenceRules
         detached = event.isDetached
         availability = describe(event.availability)
+        alarms = alarmMinutes(event.alarms ?? [], start: event.startDate)
     }
+}
+
+/// Each alarm in whole minutes before `start`, the unit --alarm takes, earliest alarm first.
+/// An alarm at a set time counts from `start`; one after the start is negative; seconds round to
+/// the nearest minute. An alarm that fires on arriving or leaving a place has no time and is left out.
+func alarmMinutes(_ alarms: [EKAlarm], start: Date) -> [Int] {
+    alarms
+        .filter { $0.proximity == .none }
+        .map { alarm in
+            let secondsBefore = alarm.absoluteDate.map { start.timeIntervalSince($0) } ?? -alarm.relativeOffset
+            return Int((secondsBefore / 60).rounded())
+        }
+        .sorted(by: >)
 }
 
 struct IrisError: Error, CustomStringConvertible {
