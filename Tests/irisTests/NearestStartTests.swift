@@ -41,4 +41,8 @@ final class NearestStartTests: XCTestCase {
     func testThreeWithUniqueNearestAndTwoTiedFarther() {
         XCTAssertEqual(nearestStart([at(9), at(13), at(11.5)], to: at(11)), .unique(2))
     }
+
+    func testThreeTiedForNearest() {
+        XCTAssertEqual(nearestStart([at(10), at(12), at(12)], to: at(11)), .tie)
+    }
 }

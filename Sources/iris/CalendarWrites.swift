@@ -376,8 +376,9 @@ func findEvent(_ id: String, occurrence: String?, span: EKSpan, in store: EKEven
     case .tie:
         // EventKit lists events in no promised order, so taking either could change a different one each time.
         throw IrisError("more than one occurrence of \(id) on \(iso(dayStart).prefix(10)) is equally near \(occurrence), "
-            + "so nothing was changed. Give --occurrence the exact start of the one you mean, or use the id of "
-            + "the occurrence that was changed on its own, as `iris calendar events` shows it.")
+            + "so nothing was changed. If their starts differ, give --occurrence the exact start of the one you "
+            + "mean; if they start together, use the id of the occurrence that was changed on its own, as "
+            + "`iris calendar events` shows it.")
     case .unique(let index):
         nearest = candidates[index]
     }
