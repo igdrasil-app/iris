@@ -138,7 +138,7 @@ let tools: [Tool] = [
     Tool(name: "calendars", description: "List calendars: id, title, writable, source.",
          command: ["calendar", "calendars"], scope: .calendars, parameters: []),
 
-    Tool(name: "events", description: "List events in a date range, earliest first. alarms: one entry per timed alarm, whole minutes before that event's start; negative is after it.",
+    Tool(name: "events", description: "List events in a date range, earliest first. alarms: one entry per timed alarm, whole minutes before that event's start; negative is after it. availability: \"not supported\" when the event's calendar has none.",
          command: ["calendar", "events"], scope: .calendars, parameters: [
         Parameter(name: "from", kind: .string, description: "Range start: \(dateFormats). Default: start of today."),
         Parameter(name: "to", kind: .string, description: "Range end, same formats; a bare date includes that whole day. Default: 7 days after from."),
@@ -156,7 +156,7 @@ let tools: [Tool] = [
         Parameter(name: "location", kind: .string, description: "Location. Default: none."),
         Parameter(name: "notes", kind: .string, description: "Notes. Default: none."),
         Parameter(name: "url", kind: .string, description: "URL, with a scheme. Default: none."),
-        Parameter(name: "availability", kind: .string, description: "Default: busy.", choices: ["busy", "free", "tentative", "unavailable"]),
+        Parameter(name: "availability", kind: .string, description: "An error if the calendar does not support that value. Default: Calendar's own, busy where the calendar has availability; elsewhere the event reads \"not supported\".", choices: ["busy", "free", "tentative", "unavailable"]),
         Parameter(name: "alarms", kind: .integers, description: "Minutes before the start, one entry per alarm. Default: no alarms.", flag: "alarm"),
         Parameter(name: "repeat", kind: .string, description: "Default: does not repeat. Without until or count it repeats forever.", choices: ["daily", "weekly", "monthly", "yearly"]),
         Parameter(name: "every", kind: .integer, description: "With repeat: repeat every n days, weeks, months or years. Default: 1."),
@@ -176,7 +176,7 @@ let tools: [Tool] = [
         Parameter(name: "location", kind: .string, description: "New location. An empty string clears it."),
         Parameter(name: "notes", kind: .string, description: "New notes. An empty string clears them."),
         Parameter(name: "url", kind: .string, description: "New URL, with a scheme. An empty string clears it."),
-        Parameter(name: "availability", kind: .string, description: "New availability.", choices: ["busy", "free", "tentative", "unavailable"]),
+        Parameter(name: "availability", kind: .string, description: "New availability; an error if the calendar (with calendar, the new one) does not support that value. Default: unchanged, as far as the calendar supports it.", choices: ["busy", "free", "tentative", "unavailable"]),
         Parameter(name: "alarms", kind: .integers, description: "Minutes before the start, one entry per alarm. Replaces all existing alarms. Default: alarms unchanged.", flag: "alarm"),
         Parameter(name: "noAlarms", kind: .flag, description: "Remove all alarms. Default: alarms unchanged.", flag: "no-alarms"),
         occurrence,
