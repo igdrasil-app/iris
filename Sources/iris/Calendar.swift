@@ -49,10 +49,11 @@ struct Events: AsyncParsableCommand {
             availability: busy, free, tentative or unavailable; "not supported" when the event's calendar has no \
             availability; "unknown" is a value Iris cannot name.
             organizer: {name, email, isCurrentUser}, or null. attendees: always there, [] for none, sorted by \
-            email, then name, those without one last; each is {name, email, status, role, type, isCurrentUser}. status: accepted, \
-            declined, tentative, pending, delegated, completed, in process or unknown. role: required, optional, \
-            chair, non-participant or unknown. type: person, room, resource, group or unknown. name and email \
-            can be null; email is null when Calendar has no address for the participant. \
+            email ignoring case, then name, missing ones last; each is {name, email, status, role, type, \
+            isCurrentUser}. status: accepted, declined, tentative, pending, delegated, completed, in process or \
+            unknown. role: required, optional, chair, non-participant or unknown. type: person, room, resource, \
+            group or unknown. name can be null. email can be null: it is the participant's mailto: address, or \
+            else a plain address Calendar holds for them; null when neither can be read. \
             The organizer may also be among the attendees. isCurrentUser marks the account's owner, who \
             need not be among them.
             """
@@ -167,11 +168,7 @@ struct EventInfo: Encodable {
         availability = describe(event.availability)
         alarms = alarmMinutes(event.alarms ?? [], start: event.startDate)
         organizer = event.organizer.map(Organizer.init)
-        // EventKit returns the attendees in a different order from one read to the next.
-        attendees = (event.attendees ?? []).map(Attendee.init).sorted {
-            participantSortKey(email: $0.email, name: $0.name)
-                .lexicographicallyPrecedes(participantSortKey(email: $1.email, name: $1.name))
-        }
+        attendees = sortedAttendees((event.attendees ?? []).map(Attendee.init))
     }
 
     enum CodingKeys: CodingKey {
@@ -231,13 +228,22 @@ struct Attendee: Encodable {
     let type: String
     let isCurrentUser: Bool
 
+    init(name: String?, email: String?, status: String, role: String, type: String, isCurrentUser: Bool) {
+        self.name = name
+        self.email = email
+        self.status = status
+        self.role = role
+        self.type = type
+        self.isCurrentUser = isCurrentUser
+    }
+
     init(_ participant: EKParticipant) {
-        name = participant.name.flatMap { $0.isEmpty ? nil : $0 }
-        email = participantEmail(participant)
-        status = describe(participant.participantStatus)
-        role = describe(participant.participantRole)
-        type = describe(participant.participantType)
-        isCurrentUser = participant.isCurrentUser
+        self.init(name: participant.name.flatMap { $0.isEmpty ? nil : $0 },
+                  email: participantEmail(participant),
+                  status: describe(participant.participantStatus),
+                  role: describe(participant.participantRole),
+                  type: describe(participant.participantType),
+                  isCurrentUser: participant.isCurrentUser)
     }
 
     enum CodingKeys: CodingKey { case name, email, status, role, type, isCurrentUser }
@@ -259,33 +265,70 @@ private func participantURL(_ participant: EKParticipant) -> URL? {
     participant.value(forKey: "URL") as? URL
 }
 
-/// The address from a mailto: URL if there is one, otherwise the participant's emailAddress.
 /// emailAddress is not documented: it is read because iCloud gives most participants a principal path
-/// instead of a mailto: URL. If Apple removes or changes it, email is null as it was before.
+/// instead of a mailto: URL. If Apple removes it or changes its type, email is null as it was before.
 private func participantEmail(_ participant: EKParticipant) -> String? {
-    emailAddress(participantURL(participant)) ?? stringValue(of: participant, forKey: "emailAddress").flatMap(plainAddress)
+    participantEmail(mailto: emailAddress(participantURL(participant)),
+                     property: stringValue(of: participant, forKey: "emailAddress"))
 }
 
-/// The value for `key` if the object has one and it is a string. Asking first matters: reading a key the
-/// object does not have raises an Objective-C exception, which Swift cannot catch.
+/// The mailto: address if there is one, otherwise the property's value if it is shaped like an address.
+func participantEmail(mailto: String?, property: String?) -> String? {
+    mailto ?? property.flatMap(plainAddress)
+}
+
+/// What the getter named `key` returns, if that is a string. A getter that is not there, takes arguments or
+/// returns no object (a pointer, say) cannot be called safely, and an Objective-C exception cannot be caught
+/// from Swift, so all three are ruled out first and then that very method is called. Not covered: a getter
+/// that raises by itself.
 func stringValue(of object: NSObject, forKey key: String) -> String? {
-    guard object.responds(to: NSSelectorFromString(key)) else { return nil }
-    return object.value(forKey: key) as? String
+    let selector = NSSelectorFromString(key)
+    guard object.responds(to: selector), let method = class_getInstanceMethod(type(of: object), selector),
+          method_getNumberOfArguments(method) == 2 else { return nil }   // self and _cmd only
+    let returnType = method_copyReturnType(method)
+    defer { free(returnType) }
+    guard String(cString: returnType) == "@" else { return nil }
+    return object.perform(selector)?.takeUnretainedValue() as? String
 }
 
-/// The text if it is shaped like a bare address: one "@" with something on each side, and no whitespace,
-/// control character or scheme. Anything else is nil.
+private let refusedInAddress = CharacterSet.whitespacesAndNewlines.union(.controlCharacters)
+    .union(CharacterSet(charactersIn: ":<>,;/\\\""))
+
+/// The text if it is shaped like a bare address: one "@" with something on each side, a domain that
+/// neither starts nor ends with ".", and no whitespace, control or format character, nor any of
+/// : < > , ; / \ ". Checked scalar by scalar, so a combining mark cannot hide one. Anything else is nil.
 func plainAddress(_ text: String) -> String? {
-    let parts = text.components(separatedBy: "@")
-    guard parts.count == 2, !parts[0].isEmpty, !parts[1].isEmpty, !text.contains(":"),
-          !text.unicodeScalars.contains(where: { CharacterSet.whitespacesAndNewlines.contains($0)
-              || CharacterSet.controlCharacters.contains($0) }) else { return nil }
+    let scalars = Array(text.unicodeScalars)
+    guard let at = scalars.firstIndex(of: "@"), at == scalars.lastIndex(of: "@"),
+          at > 0, at < scalars.count - 1, scalars[at + 1] != ".", scalars.last != ".",
+          !scalars.contains(where: { refusedInAddress.contains($0) }) else { return nil }
     return text
 }
 
-/// What attendees are sorted by: email without regard to case, then name; a missing one sorts last.
-func participantSortKey(email: String?, name: String?) -> [String] {
-    [email == nil ? "1" : "0", email?.lowercased() ?? "", name == nil ? "1" : "0", name ?? ""]
+/// EventKit returns the attendees in a different order from one read to the next, so they are sorted:
+/// by email without regard to case, then by name, a missing one last; any tie left is broken by every
+/// printed field, byte by byte, so the same attendees always print in the same order.
+func sortedAttendees(_ attendees: [Attendee]) -> [Attendee] {
+    func fields(_ attendee: Attendee) -> [String] {
+        [attendee.email ?? "", attendee.name ?? "", attendee.status, attendee.role, attendee.type,
+         String(attendee.isCurrentUser)]
+    }
+    return attendees.sorted { a, b in
+        let folded = { (email: String) in email.folding(options: .caseInsensitive, locale: nil) }
+        if let first = missingLast(a.email.map(folded), b.email.map(folded)) { return first }
+        if let first = missingLast(a.name, b.name) { return first }
+        return fields(a).lexicographicallyPrecedes(fields(b)) { $0.utf8.lexicographicallyPrecedes($1.utf8) }
+    }
+}
+
+/// Whether `a` comes before `b`, a missing value last; nil when they are equal.
+private func missingLast(_ a: String?, _ b: String?) -> Bool? {
+    switch (a, b) {
+    case (nil, nil): return nil
+    case (nil, _): return false
+    case (_, nil): return true
+    case let (a?, b?): return a == b ? nil : a < b
+    }
 }
 
 /// The address of a mailto: URL, percent-decoded, without the scheme or a query. Any other URL is nil,
