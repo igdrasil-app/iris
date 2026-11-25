@@ -54,8 +54,10 @@ final class AttendeeTests: XCTestCase {
 
     // Reading either of these by key would raise an Objective-C exception and stop the process.
     func testStringValueRefusesAGetterThatReturnsNoObject() {
-        XCTAssertTrue(PointerHolder().responds(to: NSSelectorFromString("emailAddress")))
-        XCTAssertNil(stringValue(of: PointerHolder(), forKey: "emailAddress"))
+        let holder = PointerHolder()
+        XCTAssertTrue(holder.responds(to: NSSelectorFromString("emailAddress")))
+        XCTAssertNil(stringValue(of: holder, forKey: "emailAddress"))
+        XCTAssertFalse(holder.wasRead, "the getter must not be called at all")
     }
 
     func testStringValueRefusesAMethodThatTakesAnArgument() {
@@ -158,7 +160,11 @@ final class AttendeeTests: XCTestCase {
 }
 
 private final class PointerHolder: NSObject {
-    @objc var emailAddress: UnsafeRawPointer? { nil }
+    var wasRead = false
+    @objc var emailAddress: UnsafeRawPointer? {
+        wasRead = true
+        return nil
+    }
 }
 
 private final class ArgumentHolder: NSObject {}

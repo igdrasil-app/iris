@@ -268,8 +268,9 @@ private func participantURL(_ participant: EKParticipant) -> URL? {
 /// emailAddress is not documented: it is read because iCloud gives most participants a principal path
 /// instead of a mailto: URL. If Apple removes it or changes its type, email is null as it was before.
 private func participantEmail(_ participant: EKParticipant) -> String? {
-    participantEmail(mailto: emailAddress(participantURL(participant)),
-                     property: stringValue(of: participant, forKey: "emailAddress"))
+    // The undocumented getter is called only when there is no mailto: address.
+    if let mailto = emailAddress(participantURL(participant)) { return mailto }
+    return participantEmail(mailto: nil, property: stringValue(of: participant, forKey: "emailAddress"))
 }
 
 /// The mailto: address if there is one, otherwise the property's value if it is shaped like an address.
@@ -279,11 +280,12 @@ func participantEmail(mailto: String?, property: String?) -> String? {
 
 /// What the getter named `key` returns, if that is a string. A getter that is not there, takes arguments or
 /// returns no object (a pointer, say) cannot be called safely, and an Objective-C exception cannot be caught
-/// from Swift, so all three are ruled out first and then that very method is called. Not covered: a getter
-/// that raises by itself.
+/// from Swift, so all three are ruled out first, on the object's real class, and then that very method is
+/// called. It is taken to return an object it still owns, as getters do. Not covered: a getter that raises
+/// by itself.
 func stringValue(of object: NSObject, forKey key: String) -> String? {
     let selector = NSSelectorFromString(key)
-    guard object.responds(to: selector), let method = class_getInstanceMethod(type(of: object), selector),
+    guard object.responds(to: selector), let method = class_getInstanceMethod(object_getClass(object), selector),
           method_getNumberOfArguments(method) == 2 else { return nil }   // self and _cmd only
     let returnType = method_copyReturnType(method)
     defer { free(returnType) }
