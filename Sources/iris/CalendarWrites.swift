@@ -172,7 +172,7 @@ struct UpdateEvent: AsyncParsableCommand {
     @Flag(help: "Remove all alarms. Default: alarms unchanged.")
     var noAlarms = false
 
-    @Option(help: "For a recurring event: the day of the occurrence to change; add a time if there are several that day.")
+    @Option(help: "For a recurring event: the day of the occurrence to change; add a time if there are several that day: the one nearest it is taken, and a tie is refused.")
     var occurrence: String?
 
     @Option(help: "this or future. this: only the targeted occurrence. future: the targeted occurrence and all after it; without --occurrence, the whole series. Default: this.")
@@ -261,7 +261,7 @@ struct DeleteEvent: AsyncParsableCommand {
     @Argument(help: "Event id, from `iris calendar events`.")
     var id: String
 
-    @Option(help: "For a recurring event: the day of the occurrence to delete; add a time if there are several that day.")
+    @Option(help: "For a recurring event: the day of the occurrence to delete; add a time if there are several that day: the one nearest it is taken, and a tie is refused.")
     var occurrence: String?
 
     @Option(help: "this or future. this: only the targeted occurrence. future: the targeted occurrence and all after it; without --occurrence, the whole series. Default: this.")
@@ -366,16 +366,41 @@ func findEvent(_ id: String, occurrence: String?, span: EKSpan, in store: EKEven
     let dayEnd = Calendar.current.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
     let predicate = store.predicateForEvents(withStart: dayStart, end: dayEnd, calendars: nil)
     // An occurrence edited earlier is detached and carries the series id plus "/RID=…".
-    let nearest = store.events(matching: predicate)
+    let candidates = store.events(matching: predicate)
         .filter { $0.eventIdentifier == id || $0.eventIdentifier?.hasPrefix(id + "/") == true }
         .filter { $0.startDate >= dayStart && $0.startDate < dayEnd && isAllowed($0) }
-        .min { abs($0.startDate.timeIntervalSince(date)) < abs($1.startDate.timeIntervalSince(date)) }
-    guard let nearest else { throw IrisError("no occurrence of \(id) on \(iso(dayStart).prefix(10))") }
+    let nearest: EKEvent
+    switch nearestStart(candidates.map(\.startDate), to: date) {
+    case .none:
+        throw IrisError("no occurrence of \(id) on \(iso(dayStart).prefix(10))")
+    case .tie:
+        // EventKit lists events in no promised order, so taking either could change a different one each time.
+        throw IrisError("more than one occurrence of \(id) on \(iso(dayStart).prefix(10)) is equally near \(occurrence), "
+            + "so nothing was changed. If their starts differ, give --occurrence the exact start of the one you "
+            + "mean; if they start together, use the id of the occurrence that was changed on its own, as "
+            + "`iris calendar events` shows it.")
+    case .unique(let index):
+        nearest = candidates[index]
+    }
     // Checked on the occurrence itself too, not only on its series.
     guard nearest.calendar.allowsContentModifications else {
         throw IrisError("calendar \(nearest.calendar.title) is read-only")
     }
     return nearest
+}
+
+enum NearestStart: Equatable {
+    case none
+    case unique(Int)
+    case tie
+}
+
+/// Which of `starts` is nearest `wanted`: its index when only one is that near, `.tie` when several are.
+func nearestStart(_ starts: [Date], to wanted: Date) -> NearestStart {
+    let distances = starts.map { abs($0.timeIntervalSince(wanted)) }
+    guard let least = distances.min() else { return .none }
+    let nearest = distances.indices.filter { distances[$0] == least }
+    return nearest.count == 1 ? .unique(nearest[0]) : .tie
 }
 
 /// The one writable calendar `token` names among the allowed ones; any other is not found.
