@@ -138,7 +138,7 @@ let tools: [Tool] = [
     Tool(name: "calendars", description: "List calendars: id, title, writable, source.",
          command: ["calendar", "calendars"], scope: .calendars, parameters: []),
 
-    Tool(name: "events", description: "List events in a date range, earliest first. alarms: minutes before the start; negative is after it.",
+    Tool(name: "events", description: "List events in a date range, earliest first. alarms: one entry per timed alarm, whole minutes before that event's start; negative is after it.",
          command: ["calendar", "events"], scope: .calendars, parameters: [
         Parameter(name: "from", kind: .string, description: "Range start: \(dateFormats). Default: start of today."),
         Parameter(name: "to", kind: .string, description: "Range end, same formats; a bare date includes that whole day. Default: 7 days after from."),

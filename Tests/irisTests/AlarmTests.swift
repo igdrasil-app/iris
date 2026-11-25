@@ -34,6 +34,14 @@ final class AlarmTests: XCTestCase {
             EKAlarm(absoluteDate: start.addingTimeInterval(100)),
         ]
         XCTAssertEqual(alarmMinutes(alarms, start: start), [2, 1, 0, -2])
+        // Half a minute rounds away from zero.
+        let halves = [EKAlarm(relativeOffset: 30), EKAlarm(relativeOffset: -30), EKAlarm(relativeOffset: -90)]
+        XCTAssertEqual(alarmMinutes(halves, start: start), [2, 1, -1])
+    }
+
+    func testAlarmWithNoUsableTimeIsLeftOut() {
+        let alarms = [EKAlarm(relativeOffset: .nan), EKAlarm(relativeOffset: .infinity), EKAlarm(relativeOffset: -600)]
+        XCTAssertEqual(alarmMinutes(alarms, start: start), [10])
     }
 
     func testLocationAlarmIsLeftOut() {
@@ -43,6 +51,8 @@ final class AlarmTests: XCTestCase {
         // A place without a proximity trigger, as a travel-time alert has, still fires at its time.
         let timed = EKAlarm(relativeOffset: -300)
         timed.structuredLocation = EKStructuredLocation(title: "Office")
+        XCTAssertEqual(alarmMinutes([location, timed], start: start), [5])
+        location.proximity = .leave
         XCTAssertEqual(alarmMinutes([location, timed], start: start), [5])
     }
 }
