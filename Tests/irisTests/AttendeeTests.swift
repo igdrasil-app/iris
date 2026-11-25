@@ -45,4 +45,27 @@ final class AttendeeTests: XCTestCase {
         XCTAssertNil(emailAddress(URL(string: "/principals/ada@example.com")))
         XCTAssertNil(emailAddress(nil))
     }
+
+    // The shape every caller reads: the two keys are always there, organizer null and attendees [] when
+    // there are none, and location and notes are still left out when empty.
+    func testEventWithoutParticipantsKeepsItsShape() throws {
+        let store = EKEventStore()
+        let event = EKEvent(eventStore: store)
+        event.calendar = EKCalendar(for: .event, eventStore: store)
+        event.calendar.title = "Fixture"
+        event.title = "Fixture"
+        event.startDate = Date(timeIntervalSince1970: 1_800_000_000)
+        event.endDate = event.startDate.addingTimeInterval(3600)
+        event.location = ""
+        event.notes = ""
+
+        let data = try JSONEncoder().encode(EventInfo(event))
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertTrue(json["organizer"] is NSNull)
+        XCTAssertEqual((json["attendees"] as? [Any])?.count, 0)
+        XCTAssertEqual(Set(json.keys), [
+            "id", "title", "start", "end", "allDay", "calendar", "calendarId", "recurring", "detached",
+            "availability", "alarms", "organizer", "attendees",
+        ])
+    }
 }

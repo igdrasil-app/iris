@@ -52,8 +52,9 @@ struct Events: AsyncParsableCommand {
             event's own order; each is {name, email, status, role, type, isCurrentUser}. status: accepted, \
             declined, tentative, pending, delegated, completed, in process or unknown. role: required, optional, \
             chair, non-participant or unknown. type: person, room, resource, group or unknown. name and email \
-            can be null; email is set only when Calendar gives a mailto: address, which it often does not. \
-            The organizer is usually among the attendees too, and so are you: isCurrentUser tells which.
+            can be null; email is set only when Calendar gives a mailto: address, so expect null often. \
+            The organizer may also be among the attendees. isCurrentUser marks the account's owner, who \
+            need not be among them.
             """
     )
 
