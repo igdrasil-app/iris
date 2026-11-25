@@ -47,8 +47,7 @@ struct Events: AsyncParsableCommand {
             counted from this event's start, and seconds round to the nearest minute. An alarm on arriving \
             at or leaving a place is left out, so [] is no timed alarms.
             availability: busy, free, tentative or unavailable; "not supported" when the event's calendar has no \
-            availability, as On My Mac, subscribed and Birthdays calendars do not; "unknown" is a value Iris \
-            cannot name.
+            availability; "unknown" is a value Iris cannot name.
             """
     )
 

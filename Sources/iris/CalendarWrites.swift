@@ -32,7 +32,7 @@ struct AddEvent: AsyncParsableCommand {
     @Option(help: "URL. Default: none.")
     var url: String?
 
-    @Option(help: "busy, free, tentative or unavailable; an error if the calendar does not support that value. Default: busy where the calendar supports availability; elsewhere the event reads \"not supported\".")
+    @Option(help: "busy, free, tentative or unavailable; an error if the calendar does not support that value. Default: Calendar's own, busy where the calendar has availability; elsewhere the event reads \"not supported\".")
     var availability: String?
 
     @Option(name: .customLong("alarm"), help: "Alarm this many minutes before the start; repeat for several. Read back in the event's alarms. Default: no alarms.")

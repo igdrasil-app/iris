@@ -156,7 +156,7 @@ let tools: [Tool] = [
         Parameter(name: "location", kind: .string, description: "Location. Default: none."),
         Parameter(name: "notes", kind: .string, description: "Notes. Default: none."),
         Parameter(name: "url", kind: .string, description: "URL, with a scheme. Default: none."),
-        Parameter(name: "availability", kind: .string, description: "An error if the calendar does not support that value. Default: busy where the calendar supports availability; elsewhere the event reads \"not supported\".", choices: ["busy", "free", "tentative", "unavailable"]),
+        Parameter(name: "availability", kind: .string, description: "An error if the calendar does not support that value. Default: Calendar's own, busy where the calendar has availability; elsewhere the event reads \"not supported\".", choices: ["busy", "free", "tentative", "unavailable"]),
         Parameter(name: "alarms", kind: .integers, description: "Minutes before the start, one entry per alarm. Default: no alarms.", flag: "alarm"),
         Parameter(name: "repeat", kind: .string, description: "Default: does not repeat. Without until or count it repeats forever.", choices: ["daily", "weekly", "monthly", "yearly"]),
         Parameter(name: "every", kind: .integer, description: "With repeat: repeat every n days, weeks, months or years. Default: 1."),
