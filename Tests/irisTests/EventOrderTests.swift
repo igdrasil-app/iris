@@ -33,7 +33,28 @@ final class EventOrderTests: XCTestCase {
         let composed = key(title: "Caf\u{E9}", id: "same")
         let decomposed = key(title: "Cafe\u{301}", id: "same")
         XCTAssertEqual(composed.title, decomposed.title)   // Swift compares them as equal
-        XCTAssertNotEqual(composed.precedes(decomposed), decomposed.precedes(composed))
+        XCTAssertTrue(decomposed.precedes(composed))        // by bytes: "e" comes before the two bytes of é
+        XCTAssertFalse(composed.precedes(decomposed))
+    }
+
+    func testStringsOrderByBytesAndTimesToTheFraction() {
+        XCTAssertTrue(key(title: "e\u{301}").precedes(key(title: "f")))
+        XCTAssertTrue(key(calendarId: "e\u{301}").precedes(key(calendarId: "f")))
+        XCTAssertTrue(key(id: "e\u{301}").precedes(key(id: "f")))
+        XCTAssertTrue(key(start: 0.25, end: 7200, id: "z").precedes(key(start: 0.5, end: 1800, id: "a")))
+        XCTAssertTrue(key(end: 3600.25, id: "z").precedes(key(end: 3600.5, id: "a")))
+    }
+
+    // Calendars keep Swift's order of titles, which is not byte order; only a tie goes to bytes, then the id.
+    func testCalendarOrder() {
+        let a = (title: "e\u{301}", id: "z")
+        let b = (title: "\u{e9}", id: "a")
+        let c = (title: "f", id: "m")
+        for rows in [[a, b, c], [c, b, a]] {
+            XCTAssertEqual(rows.sorted(by: calendarPrecedes).map(\.id), ["m", "z", "a"])
+        }
+        XCTAssertTrue(calendarPrecedes(("Same", "a"), ("Same", "z")))
+        XCTAssertFalse(calendarPrecedes(("Same", "z"), ("Same", "a")))
     }
 
     func testAnEventDoesNotPrecedeItself() {

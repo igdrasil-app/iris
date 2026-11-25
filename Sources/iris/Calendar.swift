@@ -27,12 +27,7 @@ struct Calendars: AsyncParsableCommand {
         let store = try await grantedStore()
         let calendars = store.calendars(for: .event)
             .filter { allowed?.contains($0.calendarIdentifier) ?? true }
-            .sorted { a, b in
-                if a.title != b.title { return a.title < b.title }
-                // Titles can repeat, and two that Swift calls equal can still differ in their bytes.
-                return [a.title, a.calendarIdentifier].lexicographicallyPrecedes(
-                    [b.title, b.calendarIdentifier], by: bytesPrecede)
-            }
+            .sorted { calendarPrecedes(($0.title, $0.calendarIdentifier), ($1.title, $1.calendarIdentifier)) }
             .map { CalendarInfo(id: $0.calendarIdentifier, title: $0.title,
                                 writable: $0.allowsContentModifications, source: $0.source.title) }
         try emit(calendars)
@@ -163,6 +158,13 @@ struct EventKey {
         return [title, calendarId, id].lexicographicallyPrecedes(
             [other.title, other.calendarId, other.id], by: bytesPrecede)
     }
+}
+
+/// Calendars are listed by title, as they always were. Titles can repeat, and two that Swift calls equal can
+/// still differ in their bytes, so a tie goes to the bytes and then to the id.
+func calendarPrecedes(_ a: (title: String, id: String), _ b: (title: String, id: String)) -> Bool {
+    if a.title != b.title { return a.title < b.title }
+    return [a.title, a.id].lexicographicallyPrecedes([b.title, b.id], by: bytesPrecede)
 }
 
 func bytesPrecede(_ a: String, _ b: String) -> Bool {
