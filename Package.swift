@@ -16,8 +16,9 @@ let package = Package(
                 .product(name: "Sparkle", package: "Sparkle"),
             ]
         ),
-        // The HTTP gate, the HTTP scope and alarm minutes only: who gets past the one, what the other lets a
-        // caller see, and how an alarm reads back could change silently, and no hand check would notice.
+        // The HTTP gate, the HTTP scope, alarm minutes and availability only: who gets past the one, what the
+        // other lets a caller see, how an alarm reads back and which availability a calendar takes could change
+        // silently, and no hand check would notice.
         .testTarget(name: "irisTests", dependencies: ["iris"]),
     ]
 )

@@ -46,6 +46,9 @@ struct Events: AsyncParsableCommand {
             --alarm takes them, earliest first; negative is after the start. An alarm at a set time is \
             counted from this event's start, and seconds round to the nearest minute. An alarm on arriving \
             at or leaving a place is left out, so [] is no timed alarms.
+            availability: busy, free, tentative or unavailable; "not supported" when the event's calendar has no \
+            availability, as On My Mac, subscribed and Birthdays calendars do not; "unknown" is a value Iris \
+            cannot name.
             """
     )
 
@@ -251,7 +254,7 @@ func describe(_ availability: EKEventAvailability) -> String {
     case .free: return "free"
     case .tentative: return "tentative"
     case .unavailable: return "unavailable"
-    case .notSupported: return "unknown"
+    case .notSupported: return "not supported"
     @unknown default: return "unknown"
     }
 }

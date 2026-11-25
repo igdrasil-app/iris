@@ -32,7 +32,7 @@ struct AddEvent: AsyncParsableCommand {
     @Option(help: "URL. Default: none.")
     var url: String?
 
-    @Option(help: "busy, free, tentative or unavailable. Default: busy.")
+    @Option(help: "busy, free, tentative or unavailable; an error if the calendar does not support that value. Default: busy where the calendar supports availability; elsewhere the event reads \"not supported\".")
     var availability: String?
 
     @Option(name: .customLong("alarm"), help: "Alarm this many minutes before the start; repeat for several. Read back in the event's alarms. Default: no alarms.")
@@ -78,6 +78,7 @@ struct AddEvent: AsyncParsableCommand {
         let store = try await grantedStore()
         let allowed = try allowedIds(allowedCalendars, "--allowed-calendars")
         let target = try writableCalendar(calendar, in: store, allowed: allowed)
+        let newAvailability = try availability.map { try supportedAvailability($0, in: target) }
         let (startDate, endDate) = try dates()
 
         let event = EKEvent(eventStore: store)
@@ -90,7 +91,7 @@ struct AddEvent: AsyncParsableCommand {
         event.location = location
         event.notes = notes
         event.url = url.flatMap { URL(string: $0) }
-        if let availability { event.availability = try parseAvailability(availability) }
+        if let newAvailability { event.availability = newAvailability }
         setAlarms(alarms, on: event)
         if let repeatFrequency {
             event.recurrenceRules = [try recurrenceRule(frequency: repeatFrequency)]
@@ -162,7 +163,7 @@ struct UpdateEvent: AsyncParsableCommand {
     @Option(help: "New URL. An empty string clears it.")
     var url: String?
 
-    @Option(help: "busy, free, tentative or unavailable.")
+    @Option(help: "busy, free, tentative or unavailable; an error if the calendar (with --calendar, the new one) does not support that value. Default: unchanged, as far as the calendar supports it.")
     var availability: String?
 
     @Option(name: .customLong("alarm"), help: "Alarm this many minutes before the start; repeat for several. Replaces all existing alarms. Read back in the event's alarms. Default: alarms unchanged.")
@@ -209,13 +210,15 @@ struct UpdateEvent: AsyncParsableCommand {
         let allowed = try allowedIds(allowedCalendars, "--allowed-calendars")
         let event = try findEvent(id, occurrence: occurrence, span: span, in: store, allowed: allowed)
         let target = try calendar.map { try writableCalendar($0, in: store, allowed: allowed) }
+        let newAvailability = try availability.map { try supportedAvailability($0, in: target ?? event.calendar) }
 
         if let title { event.title = title }
         if let location { event.location = location }
         if let notes { event.notes = notes }
         if let url { event.url = url.isEmpty ? nil : URL(string: url) }
-        if let availability { event.availability = try parseAvailability(availability) }
+        // The calendar first: EventKit drops an availability the event's calendar does not support.
         if let target { event.calendar = target }
+        if let newAvailability { event.availability = newAvailability }
         if noAlarms { setAlarms([], on: event) } else if !alarms.isEmpty { setAlarms(alarms, on: event) }
 
         // Moving the start keeps the length: in seconds for timed events, in calendar days for
@@ -361,6 +364,26 @@ func parseAvailability(_ text: String) throws -> EKEventAvailability {
     case "unavailable": return .unavailable
     default: throw ValidationError("--availability must be busy, free, tentative or unavailable, not '\(text)'")
     }
+}
+
+/// The value to set, refused when the calendar does not support it: EventKit would drop it without an error.
+func supportedAvailability(_ text: String, in calendar: EKCalendar) throws -> EKEventAvailability {
+    let value = try parseAvailability(text)
+    let supported = availabilities(in: calendar.supportedEventAvailabilities)
+    guard supported.contains(value) else {
+        let names = supported.map(describe).joined(separator: ", ")
+        throw IrisError("calendar \(calendar.title) "
+            + (supported.isEmpty ? "supports no availability" : "supports only availability \(names), not \(text)"))
+    }
+    return value
+}
+
+/// The values a calendar supports; EventKit numbers them differently in the mask.
+func availabilities(in mask: EKCalendarEventAvailabilityMask) -> [EKEventAvailability] {
+    let bits: [(EKCalendarEventAvailabilityMask, EKEventAvailability)] = [
+        (.busy, .busy), (.free, .free), (.tentative, .tentative), (.unavailable, .unavailable),
+    ]
+    return bits.filter { mask.contains($0.0) }.map { $0.1 }
 }
 
 func parseFrequency(_ text: String) throws -> EKRecurrenceFrequency {
