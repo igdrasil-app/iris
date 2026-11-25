@@ -48,11 +48,11 @@ struct Events: AsyncParsableCommand {
             at or leaving a place is left out, so [] is no timed alarms.
             availability: busy, free, tentative or unavailable; "not supported" when the event's calendar has no \
             availability; "unknown" is a value Iris cannot name.
-            organizer: {name, email, isCurrentUser}, or null. attendees: always there, [] for none, in the \
-            event's own order; each is {name, email, status, role, type, isCurrentUser}. status: accepted, \
+            organizer: {name, email, isCurrentUser}, or null. attendees: always there, [] for none, sorted by \
+            email, then name, those without one last; each is {name, email, status, role, type, isCurrentUser}. status: accepted, \
             declined, tentative, pending, delegated, completed, in process or unknown. role: required, optional, \
             chair, non-participant or unknown. type: person, room, resource, group or unknown. name and email \
-            can be null; email is set only when Calendar gives a mailto: address. \
+            can be null; email is null when Calendar has no address for the participant. \
             The organizer may also be among the attendees. isCurrentUser marks the account's owner, who \
             need not be among them.
             """
@@ -167,7 +167,11 @@ struct EventInfo: Encodable {
         availability = describe(event.availability)
         alarms = alarmMinutes(event.alarms ?? [], start: event.startDate)
         organizer = event.organizer.map(Organizer.init)
-        attendees = (event.attendees ?? []).map(Attendee.init)
+        // EventKit returns the attendees in a different order from one read to the next.
+        attendees = (event.attendees ?? []).map(Attendee.init).sorted {
+            participantSortKey(email: $0.email, name: $0.name)
+                .lexicographicallyPrecedes(participantSortKey(email: $1.email, name: $1.name))
+        }
     }
 
     enum CodingKeys: CodingKey {
@@ -204,7 +208,7 @@ struct Organizer: Encodable {
 
     init(_ participant: EKParticipant) {
         name = participant.name.flatMap { $0.isEmpty ? nil : $0 }
-        email = emailAddress(participantURL(participant))
+        email = participantEmail(participant)
         isCurrentUser = participant.isCurrentUser
     }
 
@@ -229,7 +233,7 @@ struct Attendee: Encodable {
 
     init(_ participant: EKParticipant) {
         name = participant.name.flatMap { $0.isEmpty ? nil : $0 }
-        email = emailAddress(participantURL(participant))
+        email = participantEmail(participant)
         status = describe(participant.participantStatus)
         role = describe(participant.participantRole)
         type = describe(participant.participantType)
@@ -253,6 +257,35 @@ struct Attendee: Encodable {
 /// The header promises a URL; read as optional so a nil one, never seen, cannot stop the whole listing.
 private func participantURL(_ participant: EKParticipant) -> URL? {
     participant.value(forKey: "URL") as? URL
+}
+
+/// The address from a mailto: URL if there is one, otherwise the participant's emailAddress.
+/// emailAddress is not documented: it is read because iCloud gives most participants a principal path
+/// instead of a mailto: URL. If Apple removes or changes it, email is null as it was before.
+private func participantEmail(_ participant: EKParticipant) -> String? {
+    emailAddress(participantURL(participant)) ?? stringValue(of: participant, forKey: "emailAddress").flatMap(plainAddress)
+}
+
+/// The value for `key` if the object has one and it is a string. Asking first matters: reading a key the
+/// object does not have raises an Objective-C exception, which Swift cannot catch.
+func stringValue(of object: NSObject, forKey key: String) -> String? {
+    guard object.responds(to: NSSelectorFromString(key)) else { return nil }
+    return object.value(forKey: key) as? String
+}
+
+/// The text if it is shaped like a bare address: one "@" with something on each side, and no whitespace,
+/// control character or scheme. Anything else is nil.
+func plainAddress(_ text: String) -> String? {
+    let parts = text.components(separatedBy: "@")
+    guard parts.count == 2, !parts[0].isEmpty, !parts[1].isEmpty, !text.contains(":"),
+          !text.unicodeScalars.contains(where: { CharacterSet.whitespacesAndNewlines.contains($0)
+              || CharacterSet.controlCharacters.contains($0) }) else { return nil }
+    return text
+}
+
+/// What attendees are sorted by: email without regard to case, then name; a missing one sorts last.
+func participantSortKey(email: String?, name: String?) -> [String] {
+    [email == nil ? "1" : "0", email?.lowercased() ?? "", name == nil ? "1" : "0", name ?? ""]
 }
 
 /// The address of a mailto: URL, percent-decoded, without the scheme or a query. Any other URL is nil,

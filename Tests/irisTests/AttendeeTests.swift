@@ -46,6 +46,29 @@ final class AttendeeTests: XCTestCase {
         XCTAssertNil(emailAddress(nil))
     }
 
+    func testStringValueOnlyWhenTheObjectHasAString() {
+        XCTAssertNil(stringValue(of: NSObject(), forKey: "emailAddress"))
+        XCTAssertNil(stringValue(of: NumberHolder(), forKey: "emailAddress"))
+        XCTAssertEqual(stringValue(of: StringHolder(), forKey: "emailAddress"), "ada@example.com")
+    }
+
+    func testPlainAddressShape() {
+        XCTAssertEqual(plainAddress("ada@example.com"), "ada@example.com")
+        XCTAssertEqual(plainAddress("Ada@Example.COM"), "Ada@Example.COM")
+        XCTAssertNil(plainAddress(""))
+        XCTAssertNil(plainAddress("ada.example.com"))
+        XCTAssertNil(plainAddress("ada@@example.com"))
+        XCTAssertNil(plainAddress("ada@b@example.com"))
+        XCTAssertNil(plainAddress("@example.com"))
+        XCTAssertNil(plainAddress("ada@"))
+        XCTAssertNil(plainAddress("ada @example.com"))
+        XCTAssertNil(plainAddress("ada@example.com\n"))
+        XCTAssertNil(plainAddress("ada\t@example.com"))
+        XCTAssertNil(plainAddress("ada@exa\u{7}mple.com"))
+        XCTAssertNil(plainAddress("mailto:ada@example.com"))
+        XCTAssertNil(plainAddress("Ada <ada@example.com>"))
+    }
+
     // The shape every caller reads: the two keys are always there, organizer null and attendees [] when
     // there are none, and location and notes are still left out when empty.
     func testEventWithoutParticipantsKeepsItsShape() throws {
@@ -68,4 +91,24 @@ final class AttendeeTests: XCTestCase {
             "availability", "alarms", "organizer", "attendees",
         ])
     }
+
+    func testAttendeesSortByEmailThenNameWithMissingOnesLast() {
+        let people: [(String?, String?)] = [
+            (nil, "Zed"), ("b@example.com", nil), ("B@example.com", "Ann"), (nil, nil), ("a@example.com", "Zed"), (nil, "Ann"),
+        ]
+        let sorted = people.sorted {
+            participantSortKey(email: $0.0, name: $0.1).lexicographicallyPrecedes(participantSortKey(email: $1.0, name: $1.1))
+        }
+        XCTAssertEqual(sorted.map { "\($0.0 ?? "-") \($0.1 ?? "-")" }, [
+            "a@example.com Zed", "B@example.com Ann", "b@example.com -", "- Ann", "- Zed", "- -",
+        ])
+    }
+}
+
+private final class StringHolder: NSObject {
+    @objc let emailAddress = "ada@example.com"
+}
+
+private final class NumberHolder: NSObject {
+    @objc let emailAddress = NSNumber(value: 1)
 }
