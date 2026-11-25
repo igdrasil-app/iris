@@ -18,7 +18,7 @@ struct Doctor: AsyncParsableCommand {
     func run() async throws {
         let executable = executablePath().map { URL(fileURLWithPath: $0).resolvingSymlinksInPath() }
         let app = executable.flatMap(installedApp)
-        let version = app?.infoDictionary?["CFBundleShortVersionString"] as? String
+        let version = installedVersion(of: app)
         let latest = await latestRelease()
         var update: String?
         if let version, let latest, isNewer(latest, than: version) {
@@ -43,6 +43,16 @@ func installedApp(around executable: URL) -> Bundle? {
     let app = executable.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
     guard app.pathExtension == "app" else { return nil }
     return Bundle(url: app)
+}
+
+/// The version of the app around the running binary, however it was started; nil for a bare build.
+func installedVersion() -> String? {
+    let executable = executablePath().map { URL(fileURLWithPath: $0).resolvingSymlinksInPath() }
+    return installedVersion(of: executable.flatMap(installedApp))
+}
+
+func installedVersion(of app: Bundle?) -> String? {
+    app?.infoDictionary?["CFBundleShortVersionString"] as? String
 }
 
 struct DoctorInfo: Encodable {

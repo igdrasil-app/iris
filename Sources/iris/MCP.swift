@@ -126,7 +126,7 @@ let versionKey = "io.modelcontextprotocol/protocolVersion"
 
 private let serverInfo: [String: Any] = [
     "name": "iris",
-    "version": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev",
+    "version": installedVersion() ?? "dev",
 ]
 
 private let instructions = """
