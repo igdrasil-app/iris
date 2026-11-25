@@ -138,7 +138,7 @@ private let span = Parameter(
 /// shared events (`Tool.limited(to:)`).
 let onlyMineParameter = Parameter(
     name: "onlyMine", kind: .flag,
-    description: "Refuse, with nothing changed, an event that has anyone on it besides the Mac's owner: an attendee or an organizer who is not the owner. Default: off.",
+    description: "Refuse, with nothing changed, an event that has anyone on it besides the Mac's owner: an attendee or an organizer who is not the owner; and span future on a repeating event, since the people on later occurrences cannot be checked. Default: off.",
     flag: "only-mine")
 
 private let sharedNote = " An event with other people on it can be refused, with nothing changed, where changing such events is not allowed."

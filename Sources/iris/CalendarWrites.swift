@@ -212,7 +212,7 @@ struct UpdateEvent: AsyncParsableCommand {
         let span = try parseSpan(span)
         let allowed = try allowedIds(allowedCalendars, "--allowed-calendars")
         let event = try findEvent(id, occurrence: occurrence, span: span, in: store, allowed: allowed)
-        if onlyMine { try refuseShared(event, changing: "changing", "changed") }
+        if onlyMine { try refuseShared(event, span: span, changing: "changing", "changed") }
         let target = try calendar.map { try writableCalendar($0, in: store, allowed: allowed) }
         let newAvailability = try availability.map { try supportedAvailability($0, in: target ?? event.calendar) }
 
@@ -283,7 +283,7 @@ struct DeleteEvent: AsyncParsableCommand {
         let span = try parseSpan(span)
         let allowed = try allowedIds(allowedCalendars, "--allowed-calendars")
         let event = try findEvent(id, occurrence: occurrence, span: span, in: store, allowed: allowed)
-        if onlyMine { try refuseShared(event, changing: "deleting", "deleted") }
+        if onlyMine { try refuseShared(event, span: span, changing: "deleting", "deleted") }
         let result = DeletedInfo(deleted: id, title: event.title ?? "", start: iso(event.startDate), span: self.span)
         do {
             try store.remove(event, span: span, commit: true)
@@ -303,7 +303,8 @@ struct DeletedInfo: Encodable {
 
 let onlyMineHelp: ArgumentHelp = """
     Refuse, with nothing changed, an event that has anyone on it but you: an attendee or an organizer \
-    who is not you. `iris mcp --http` passes it unless its scope file says "sharedEvents": true. \
+    who is not you; and --span future on a repeating event, since the people on later occurrences cannot \
+    be checked. `iris mcp --http` passes it unless its scope file says "sharedEvents": true. \
     Default: off.
     """
 
@@ -320,9 +321,18 @@ func otherPeople(organizer: Organizer?, attendees: [Attendee]) -> Int {
 
 /// With --only-mine: an event with other people on it is refused before anything about it is changed.
 /// `doing` and `done` name the change in the message, as in "deleting" and "deleted".
-func refuseShared(_ event: EKEvent, changing doing: String, _ done: String) throws {
-    let info = EventInfo(event)
-    try refuseShared(organizer: info.organizer, attendees: info.attendees, changing: doing, done)
+func refuseShared(_ event: EKEvent, span: EKSpan, changing doing: String, _ done: String) throws {
+    try refuseUncheckedSpan(span, recurring: event.hasRecurrenceRules, detached: event.isDetached, changing: doing, done)
+    try refuseShared(organizer: event.organizer.map(Organizer.init), attendees: (event.attendees ?? []).map(Attendee.init),
+                     changing: doing, done)
+}
+
+/// With --only-mine a change that reaches the occurrences after this one is refused: only this occurrence's
+/// people can be read, and a later occurrence changed on its own can have others on it.
+func refuseUncheckedSpan(_ span: EKSpan, recurring: Bool, detached: Bool, changing doing: String, _ done: String) throws {
+    guard span == .futureEvents, recurring || detached else { return }
+    throw IrisError("with only-mine on, \(doing) all future occurrences is refused, since the people on each of them "
+        + "cannot be checked, so nothing was \(done). Change one occurrence at a time, or do it in Calendar on the Mac.")
 }
 
 func refuseShared(organizer: Organizer?, attendees: [Attendee], changing doing: String, _ done: String) throws {

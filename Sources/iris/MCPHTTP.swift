@@ -22,7 +22,8 @@ private func writableNote(_ offering: [Tool], sharedEvents: Bool) -> String {
         + "deleting all future occurrences of a recurring event (delete_event with span future) is not available "
         + "here and must be done on the Mac."
         + (sharedEvents ? "" : " Events with other people on them (attendees, or an organizer other than the "
-            + "owner) cannot be changed or deleted here and must be changed on the Mac.")
+            + "owner) cannot be changed or deleted here and must be changed on the Mac; nor can all future occurrences of a "
+            + "recurring event be changed at once (update_event with span future): change one occurrence at a time.")
         + " Notes are read only." + scopeNote
 }
 

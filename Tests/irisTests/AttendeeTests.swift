@@ -209,7 +209,24 @@ final class AttendeeTests: XCTestCase {
         event.calendar = EKCalendar(for: .event, eventStore: store)
         event.startDate = Date(timeIntervalSince1970: 1_800_000_000)
         event.endDate = event.startDate.addingTimeInterval(3600)
-        XCTAssertNoThrow(try refuseShared(event, changing: "changing", "changed"))
+        XCTAssertNoThrow(try refuseShared(event, span: .thisEvent, changing: "changing", "changed"))
+        XCTAssertNoThrow(try refuseShared(event, span: .futureEvents, changing: "changing", "changed"))
+    }
+
+    // With --only-mine a change to all future occurrences is refused: later occurrences cannot be checked.
+    func testOnlyMineRefusesAllFutureOccurrences() {
+        for (recurring, detached) in [(true, false), (false, true), (true, true)] {
+            XCTAssertThrowsError(try refuseUncheckedSpan(.futureEvents, recurring: recurring, detached: detached,
+                                                         changing: "deleting", "deleted")) {
+                XCTAssertTrue("\($0)".contains("deleting all future occurrences is refused"))
+                XCTAssertTrue("\($0)".contains("nothing was deleted"))
+            }
+            XCTAssertNoThrow(try refuseUncheckedSpan(.thisEvent, recurring: recurring, detached: detached,
+                                                     changing: "changing", "changed"))
+        }
+        // An event that does not repeat has no later occurrences.
+        XCTAssertNoThrow(try refuseUncheckedSpan(.futureEvents, recurring: false, detached: false,
+                                                 changing: "changing", "changed"))
     }
 
     private func attendee(email: String?, name: String?, status: String = "accepted") -> Attendee {
