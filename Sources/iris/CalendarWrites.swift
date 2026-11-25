@@ -35,7 +35,7 @@ struct AddEvent: AsyncParsableCommand {
     @Option(help: "busy, free, tentative or unavailable. Default: busy.")
     var availability: String?
 
-    @Option(name: .customLong("alarm"), help: "Alarm this many minutes before the start; repeat for several. Default: no alarms.")
+    @Option(name: .customLong("alarm"), help: "Alarm this many minutes before the start; repeat for several. Read back in the event's alarms. Default: no alarms.")
     var alarms: [Int] = []
 
     @Option(name: .customLong("repeat"), help: "Repeat daily, weekly, monthly or yearly. Default: does not repeat. Without --until or --count it repeats forever.")
@@ -165,7 +165,7 @@ struct UpdateEvent: AsyncParsableCommand {
     @Option(help: "busy, free, tentative or unavailable.")
     var availability: String?
 
-    @Option(name: .customLong("alarm"), help: "Alarm this many minutes before the start; repeat for several. Replaces all existing alarms. Default: alarms unchanged.")
+    @Option(name: .customLong("alarm"), help: "Alarm this many minutes before the start; repeat for several. Replaces all existing alarms. Read back in the event's alarms. Default: alarms unchanged.")
     var alarms: [Int] = []
 
     @Flag(help: "Remove all alarms. Default: alarms unchanged.")

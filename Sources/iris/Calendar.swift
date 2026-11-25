@@ -42,6 +42,10 @@ struct Events: AsyncParsableCommand {
             detached: one occurrence of a repeating event that was changed on its own; it has its own id and \
             recurring is false. By that id, the default --span this changes or deletes only this occurrence; \
             --span future still reaches the occurrences after it.
+            alarms: always there; one entry per timed alarm, in whole minutes before this event's start as \
+            --alarm takes them, earliest first; negative is after the start. An alarm at a set time is \
+            counted from this event's start, and seconds round to the nearest minute. An alarm on arriving \
+            at or leaving a place is left out, so [] is no timed alarms.
             """
     )
 
@@ -135,6 +139,7 @@ struct EventInfo: Encodable {
     let recurring: Bool
     let detached: Bool
     let availability: String
+    let alarms: [Int]
 
     init(_ event: EKEvent) {
         id = event.eventIdentifier ?? ""
@@ -149,7 +154,22 @@ struct EventInfo: Encodable {
         recurring = event.hasRecurrenceRules
         detached = event.isDetached
         availability = describe(event.availability)
+        alarms = alarmMinutes(event.alarms ?? [], start: event.startDate)
     }
+}
+
+/// Each alarm in whole minutes before `start`, the unit --alarm takes, earliest alarm first.
+/// An alarm at a set time counts from `start`; one after the start is negative; seconds round to
+/// the nearest minute. An alarm that fires on arriving or leaving a place has no time and is left out;
+/// so is one whose time is not a number, which would otherwise stop the whole listing.
+func alarmMinutes(_ alarms: [EKAlarm], start: Date) -> [Int] {
+    alarms
+        .filter { $0.proximity == .none }
+        .compactMap { alarm in
+            let secondsBefore = alarm.absoluteDate.map { start.timeIntervalSince($0) } ?? -alarm.relativeOffset
+            return Int(exactly: (secondsBefore / 60).rounded())
+        }
+        .sorted(by: >)
 }
 
 struct IrisError: Error, CustomStringConvertible {
