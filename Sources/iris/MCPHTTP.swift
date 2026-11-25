@@ -16,11 +16,14 @@ private let scopeNote = " Only the calendars and note folders its owner chose ar
 private let readOnlyNote = " This endpoint is read only: it offers \(httpToolNames.joined(separator: ", ")), "
     + "and cannot create, change or delete anything." + scopeNote
 
-private func writableNote(_ offering: [Tool]) -> String {
+private func writableNote(_ offering: [Tool], sharedEvents: Bool) -> String {
     " This endpoint offers \(offering.map(\.name).joined(separator: ", ")). Calendar events can be created, "
         + "changed and deleted only in the calendars its owner chose, at most \(writesPerHour) write calls an hour; "
         + "deleting all future occurrences of a recurring event (delete_event with span future) is not available "
-        + "here and must be done on the Mac. Notes are read only." + scopeNote
+        + "here and must be done on the Mac."
+        + (sharedEvents ? "" : " Events with other people on them (attendees, or an organizer other than the "
+            + "owner) cannot be changed or deleted here and must be changed on the Mac.")
+        + " Notes are read only." + scopeNote
 }
 
 private let maxConnections = 16      // one more is closed as soon as it arrives
@@ -55,7 +58,7 @@ func serveHTTP(port: Int, tokenFile: String, scopeFile: String, stateDir: String
     }
 
     let server = HTTPServer(token: token, offering: offering, writes: writes,
-                            note: writes == nil ? readOnlyNote : writableNote(offering))
+                            note: writes == nil ? readOnlyNote : writableNote(offering, sharedEvents: scope.sharedEvents))
     // Requests arrive as soon as the listener is up; a write waits until the count is read back. The turn
     // is always given back: a semaphore freed while taken stops the process.
     writes?.turn.wait()
@@ -79,7 +82,7 @@ func serveHTTP(port: Int, tokenFile: String, scopeFile: String, stateDir: String
     let ready: [String: Any] = ["address": "127.0.0.1", "port": port, "tools": server.offering.map(\.name),
                                 "calendars": scope.calendars.map { $0.count as Any } ?? "all",
                                 "folders": scope.folders.map { $0.count as Any } ?? "all",
-                                "writes": scope.writes]
+                                "writes": scope.writes, "sharedEvents": scope.sharedEvents]
     if let line = try? JSONSerialization.data(withJSONObject: ready, options: [.sortedKeys]) {
         try? FileHandle.standardOutput.write(contentsOf: line + Data("\n".utf8))
     }

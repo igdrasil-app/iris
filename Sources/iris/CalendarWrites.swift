@@ -181,6 +181,9 @@ struct UpdateEvent: AsyncParsableCommand {
     @Option(help: allowedHelp(.calendars))
     var allowedCalendars: String?
 
+    @Flag(help: onlyMineHelp)
+    var onlyMine = false
+
     func validate() throws {
         _ = try allowedIds(allowedCalendars, "--allowed-calendars")
         _ = try parseSpan(span)
@@ -209,6 +212,7 @@ struct UpdateEvent: AsyncParsableCommand {
         let span = try parseSpan(span)
         let allowed = try allowedIds(allowedCalendars, "--allowed-calendars")
         let event = try findEvent(id, occurrence: occurrence, span: span, in: store, allowed: allowed)
+        if onlyMine { try refuseShared(event, changing: "changing", "changed") }
         let target = try calendar.map { try writableCalendar($0, in: store, allowed: allowed) }
         let newAvailability = try availability.map { try supportedAvailability($0, in: target ?? event.calendar) }
 
@@ -266,6 +270,9 @@ struct DeleteEvent: AsyncParsableCommand {
     @Option(help: allowedHelp(.calendars))
     var allowedCalendars: String?
 
+    @Flag(help: onlyMineHelp)
+    var onlyMine = false
+
     func validate() throws {
         _ = try allowedIds(allowedCalendars, "--allowed-calendars")
         _ = try parseSpan(span)
@@ -276,6 +283,7 @@ struct DeleteEvent: AsyncParsableCommand {
         let span = try parseSpan(span)
         let allowed = try allowedIds(allowedCalendars, "--allowed-calendars")
         let event = try findEvent(id, occurrence: occurrence, span: span, in: store, allowed: allowed)
+        if onlyMine { try refuseShared(event, changing: "deleting", "deleted") }
         let result = DeletedInfo(deleted: id, title: event.title ?? "", start: iso(event.startDate), span: self.span)
         do {
             try store.remove(event, span: span, commit: true)
@@ -291,6 +299,39 @@ struct DeletedInfo: Encodable {
     let title: String
     let start: String
     let span: String
+}
+
+let onlyMineHelp: ArgumentHelp = """
+    Refuse, with nothing changed, an event that has anyone on it but you: an attendee or an organizer \
+    who is not you. `iris mcp --http` passes it unless its scope file says "sharedEvents": true. \
+    Default: off.
+    """
+
+/// How many people besides the Mac's owner are on an event: its attendees who are not the current user,
+/// and its organizer when that is not the current user either. An organizer who is also listed as an
+/// attendee, by the same email ignoring case, is counted once. 0 means the event is the owner's alone.
+func otherPeople(organizer: Organizer?, attendees: [Attendee]) -> Int {
+    let others = attendees.filter { !$0.isCurrentUser }
+    guard let organizer, !organizer.isCurrentUser else { return others.count }
+    let folded = { (email: String) in email.folding(options: .caseInsensitive, locale: nil) }
+    let listed = organizer.email.map { email in others.contains { $0.email.map(folded) == folded(email) } } ?? false
+    return others.count + (listed ? 0 : 1)
+}
+
+/// With --only-mine: an event with other people on it is refused before anything about it is changed.
+/// `doing` and `done` name the change in the message, as in "deleting" and "deleted".
+func refuseShared(_ event: EKEvent, changing doing: String, _ done: String) throws {
+    let info = EventInfo(event)
+    try refuseShared(organizer: info.organizer, attendees: info.attendees, changing: doing, done)
+}
+
+func refuseShared(organizer: Organizer?, attendees: [Attendee], changing doing: String, _ done: String) throws {
+    let count = otherPeople(organizer: organizer, attendees: attendees)
+    guard count > 0 else { return }
+    let people = count == 1 ? "1 other person" : "\(count) other people"
+    throw IrisError("this event has \(people) on it, and \(doing) it would affect them, so nothing was \(done). "
+        + "With only-mine on, only events that are the Mac owner's alone can be \(done); "
+        + "this one has to be \(done) in Calendar on the Mac.")
 }
 
 /// Finds the event to change. `event(withIdentifier:)` returns a recurring series' first occurrence,

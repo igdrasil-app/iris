@@ -14,12 +14,14 @@ enum ScopeKind {
     var option: String { self == .calendars ? "--allowed-calendars" : "--allowed-folders" }
 }
 
-/// The scope file as written: names or ids per kind, nil where it says "all"; and whether callers may
-/// create, change and delete events in the calendars it names.
+/// The scope file as written: names or ids per kind, nil where it says "all"; whether callers may
+/// create, change and delete events in the calendars it names; and whether they may also change and
+/// delete events that have other people on them.
 struct ScopeFile: Equatable {
     let calendars: [String]?
     let folders: [String]?
     var writes = false
+    var sharedEvents = false
 }
 
 /// The scope as pinned at start: ids per kind, nil where the file says "all".
@@ -27,30 +29,37 @@ struct HTTPScope {
     let calendars: Set<String>?
     let folders: Set<String>?
     var writes = false
+    var sharedEvents = false
 
     func ids(_ kind: ScopeKind) -> Set<String>? { kind == .calendars ? calendars : folders }
 }
 
 let scopeExample = #"{"calendars": ["Work"], "folders": "all"}"#
 private let scopeShape = #"each key holds a list of names or ids, [] for none, or "all" for every one; "#
-    + #"an optional "writes": true lets callers change events in those calendars"#
+    + #"an optional "writes": true lets callers change events in those calendars, and with it an optional "#
+    + #""sharedEvents": true lets them change and delete events that have other people on them"#
 
-/// Two keys, calendars and folders, each "all" or a list of strings, and an optional writes, true or
-/// false; anything else is an error.
+/// Two keys, calendars and folders, each "all" or a list of strings, and the optional writes and
+/// sharedEvents, each true or false, sharedEvents true only with writes true; anything else is an error.
 func parseScopeFile(_ data: Data) throws -> ScopeFile {
     guard let object = try? JSONSerialization.jsonObject(with: data), let keys = object as? [String: Any] else {
         throw IrisError("not a JSON object")
     }
-    if let extra = keys.keys.sorted().first(where: { !["calendars", "folders", "writes"].contains($0) }) {
+    if let extra = keys.keys.sorted().first(where: { !["calendars", "folders", "writes", "sharedEvents"].contains($0) }) {
         throw IrisError("unknown key \(extra)")
     }
     // JSON true and 1 both arrive as NSNumber, so the type is checked before the value.
-    var writes = false
-    if let value = keys["writes"] {
+    func flag(_ key: String) throws -> Bool {
+        guard let value = keys[key] else { return false }
         guard CFGetTypeID(value as CFTypeRef) == CFBooleanGetTypeID(), let flag = value as? Bool else {
-            throw IrisError("writes must be true or false")
+            throw IrisError("\(key) must be true or false")
         }
-        writes = flag
+        return flag
+    }
+    let writes = try flag("writes")
+    let sharedEvents = try flag("sharedEvents")
+    if sharedEvents && !writes {
+        throw IrisError(#""sharedEvents": true needs "writes": true; without writes it would mean nothing"#)
     }
     func entries(_ key: String) throws -> [String]? {
         guard let value = keys[key] else { throw IrisError("no \(key) key") }
@@ -60,7 +69,8 @@ func parseScopeFile(_ data: Data) throws -> ScopeFile {
         }
         return names
     }
-    return ScopeFile(calendars: try entries("calendars"), folders: try entries("folders"), writes: writes)
+    return ScopeFile(calendars: try entries("calendars"), folders: try entries("folders"), writes: writes,
+                     sharedEvents: sharedEvents)
 }
 
 /// Reads the scope file and pins its names to the ids they match now. Only a kind given as a list is
@@ -79,7 +89,7 @@ func readScope(_ path: String) throws -> HTTPScope {
     return HTTPScope(
         calendars: try file.calendars.map { try pin($0, listing: ["calendar", "calendars"], nameKey: "title", noun: "calendar", path) },
         folders: try file.folders.map { try pin($0, listing: ["notes", "folders"], nameKey: "name", noun: "folder", path) },
-        writes: file.writes)
+        writes: file.writes, sharedEvents: file.sharedEvents)
 }
 
 struct Named {
@@ -172,16 +182,25 @@ func allowedHelp(_ kind: ScopeKind) -> ArgumentHelp {
 }
 
 extension Tool {
-    /// This tool with the scope's ids for its kind right after the command, or as it is where the scope
-    /// file says "all". A tool whose command takes no scope option is refused, never offered unscoped.
+    /// This tool with the scope's ids for its kind right after the command, none where the scope file says
+    /// "all". A tool that takes onlyMine also gets --only-mine in its command, and loses the parameter, unless
+    /// the scope file says "sharedEvents": true. A tool whose command takes no scope option is refused,
+    /// never offered unscoped.
     func limited(to scope: HTTPScope) throws -> Tool {
         guard let kind = self.scope else {
             throw IrisError("\(name) cannot be limited to the scope file, so it cannot be offered over HTTP")
         }
-        guard let ids = scope.ids(kind) else { return self }
-        let json = String(decoding: try JSONSerialization.data(withJSONObject: ids.sorted(), options: .withoutEscapingSlashes),
-                          as: UTF8.self)
-        return Tool(name: name, description: description, command: command + [kind.option, json],
-                    scope: kind, parameters: parameters)
+        var command = self.command
+        var parameters = self.parameters
+        if let ids = scope.ids(kind) {
+            let json = String(decoding: try JSONSerialization.data(withJSONObject: ids.sorted(), options: .withoutEscapingSlashes),
+                              as: UTF8.self)
+            command += [kind.option, json]
+        }
+        if !scope.sharedEvents && parameters.contains(where: { $0.name == onlyMineParameter.name }) {
+            command.append("--only-mine")
+            parameters.removeAll { $0.name == onlyMineParameter.name }
+        }
+        return Tool(name: name, description: description, command: command, scope: kind, parameters: parameters)
     }
 }
