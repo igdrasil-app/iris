@@ -335,8 +335,9 @@ private func runTool(_ tool: Tool, _ arguments: [String: Any]) throws -> ToolCal
     guard let finished = collect(process, output, errors, exited: exited, within: toolDeadline) else {
         // No "try again": a write may have been saved before the child was stopped, and repeating it would double it.
         return ToolCall(result: toolResult("\(name) did not finish within \(toolDeadline) seconds and was stopped; "
-            + "whether it took effect is not known. Before repeating a change, check with events that it was not made. "
-            + "If a permission dialog is open on this Mac, answer it; if Calendar or Notes is not responding, open it.",
+            + "whether it took effect is not known. Before repeating a change, check that it was not made: with events "
+            + "for a calendar change, with reminders for a reminder. If a permission dialog is open on this Mac, answer "
+            + "it; if Calendar, Notes or Reminders is not responding, open it.",
             isError: true), started: true)
     }
     let out = String(decoding: finished.output, as: UTF8.self)

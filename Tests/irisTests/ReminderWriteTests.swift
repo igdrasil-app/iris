@@ -42,7 +42,7 @@ final class ReminderWriteTests: XCTestCase {
 
     func testSecondsAreKeptAndFractionsDropped() throws {
         let here = macCalendar()
-        let parts = try dueComponents("2030-03-04T09:30:15.250000", mac: here)
+        let parts = try dueComponents("2030-03-04T09:30:15.750000", mac: here)
         XCTAssertEqual([parts.hour, parts.minute, parts.second], [9, 30, 15])
         XCTAssertEqual(reminderDue(parts, mac: here)!.time, "09:30:15")
     }
@@ -82,6 +82,32 @@ final class ReminderWriteTests: XCTestCase {
         }
         XCTAssertNil(ReminderPriority(argument: "urgent"))
         XCTAssertNil(ReminderPriority(argument: "High"))
+    }
+
+    // In Chicago on 3 November 2030, 01:30 comes twice: 06:30Z and 07:30Z.
+    func testTheSecondPassOfARepeatedHourIsRefused() throws {
+        let first = try dueComponents("2030-11-03T06:30:00Z", mac: mac)
+        XCTAssertEqual([first.hour, first.minute], [1, 30])
+        XCTAssertEqual(reminderDue(first, mac: mac)!.at, instant("2030-11-03T06:30:00Z"))
+        XCTAssertThrowsError(try dueComponents("2030-11-03T07:30:00Z", mac: mac))
+        XCTAssertThrowsError(try dueComponents("2030-11-03T01:30:00-06:00", mac: mac))
+        XCTAssertNoThrow(try dueComponents("2030-11-03T08:30:00Z", mac: mac))
+    }
+
+    // A date is a date even where the clocks skip its midnight; an impossible one is still refused.
+    func testABareDateNeedsNoMidnight() throws {
+        let parts = try dueComponents("2030-03-10", mac: mac)
+        XCTAssertEqual([parts.year, parts.month, parts.day], [2030, 3, 10])
+        XCTAssertNil(parts.hour)
+        XCTAssertNil(parts.timeZone)
+        XCTAssertThrowsError(try dueComponents("2030-02-30", mac: mac))
+    }
+
+    func testAddRefusesABlankTitle() {
+        for title in ["", " \n\t "] {
+            XCTAssertThrowsError(try AddReminder.parse(["--list", "unused", "--title", title]))
+        }
+        XCTAssertNoThrow(try AddReminder.parse(["--list", "unused", "--title", "Buy milk"]))
     }
 
     func testTitle() {

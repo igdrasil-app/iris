@@ -17,7 +17,9 @@ struct AddReminder: AsyncParsableCommand {
             - A date and time with an offset or Z, 2026-10-13T09:30+09:00: that moment, kept as this Mac's \
             clock time then, in this Mac's zone. time reads back as this Mac's clock time, not 09:30; at is \
             the moment given.
-            Seconds are kept; fractions of a second are dropped.
+            Seconds are kept; fractions of a second are dropped. A moment in the second pass of the hour \
+            that comes twice when this Mac's clocks go back is refused: a reminder keeps a clock time and \
+            could not tell it from the first.
 
             No alarm is set, whatever the due, and nothing here promises a notification. Not offered: \
             alarms, URL, location, repeating, start date, completed.
@@ -127,16 +129,23 @@ func isValidTitle(_ title: String) -> Bool {
 /// time is a moment (one without an offset is read in this Mac's zone), kept as its clock time on `mac`
 /// to the second, in `mac`'s zone.
 func dueComponents(_ text: String, mac: Calendar) throws -> DateComponents {
-    if let day = parseDay(text) {
-        // parseDay reads the date at midnight in the current zone, so the day is taken back in that zone.
-        var current = Calendar(identifier: .gregorian)
-        current.timeZone = .current
-        let parts = current.dateComponents([.year, .month, .day], from: day)
+    // A date needs no time of day, so it is read in UTC: in some zones the clocks skip midnight on one day
+    // of the year, and that day is still a date.
+    var utc = Calendar(identifier: .gregorian)
+    utc.timeZone = TimeZone(secondsFromGMT: 0)!
+    if let day = parseDay(text, timeZone: utc.timeZone) {
+        let parts = utc.dateComponents([.year, .month, .day], from: day)
         return DateComponents(year: parts.year, month: parts.month, day: parts.day)
     }
     let moment = try parseDate(text)
     var parts = mac.dateComponents([.year, .month, .day, .hour, .minute, .second], from: moment)
     parts.timeZone = mac.timeZone
+    // In the hour that comes twice when the clocks go back, a clock time cannot say which of the two it is:
+    // the second one would be kept as the first, an hour early.
+    guard let kept = reminderDue(parts, mac: mac)?.at, wholeSecond(kept) == wholeSecond(moment) else {
+        throw ValidationError("--due names a moment in the hour that comes twice when the clocks go back in "
+            + "\(mac.timeZone.identifier), which a reminder cannot keep apart from the first; give a time before or after it")
+    }
     return parts
 }
 
