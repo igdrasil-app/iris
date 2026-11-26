@@ -104,27 +104,50 @@ func parseScopeFile(_ data: Data) throws -> ScopeFile {
 /// never asks Notes. Lists "all" asks Reminders once all the same, so missing Reminders access stops the
 /// start rather than every call; no lists, or [], never asks Reminders.
 func readScope(_ path: String) throws -> HTTPScope {
+    try pinScope(try readScopeFile(path), path).http
+}
+
+/// The scope file with the items it names as they are now, by id and current name; nil where it says "all".
+struct PinnedScope {
+    let file: ScopeFile
+    let calendars: [Named]?
+    let folders: [Named]?
+    let lists: [Named]?
+
+    var http: HTTPScope {
+        HTTPScope(calendars: calendars.map { Set($0.map(\.id)) }, folders: folders.map { Set($0.map(\.id)) },
+                  lists: lists.map { Set($0.map(\.id)) }, writes: file.writes, sharedEvents: file.sharedEvents,
+                  reminderWrites: file.reminderWrites)
+    }
+}
+
+/// The scope file as written, or the error the server stops on.
+func readScopeFile(_ path: String) throws -> ScopeFile {
     let directory = (path as NSString).deletingLastPathComponent
     let recipe = "create one, for example: mkdir -p \"\(directory)\" && "
         + "(umask 077; echo '\(scopeExample)' > \"\(path)\"); \(scopeShape)"
     let data = try readPrivateFile(path, noun: "scope file", recipe: recipe, limit: 65536)
-    let file: ScopeFile
     do {
-        file = try parseScopeFile(data)
+        return try parseScopeFile(data)
     } catch {
         throw IrisError("\(path): \(error); a scope file looks like \(scopeExample): \(scopeShape)")
     }
-    let lists: Set<String>?
+}
+
+/// The pinning of `readScope`, with the items' names kept; `listing` runs each lookup, this binary unless given.
+func pinScope(_ file: ScopeFile, _ path: String, listing: ([String]) throws -> Data = runIris) throws -> PinnedScope {
+    let lists: [Named]?
     if let names = file.lists {
-        lists = try pin(names, listing: ["reminders", "lists"], nameKey: "title", noun: "reminder list", path)
+        lists = try pin(names, listing: ["reminders", "lists"], nameKey: "title", noun: "reminder list", path, listing)
     } else {
-        _ = try runIris(["reminders", "lists"])
+        _ = try listing(["reminders", "lists"])
         lists = nil
     }
-    return HTTPScope(
-        calendars: try file.calendars.map { try pin($0, listing: ["calendar", "calendars"], nameKey: "title", noun: "calendar", path) },
-        folders: try file.folders.map { try pin($0, listing: ["notes", "folders"], nameKey: "name", noun: "folder", path) },
-        lists: lists, writes: file.writes, sharedEvents: file.sharedEvents, reminderWrites: file.reminderWrites)
+    return PinnedScope(
+        file: file,
+        calendars: try file.calendars.map { try pin($0, listing: ["calendar", "calendars"], nameKey: "title", noun: "calendar", path, listing) },
+        folders: try file.folders.map { try pin($0, listing: ["notes", "folders"], nameKey: "name", noun: "folder", path, listing) },
+        lists: lists)
 }
 
 struct Named {
@@ -132,9 +155,11 @@ struct Named {
     let name: String
 }
 
-private func pin(_ entries: [String], listing: [String], nameKey: String, noun: String, _ path: String) throws -> Set<String> {
+/// The items named, each once, in the order first named.
+private func pin(_ entries: [String], listing: [String], nameKey: String, noun: String, _ path: String,
+                 _ run: ([String]) throws -> Data) throws -> [Named] {
     if entries.isEmpty { return [] }
-    let output = try runIris(listing)
+    let output = try run(listing)
     guard let listed = try? JSONSerialization.jsonObject(with: output) as? [[String: Any]] else {
         throw IrisError("cannot read the output of iris \(listing.joined(separator: " "))")
     }
@@ -145,7 +170,8 @@ private func pin(_ entries: [String], listing: [String], nameKey: String, noun: 
     guard missing.isEmpty else {
         throw IrisError("\(path): no \(noun) named \(missing.joined(separator: ", ")); see `iris \(listing.joined(separator: " "))`")
     }
-    return Set((found ?? []).map(\.id))
+    var seen = Set<String>()
+    return (found ?? []).filter { seen.insert($0.id).inserted }
 }
 
 /// How long the scope may take to pin: the listing waits on Calendar or Notes, and on a permission dialog
@@ -153,7 +179,7 @@ private func pin(_ entries: [String], listing: [String], nameKey: String, noun: 
 private let scopeDeadline = 60
 
 /// This binary with these arguments, its stdout, or an error with its stderr.
-private func runIris(_ arguments: [String]) throws -> Data {
+func runIris(_ arguments: [String]) throws -> Data {
     guard let path = executablePath() else { throw IrisError("cannot find the iris binary") }
     let process = Process()
     process.executableURL = URL(fileURLWithPath: path)
