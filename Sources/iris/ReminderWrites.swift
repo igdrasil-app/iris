@@ -69,7 +69,11 @@ struct AddReminder: AsyncParsableCommand {
     @Option(help: "With --repeat: stop after this many occurrences, the first included. Not with --until. Default: no limit.")
     var count: Int?
 
+    @Option(help: allowedHelp(.lists))
+    var allowedLists: String?
+
     func validate() throws {
+        _ = try allowedIds(allowedLists, "--allowed-lists")
         guard isValidTitle(title) else { throw ValidationError("--title must not be empty") }
         let dueParts = try due.map { try dueComponents($0, mac: macCalendar()) }
         try checkRepeat(repeatFrequency, every: every, on: on, until: until, count: count)
@@ -81,8 +85,9 @@ struct AddReminder: AsyncParsableCommand {
         let mac = macCalendar()
         let dueParts = try due.map { try dueComponents($0, mac: mac) }
         let end = try repeatEnd(dueParts)
+        let allowed = try allowedIds(allowedLists, "--allowed-lists")
         let store = try await grantedReminderStore()
-        let target = try writableList(list, in: store, allowed: nil)
+        let target = try writableList(list, in: store, allowed: allowed)
 
         let reminder = EKReminder(eventStore: store)
         reminder.calendar = target
@@ -165,7 +170,11 @@ struct UpdateReminder: AsyncParsableCommand {
     @Option(help: "Move the reminder to this list: id or title, from `iris reminders lists`. Must name one list, and it must be writable.")
     var list: String?
 
+    @Option(help: allowedHelp(.lists))
+    var allowedLists: String?
+
     func validate() throws {
+        _ = try allowedIds(allowedLists, "--allowed-lists")
         if title == nil, notes == nil, due == nil, priority == nil, list == nil {
             throw ValidationError("name at least one of --title, --notes, --due, --priority, --list")
         }
@@ -177,12 +186,13 @@ struct UpdateReminder: AsyncParsableCommand {
         let mac = macCalendar()
         // nil both when --due is not given and when it is empty; `due != nil` below tells them apart.
         let dueParts = try newDue(mac: mac)
+        let allowed = try allowedIds(allowedLists, "--allowed-lists")
         let store = try await grantedReminderStore()
-        let reminder = try findReminder(id, in: store, allowed: nil)
+        let reminder = try findReminder(id, in: store, allowed: allowed)
         guard let current = reminder.calendar, current.allowsContentModifications else {
             throw IrisError("list \(reminder.calendar?.title ?? "") is read-only")
         }
-        let target = try list.map { try writableList($0, in: store, allowed: nil) }
+        let target = try list.map { try writableList($0, in: store, allowed: allowed) }
         // The alarms themselves are read: only they say for certain whether there is one.
         let hasAlarms = !(reminder.alarms ?? []).isEmpty
         if due != nil, let refusal = dueChangeRefusal(hasAlarms: hasAlarms, repeats: reminder.hasRecurrenceRules) {
@@ -292,15 +302,21 @@ struct CompleteReminder: AsyncParsableCommand {
     @Option(help: "Required to complete an open repeating reminder: its current due date, YYYY-MM-DD. Ignored when a repeating reminder is already completed. Refused for a reminder that does not repeat, and with --undo.")
     var occurrence: String?
 
+    @Option(help: allowedHelp(.lists))
+    var allowedLists: String?
+
     func validate() throws {
+        _ = try allowedIds(allowedLists, "--allowed-lists")
         if let occurrence, !isDay(occurrence) { throw ValidationError("--occurrence must be a date, YYYY-MM-DD") }
         if undo, occurrence != nil { throw ValidationError("--occurrence is not taken with --undo") }
     }
 
     func run() async throws {
         let mac = macCalendar()
+        let allowed = try allowedIds(allowedLists, "--allowed-lists")
         let store = try await grantedReminderStore()
-        let reminder = try findReminder(id, in: store, allowed: nil)
+        // Found only in an allowed list, so the list searched below for the completed occurrence is allowed too.
+        let reminder = try findReminder(id, in: store, allowed: allowed)
         guard let list = reminder.calendar, list.allowsContentModifications else {
             throw IrisError("list \(reminder.calendar?.title ?? "") is read-only")
         }
@@ -418,17 +434,35 @@ struct DeleteReminder: AsyncParsableCommand {
         abstract: "Delete a reminder. Prints {deleted, title, list, listId} as JSON.",
         discussion: """
             A repeating reminder is deleted whole, with every later occurrence; Reminders has no way to \
-            delete one occurrence. Deleting an id a second time is an error, as is any id that is not a \
-            reminder's.
+            delete one occurrence. With --not-repeating, as `iris mcp --http` always passes it, a repeating \
+            reminder is refused instead, with nothing deleted; so is a series that has ended, completed but \
+            still repeating. A completed occurrence is a reminder of its own that does not repeat, and is \
+            deleted. Deleting an id a second time is an error, as is any id that is not a reminder's.
             """
     )
 
     @Argument(help: "Reminder id, from `iris reminders list`.")
     var id: String
 
+    @Option(help: allowedHelp(.lists))
+    var allowedLists: String?
+
+    @Flag(help: "Refuse, with nothing deleted, a reminder that repeats, since deleting it deletes every occurrence. `iris mcp --http` always passes it. Default: off.")
+    var notRepeating = false
+
+    func validate() throws {
+        _ = try allowedIds(allowedLists, "--allowed-lists")
+    }
+
     func run() async throws {
+        let allowed = try allowedIds(allowedLists, "--allowed-lists")
         let store = try await grantedReminderStore()
-        let reminder = try findReminder(id, in: store, allowed: nil)
+        let reminder = try findReminder(id, in: store, allowed: allowed)
+        if notRepeating && reminder.hasRecurrenceRules {
+            throw IrisError("this reminder repeats, and deleting it would delete every occurrence, so nothing was "
+                + "deleted. With not-repeating on, a repeating reminder is not deleted: delete it in Reminders on the "
+                + "Mac, or complete its occurrences one at a time.")
+        }
         let list = reminder.calendar
         guard list?.allowsContentModifications == true else {
             throw IrisError("list \(list?.title ?? "") is read-only")

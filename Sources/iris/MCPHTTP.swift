@@ -1,20 +1,21 @@
 import Foundation
 import Network
 
-/// The tools offered over HTTP: the read tools, by name, and the calendar writes (`httpWriteToolNames`)
-/// when the scope file turns them on. Allowlists, so a tool added to iris later stays off HTTP until it is
-/// named in one.
+/// The tools offered over HTTP: the read tools, by name, and the calendar writes (`httpWriteToolNames`) and
+/// reminder writes (`httpReminderWriteToolNames`) when the scope file turns them on. Allowlists, so a tool
+/// added to iris later stays off HTTP until it is named in one.
 let httpToolNames = ["calendars", "events", "note_folders", "notes", "search_notes", "show_note",
                      "reminder_lists", "reminders"]
 
 let defaultHTTPPort = 8765
 let defaultTokenFile = "~/Library/Application Support/Iris/http-token"
 
-/// The tools a server with this scope offers, each limited to it. The reminder tools only when the scope
-/// names lists or says "all": a calendar or folder tool stays with none allowed and answers empty, but a
-/// scope file written before reminders came to HTTP has no lists, and offers what it did then.
+/// The tools a server with this scope offers, each limited to it. The reminder tools, reads and writes, only
+/// when the scope names lists or says "all": a calendar or folder tool stays with none allowed and answers
+/// empty, but a scope file written before reminders came to HTTP has no lists, and offers what it did then.
 func httpOffering(_ scope: HTTPScope) throws -> [Tool] {
     let names = httpToolNames + (scope.writes ? httpWriteToolNames : [])
+        + (scope.reminderWrites ? httpReminderWriteToolNames : [])
     return try tools
         .filter { names.contains($0.name) && !($0.scope == .lists && scope.lists?.isEmpty == true) }
         .map { try $0.limited(to: scope) }
@@ -32,16 +33,33 @@ private func readOnlyNote(_ offering: [Tool]) -> String {
         + "and cannot create, change or delete anything." + scopeNote(offering)
 }
 
-private func writableNote(_ offering: [Tool], sharedEvents: Bool) -> String {
-    " This endpoint offers \(offering.map(\.name).joined(separator: ", ")). Calendar events can be created, "
-        + "changed and deleted only in the calendars its owner chose, at most \(writesPerHour) write calls an hour; "
-        + "deleting all future occurrences of a recurring event (delete_event with span future) is not available "
-        + "here and must be done on the Mac."
-        + (sharedEvents ? "" : " Events with other people on them (attendees, or an organizer other than the "
-            + "owner) cannot be changed or deleted here and must be changed on the Mac; nor can all future occurrences of a "
-            + "recurring event be changed at once (update_event with span future): change one occurrence at a time.")
-        + (offering.contains { $0.scope == .lists } ? " Notes and reminders are read only." : " Notes are read only.")
-        + scopeNote(offering)
+/// For a server with calendar writes, reminder writes or both on.
+private func writableNote(_ offering: [Tool], _ scope: HTTPScope) -> String {
+    var note = " This endpoint offers \(offering.map(\.name).joined(separator: ", "))."
+    if scope.writes {
+        note += " Calendar events can be created, "
+            + "changed and deleted only in the calendars its owner chose, at most \(writesPerHour) write calls an hour; "
+            + "deleting all future occurrences of a recurring event (delete_event with span future) is not available "
+            + "here and must be done on the Mac."
+            + (scope.sharedEvents ? "" : " Events with other people on them (attendees, or an organizer other than the "
+                + "owner) cannot be changed or deleted here and must be changed on the Mac; nor can all future occurrences of a "
+                + "recurring event be changed at once (update_event with span future): change one occurrence at a time.")
+    }
+    if scope.reminderWrites {
+        note += " Reminders can be added, changed, completed and deleted only in the reminder lists its owner chose, "
+            + (scope.writes ? "within the same limit, calendar and reminder writes counted together"
+                : "at most \(writesPerHour) write calls an hour")
+            + "; deleting a repeating reminder, which would delete every occurrence, is not available here: delete it "
+            + "on the Mac, or complete its occurrences one at a time."
+    }
+    let readOnly = if !scope.writes {
+        "Calendar events and notes are"
+    } else if !scope.reminderWrites && offering.contains(where: { $0.scope == .lists }) {
+        "Notes and reminders are"
+    } else {
+        "Notes are"
+    }
+    return note + " \(readOnly) read only." + scopeNote(offering)
 }
 
 private let maxConnections = 16      // one more is closed as soon as it arrives
@@ -55,14 +73,20 @@ private let maxHead = (maxHeaders + 1) * (maxHeadLine + 2)
 // Under 2026-07-28 these JSON-RPC errors also carry an HTTP status (Streamable HTTP, Request Metadata).
 private let modernErrorStatus = [-32022: 400, -32020: 400, -32601: 404]
 
-/// Serves the read tools, and the calendar writes when the scope file says so, on 127.0.0.1 until SIGTERM
-/// or SIGINT, then stops any tool call still running. Every tool call is limited to the scope pinned here,
-/// at start. `stateDir` holds the write record and the count of recent writes; with writes off it is not touched.
+/// Serves the read tools, and the calendar and reminder writes when the scope file says so, on 127.0.0.1 until
+/// SIGTERM or SIGINT, then stops any tool call still running. Every tool call is limited to the scope pinned
+/// here, at start. `stateDir` holds the write record and the count of recent writes, one for both kinds of
+/// write; with both off it is not touched.
 func serveHTTP(port: Int, tokenFile: String, scopeFile: String, stateDir: String) throws {
     let token = try readToken((tokenFile as NSString).expandingTildeInPath)
     let scope = try readScope((scopeFile as NSString).expandingTildeInPath)
     let offering = try httpOffering(scope)
-    let writes = scope.writes ? try WriteGuard(stateDir: stateDir) : nil
+    let noun = switch (scope.writes, scope.reminderWrites) {
+    case (true, true): "calendar or reminder"
+    case (false, true): "reminder"
+    default: "calendar"
+    }
+    let writes = scope.writes || scope.reminderWrites ? try WriteGuard(stateDir: stateDir, noun: noun) : nil
     // A client gone mid-reply is an error on that one write, not the end of the server.
     signal(SIGPIPE, SIG_IGN)
     let stop = DispatchSemaphore(value: 0)
@@ -75,7 +99,7 @@ func serveHTTP(port: Int, tokenFile: String, scopeFile: String, stateDir: String
     }
 
     let server = HTTPServer(token: token, offering: offering, writes: writes,
-                            note: writes == nil ? readOnlyNote(offering) : writableNote(offering, sharedEvents: scope.sharedEvents))
+                            note: writes == nil ? readOnlyNote(offering) : writableNote(offering, scope))
     // Requests arrive as soon as the listener is up; a write waits until the count is read back. The turn
     // is always given back: a semaphore freed while taken stops the process.
     writes?.turn.wait()
@@ -100,7 +124,8 @@ func serveHTTP(port: Int, tokenFile: String, scopeFile: String, stateDir: String
                                 "calendars": scope.calendars.map { $0.count as Any } ?? "all",
                                 "folders": scope.folders.map { $0.count as Any } ?? "all",
                                 "lists": scope.lists.map { $0.count as Any } ?? "all",
-                                "writes": scope.writes, "sharedEvents": scope.sharedEvents]
+                                "writes": scope.writes, "sharedEvents": scope.sharedEvents,
+                                "reminderWrites": scope.reminderWrites]
     if let line = try? JSONSerialization.data(withJSONObject: ready, options: [.sortedKeys]) {
         try? FileHandle.standardOutput.write(contentsOf: line + Data("\n".utf8))
     }
@@ -318,13 +343,13 @@ private final class HTTPServer {
         }
         // respond reads the same text the same way, so this is the tool it will call.
         guard method == "tools/call", let writes, let name = params["name"] as? String,
-              httpWriteToolNames.contains(name) else {
+              offering.contains(where: { $0.name == name }), isHTTPWrite(name) else {
             return reply(to: text, method, id: id, modern: modern, &entry)
         }
         // One write at a time, waited for before a tool-call slot.
         guard writes.turn.wait(timeout: .now() + .seconds(slotWait)) == .success else {
             entry.marks.append("write-busy")
-            return failure(503, id: id, -32603, "busy: another calendar change is still running, and this one "
+            return failure(503, id: id, -32603, "busy: another \(writes.noun) change is still running, and this one "
                 + "was not made; try again shortly")
         }
         // Counted out in serve once the reply is sent; a stopping server waits for that.

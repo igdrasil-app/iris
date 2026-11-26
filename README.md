@@ -45,7 +45,7 @@ While it runs, the menu bar app updates Iris itself: it checks once a day, offer
     iris reminders update <id> --due 2026-10-15 --notes ""          # only what you name changes; "" clears
     iris reminders complete <id>                                    # --undo opens it again; a repeat once more changes nothing
     iris reminders complete <id> --occurrence 2026-10-14            # a repeating one: its current due date; it moves to the next
-    iris reminders delete <id>                                      # a repeating reminder is deleted whole
+    iris reminders delete <id>                                      # a repeating reminder is deleted whole; --not-repeating refuses it
     iris mcp                                                        # MCP server over stdio; hosts start it, see below
     iris mcp --http                                                 # over HTTP on 127.0.0.1:8765, behind a token: reads, writes if turned on
 
@@ -86,9 +86,9 @@ Muse Code (`~/.config/muse/settings.json`):
 
 ### Over HTTP
 
-Over HTTP the reminders are read only: `reminder_lists` and `reminders`, when the scope file names reminder lists (below). Adding, changing, completing and deleting reminders is over stdio only.
+Over HTTP the reminder tools are offered only when the scope file names reminder lists (below): `reminder_lists` and `reminders`, and `add_reminder`, `update_reminder`, `complete_reminder` and `delete_reminder` only when it also turns reminder writes on.
 
-`iris mcp --http` serves the read tools (`calendars`, `events`, `note_folders`, `notes`, `search_notes`, `show_note`, and `reminder_lists` and `reminders` when the scope names lists), and the calendar writes only if you turn them on (below), at `http://127.0.0.1:8765/mcp` (a request gets one JSON reply and a notification an empty 202), for a host that cannot start a process on this Mac. It listens on 127.0.0.1 and nowhere else, and every request needs `Authorization: Bearer <token>`, with the token read at start from `~/Library/Application Support/Iris/http-token` (or `--token-file`; `--port` changes the port). Iris never creates the token file; this does:
+`iris mcp --http` serves the read tools (`calendars`, `events`, `note_folders`, `notes`, `search_notes`, `show_note`, and `reminder_lists` and `reminders` when the scope names lists), and the calendar and reminder writes only if you turn them on (below), at `http://127.0.0.1:8765/mcp` (a request gets one JSON reply and a notification an empty 202), for a host that cannot start a process on this Mac. It listens on 127.0.0.1 and nowhere else, and every request needs `Authorization: Bearer <token>`, with the token read at start from `~/Library/Application Support/Iris/http-token` (or `--token-file`; `--port` changes the port). Iris never creates the token file; this does:
 
     mkdir -p ~/Library/Application\ Support/Iris
     (umask 077; openssl rand -base64 32 > ~/Library/Application\ Support/Iris/http-token)
@@ -100,18 +100,18 @@ A caller sees only the calendars, note folders and reminder lists named in `~/Li
 
 Anything else does not exist for the caller: naming it gets the same error as a name that matches nothing, and a note is there only when an allowed folder shows it, smart folders included. Names are matched to ids at start, so restart the server after changing the file; a calendar, folder or list created later is not included, even under an allowed name, unless the key says `"all"`.
 
-Without `lists`, or with `[]`, no reminder tool is offered and Reminders is not asked at start. With names or `"all"`, `reminder_lists` and `reminders` are offered, read only, and the server does not start without Reminders access:
+Without `lists`, or with `[]`, no reminder tool is offered and Reminders is not asked at start. With names or `"all"`, `reminder_lists` and `reminders` are offered, read only unless reminder writes are on (below), and the server does not start without Reminders access:
 
     (umask 077; echo '{"calendars": ["Work"], "folders": "all", "lists": ["Errands"]}' \
       > ~/Library/Application\ Support/Iris/http-scope)
 
-Writes are off unless the scope file also says `"writes": true`:
+Calendar writes are off unless the scope file also says `"writes": true`:
 
     (umask 077; echo \
       '{"calendars": ["Work"], "folders": "all", "writes": true}' \
       > ~/Library/Application\ Support/Iris/http-scope)
 
-Then `add_event`, `update_event` and `delete_event` are offered too, in the scope's calendars only: any other calendar, and any event in one, answers as one that does not exist, and nothing is changed. Notes and reminders stay read only. The guards are for a mistaken or misled assistant: one write at a time; at most 20 write calls an hour, a refused one included, counted across restarts in `http-write-times`; and `delete_event` never deletes a whole series (`span future` is refused; do that on the Mac). `add_event` with `repeat` still creates a whole series in one call; changing a whole series with `update_event` and `span future` needs `"sharedEvents": true`. Every write that reached its command is recorded in `http-writes.log` with the text iris returned, the changed event for a success, so a wrong change can be undone by hand; that file holds calendar content and is trimmed to its newest lines when it passes 4 MB, the newest entry always kept whole. Both files are owner-only (mode 600, no access control list), in `~/Library/Application Support/Iris` or `--state-dir`. That folder must be yours and writable by you only, and one server with writes on uses it at a time; otherwise the server does not start.
+Then `add_event`, `update_event` and `delete_event` are offered too, in the scope's calendars only: any other calendar, and any event in one, answers as one that does not exist, and nothing is changed. Notes stay read only, and reminders unless reminder writes are on (below). The guards are for a mistaken or misled assistant: one write at a time; at most 20 write calls an hour, calendar and reminder writes counted together, a refused one included, counted across restarts in `http-write-times`; and `delete_event` never deletes a whole series (`span future` is refused; do that on the Mac). `add_event` with `repeat` still creates a whole series in one call; changing a whole series with `update_event` and `span future` needs `"sharedEvents": true`. Every write that reached its command is recorded in `http-writes.log` with the text iris returned, the changed event or reminder for a success, so a wrong change can be undone by hand; that file holds calendar and reminder content and is trimmed to its newest lines when it passes 4 MB, the newest entry always kept whole. Both files are owner-only (mode 600, no access control list), in `~/Library/Application Support/Iris` or `--state-dir`. That folder must be yours and writable by you only, and one server with writes or reminder writes on uses it at a time; otherwise the server does not start.
 
 `update_event` and `delete_event` over HTTP refuse an event that has anyone on it but you (an attendee, or an organizer who is not you), with nothing changed: changing or deleting it can notify them or cancel their meeting. A change to all future occurrences of a repeating event (`span future`) is refused too, since the people on later occurrences cannot be checked. Every such call carries `--only-mine`, which the caller cannot remove. To allow those events too, add `"sharedEvents": true` (it needs `"writes": true`):
 
@@ -120,6 +120,14 @@ Then `add_event`, `update_event` and `delete_event` are offered too, in the scop
       > ~/Library/Application\ Support/Iris/http-scope)
 
 On the CLI and over stdio nothing is refused for this unless you pass `--only-mine` (`onlyMine` in the tools).
+
+Reminder writes are off unless the scope file says `"reminderWrites": true`, which needs reminder lists named in `lists`; `"writes": true` does not turn them on:
+
+    (umask 077; echo '{"calendars": ["Work"], "folders": "all",
+      "lists": ["Errands"], "reminderWrites": true}' \
+      > ~/Library/Application\ Support/Iris/http-scope)
+
+Then `add_reminder`, `update_reminder`, `complete_reminder` and `delete_reminder` are offered too, in the scope's lists only: any other list, and any reminder in one, answers as one that does not exist, and nothing is changed. They pass the same guards as the calendar writes, with one count and one record for both. `delete_reminder` refuses a repeating reminder, which would be deleted whole: every call carries `--not-repeating`, which the caller cannot remove; delete it on the Mac, or complete its occurrences one at a time.
 
 The token stops a web page in your browser (which is also refused for sending an Origin header), another user of this Mac, and anything arriving through a proxy of yours. It does not stop a process running as you on this Mac, which can read the file or run iris itself. `iris help mcp` has the rest.
 

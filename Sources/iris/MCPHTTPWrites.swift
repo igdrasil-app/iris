@@ -1,11 +1,20 @@
 import Foundation
 
-// The calendar writes of `iris mcp --http`, offered only when the scope file says "writes": true, and
-// the guards around them: delete_event reaches one occurrence at most, one write runs at a time, at most
-// `writesPerHour` write calls reach their command in any rolling hour, counted across restarts, and every
-// write that reached its command is recorded. The calendar scope itself is enforced by the commands.
+// The writes of `iris mcp --http`: the calendar writes, offered only when the scope file says "writes": true,
+// and the reminder writes, only when it says "reminderWrites": true; and the guards around both: delete_event
+// reaches one occurrence at most, delete_reminder never a repeating reminder (its command carries
+// --not-repeating), one write of either kind runs at a time, at most `writesPerHour` write calls of both kinds
+// together reach their command in any rolling hour, counted across restarts, and every write that reached its
+// command is recorded. The scope itself is enforced by the commands.
 
 let httpWriteToolNames = ["add_event", "update_event", "delete_event"]
+let httpReminderWriteToolNames = ["add_reminder", "update_reminder", "complete_reminder", "delete_reminder"]
+
+/// Whether a call to this tool goes through the write guards: every tool but the reads in `httpToolNames`,
+/// so a tool offered over HTTP that is not named a read is guarded as a write.
+func isHTTPWrite(_ name: String) -> Bool {
+    !httpToolNames.contains(name)
+}
 
 let writesPerHour = 20
 let writeWindow = 3600.0                     // seconds
@@ -94,10 +103,13 @@ final class WriteGuard {
     private let timesPath: String
     private let recordPath: String
     private var times: [Double] = []         // the counted writes, oldest first, on `monotonicNow`; under `turn`
+    /// What the writes change, as the refusals name it: "calendar", "reminder" or "calendar or reminder".
+    let noun: String
 
     /// The folder is created owner-only when it is missing. It must be this user's, writable by no one else,
     /// and not in use by another server: two servers on one folder would each replace the other's count.
-    init(stateDir: String) throws {
+    init(stateDir: String, noun: String = "calendar") throws {
+        self.noun = noun
         let directory = (stateDir as NSString).expandingTildeInPath
         do {
             try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true,
@@ -138,7 +150,7 @@ final class WriteGuard {
     /// `turn`; `marks` collects the request log's markers.
     func call(_ tool: Tool, _ arguments: [String: Any], _ run: () throws -> ToolCall,
               marks: inout [String]) throws -> [String: Any] {
-        guard httpWriteToolNames.contains(tool.name) else { return try run().result }
+        guard isHTTPWrite(tool.name) else { return try run().result }
         if tool.name == "delete_event" && deletesPastOne(arguments) {
             marks.append("span-refused")
             return toolResult("Deleting all future occurrences of a recurring event (span future) is not available "
@@ -149,7 +161,7 @@ final class WriteGuard {
         times.removeAll { $0 <= now - writeWindow }
         if let minutes = minutesUntilNextWrite(times, now: now) {
             marks.append("write-limit")
-            return toolResult("The limit of \(writesPerHour) calendar write calls an hour through this endpoint is "
+            return toolResult("The limit of \(writesPerHour) \(noun) write calls an hour through this endpoint is "
                 + "reached, so nothing was changed. The next write call is possible in about \(minutes) "
                 + "minute\(minutes == 1 ? "" : "s").", isError: true)
         }
@@ -161,7 +173,7 @@ final class WriteGuard {
         } catch {
             times.removeLast()
             marks.append("times-failed")
-            return toolResult("This calendar write call could not be counted toward the hourly limit (the server "
+            return toolResult("This \(noun) write call could not be counted toward the hourly limit (the server "
                 + "could not save its count of recent writes), so it was not made and nothing was changed. "
                 + "Reads still work.", isError: true)
         }
@@ -169,8 +181,9 @@ final class WriteGuard {
         var call = try run()
         guard call.started else { return call.result }
         if call.signalled {
+            let check = tool.scope == .lists ? "reminders" : "events"
             call.result = toolResult("\(tool.name) was stopped before it finished; whether it took effect is not "
-                + "known. Before repeating a change, check with events that it was not made.", isError: true)
+                + "known. Before repeating a change, check with \(check) that it was not made.", isError: true)
         }
         do {
             try record(tool.name, call.result)
@@ -198,10 +211,10 @@ final class WriteGuard {
     }
 
     /// Appends one JSON line for a write that reached its command: the time, the tool, whether it is an error,
-    /// and the text the command returned. Unlike the request log this file DOES hold calendar content, by
-    /// design: for a success the text is the event as iris printed it, which is what makes a wrong change
-    /// undoable by hand. Owner-only, with no access control list; when this line would take it past
-    /// `recordCap` it keeps its newest whole lines, the newest always. Called holding `turn`.
+    /// and the text the command returned. Unlike the request log this file DOES hold calendar and reminder
+    /// content, by design: for a success the text is the event or reminder as iris printed it, which is what
+    /// makes a wrong change undoable by hand. Owner-only, with no access control list; when this line would
+    /// take it past `recordCap` it keeps its newest whole lines, the newest always. Called holding `turn`.
     private func record(_ tool: String, _ result: [String: Any]) throws {
         let (error, text) = recordedText(result)
         let entry: [String: Any] = ["time": iso(Date()), "tool": tool, "error": error, "text": text]

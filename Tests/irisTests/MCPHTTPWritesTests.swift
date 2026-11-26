@@ -88,6 +88,26 @@ final class MCPHTTPWritesTests: XCTestCase {
         XCTAssertEqual(marks, ["span-refused", "write-limit"])
     }
 
+    func testReminderWritesShareTheCount() throws {
+        let (guarding, folder) = try guarded()
+        var marks: [String] = []
+        let names = (httpWriteToolNames + httpReminderWriteToolNames).shuffled()
+        for index in 0..<writesPerHour {
+            _ = try guarding.call(try tool(names[index % names.count]), [:],
+                                  { ToolCall(result: toolResult("no", isError: true), started: true) }, marks: &marks)
+        }
+        XCTAssertEqual(try counted(folder), writesPerHour)
+        let records = try String(contentsOf: folder.appendingPathComponent("http-writes.log"), encoding: .utf8)
+        XCTAssertEqual(records.split(separator: "\n").count, writesPerHour)
+        // Past the limit a write of either kind is refused and never runs.
+        let never: () throws -> ToolCall = { XCTFail("the command ran"); return ToolCall(result: [:]) }
+        for name in httpReminderWriteToolNames + httpWriteToolNames {
+            let result = try guarding.call(try tool(name), ["id": "r1"], never, marks: &marks)
+            XCTAssertTrue(recordedText(result).text.contains("limit of \(writesPerHour)"), name)
+        }
+        XCTAssertEqual(try counted(folder), writesPerHour)
+    }
+
     func testFailedSaveRefusesWithoutCounting() throws {
         let (guarding, folder) = try guarded()
         let times = folder.appendingPathComponent("http-write-times")
