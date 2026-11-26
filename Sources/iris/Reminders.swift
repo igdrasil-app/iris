@@ -6,8 +6,8 @@ import os
 struct RemindersCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "reminders",
-        abstract: "Apple Reminders: read the lists and the reminders in them, add, change and delete reminders. Nothing can be completed yet.",
-        subcommands: [ReminderLists.self, ReminderList.self, AddReminder.self, UpdateReminder.self, DeleteReminder.self]
+        abstract: "Apple Reminders: read the lists and the reminders in them, add, change, complete and delete reminders.",
+        subcommands: [ReminderLists.self, ReminderList.self, AddReminder.self, UpdateReminder.self, CompleteReminder.self, DeleteReminder.self]
     )
 }
 
@@ -17,8 +17,8 @@ struct ReminderLists: AsyncParsableCommand {
         abstract: "List reminder lists: id, title, writable, source, open.",
         discussion: """
             Sorted by title as calendars are. open is how many reminders in the list are not completed. \
-            `iris reminders list` reads the reminders, `iris reminders add`, `update` and `delete` add, change \
-            and delete one; nothing can be completed yet. The first run asks for Reminders access; \
+            `iris reminders list` reads the reminders, `iris reminders add`, `update`, `complete` and `delete` \
+            add, change, complete and delete one. The first run asks for Reminders access; \
             a prompt not answered within \(reminderPromptSeconds) seconds is an error, and the call can be \
             repeated once it is answered. A denial is changed under System Settings › Privacy & Security › Reminders.
             """
@@ -90,7 +90,7 @@ struct ReminderList: AsyncParsableCommand {
             Not visible here: subtasks, tags, flags and sections. A subtask reads as an ordinary reminder. A \
             completed occurrence of a repeating reminder reads as a separate completed reminder with recurring \
             false. Alarms, URL, location, start date and how a reminder repeats are not shown. `iris reminders \
-            add`, `update` and `delete` add, change and delete one; nothing can be completed yet.
+            add`, `update`, `complete` and `delete` add, change, complete and delete one.
             """
     )
 

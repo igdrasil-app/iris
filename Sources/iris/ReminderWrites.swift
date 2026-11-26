@@ -180,6 +180,185 @@ func startComponents(_ due: DateComponents) -> DateComponents {
     return DateComponents(year: due.year, month: due.month, day: due.day, hour: 0, minute: 0, second: 0)
 }
 
+struct CompleteReminder: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "complete",
+        abstract: "Mark a reminder completed, or not completed with --undo. Prints it as `iris reminders list` does, and the occurrence completed.",
+        discussion: """
+            Prints the reminder whose id was given, with the 12 keys of `iris reminders list`, read back after \
+            the call, and a 13th key, completedOccurrence: null, except after completing an occurrence of a \
+            repeating reminder (below), where it is that occurrence, with the same 12 keys.
+
+            A reminder that does not repeat is marked completed, and completedAt says when. One already \
+            completed is left as it is, completedAt kept, so the same call sent twice changes nothing the \
+            second time. --undo marks a completed reminder not completed and clears completedAt; on an open \
+            one it changes nothing. Either way the reminder is printed.
+
+            A reminder that repeats is completed one occurrence at a time, and --occurrence must name that \
+            occurrence: its current due date, due.date as `iris reminders list` prints it. Without \
+            --occurrence, or with another date, nothing is changed and the error says the date it is due \
+            now; another date can be an occurrence already completed. So the same call sent twice completes \
+            one occurrence, and the second call is refused, since the reminder is due later by then. That \
+            holds for calls made one after the other; a change made at the same moment by another device or \
+            program is not guarded against.
+
+            Completing an occurrence works as it does in Reminders: the reminder keeps its id, stays open \
+            (completed false) and repeating, and is now due on its next occurrence, which Reminders chooses. \
+            That is not always the one right after: completing one long overdue has been seen to move it \
+            to an occurrence after today, and the occurrences skipped get no reminder of their own. The occurrence completed becomes a separate reminder in the same list, with its own id: \
+            completed, recurring false, due on the old due. completedOccurrence is that reminder. So \
+            completed false on the reminder printed is not a failure: that occurrence is done, and the next \
+            one is open. completedOccurrence is null when that reminder cannot be told apart for certain, as \
+            when another reminder in the list is completed at the same moment; the occurrence is completed \
+            all the same, and `iris reminders list --status completed` shows it.
+
+            Example: a reminder that repeats daily is due 2026-10-13. Completing it with --occurrence \
+            2026-10-13 prints it due 2026-10-14, completed false, recurring true, and as completedOccurrence a \
+            reminder with a new id, due 2026-10-13, completed true, recurring false. The same call again is \
+            refused, since it is due 2026-10-14 now.
+
+            The last occurrence of a series that ends, after a number of times or on a date, is not made a \
+            separate reminder: the reminder itself becomes completed, still recurring true, its due \
+            unchanged, and completedOccurrence is null. Completing it again, with or without --occurrence, \
+            changes nothing and prints it; --undo opens it \
+            again on that last occurrence. On a repeating reminder that is open, --undo is refused: each \
+            completed occurrence is a separate reminder, undone by its own id.
+
+            --occurrence on a reminder that does not repeat is refused, and so is --occurrence with --undo. \
+            A refusal changes nothing. Only completed and completedAt change: no alarm is added or touched. A \
+            reminder in a read-only list cannot be changed.
+            """
+    )
+
+    @Argument(help: "Reminder id, from `iris reminders list`.")
+    var id: String
+
+    @Flag(help: "Mark it not completed instead.")
+    var undo = false
+
+    @Option(help: "Required to complete an open repeating reminder: its current due date, YYYY-MM-DD. Ignored when a repeating reminder is already completed. Refused for a reminder that does not repeat, and with --undo.")
+    var occurrence: String?
+
+    func validate() throws {
+        if let occurrence, !isDay(occurrence) { throw ValidationError("--occurrence must be a date, YYYY-MM-DD") }
+        if undo, occurrence != nil { throw ValidationError("--occurrence is not taken with --undo") }
+    }
+
+    func run() async throws {
+        let mac = macCalendar()
+        let store = try await grantedReminderStore()
+        let reminder = try findReminder(id, in: store, allowed: nil)
+        guard let list = reminder.calendar, list.allowsContentModifications else {
+            throw IrisError("list \(reminder.calendar?.title ?? "") is read-only")
+        }
+        let repeats = reminder.hasRecurrenceRules
+        let step = completionStep(repeats: repeats, completed: reminder.isCompleted, undo: undo,
+                                  occurrence: occurrence, due: reminderDue(reminder.dueDateComponents, mac: mac)?.date)
+        let completed: Bool
+        switch step {
+        case .refuse(let reason):
+            throw IrisError(reason)
+        case .nothing:
+            return try emit(CompletedReminder(reminder: Reminder(reminder, mac: mac), completedOccurrence: nil))
+        case .mark(let value):
+            completed = value
+        }
+
+        // Completing an occurrence saves it as a new reminder, and the save does not say which: it is found as
+        // the reminder completed in this list after the save and not before.
+        let completedBefore = repeats && completed
+            ? Set(try await fetchReminders(in: store, lists: [list], status: .completed, mac: mac).map(\.id)) : nil
+        reminder.isCompleted = completed
+        do {
+            try store.save(reminder, commit: true)
+        } catch {
+            throw IrisError("save failed: \(error.localizedDescription)")
+        }
+        let saved = Reminder(reminder, mac: mac)
+        var copy: Reminder? = nil
+        // A series that has ended completes the reminder itself, and no copy is made. The save is done by now,
+        // so a lookup that fails leaves completedOccurrence null instead of reporting an error.
+        if let completedBefore, let occurrence, !saved.completed,
+           let after = try? await fetchReminders(in: store, lists: [list], status: .completed, mac: mac) {
+            // The occurrence carries the series' title and does not repeat; anything else is another reminder.
+            let found = completedOccurrence(before: completedBefore, after: after, saved: saved.id, occurrence: occurrence)
+            if let found, found.title == saved.title, !found.recurring { copy = found }
+        }
+        try emit(CompletedReminder(reminder: saved, completedOccurrence: copy))
+    }
+}
+
+enum CompletionStep: Equatable {
+    case mark(completed: Bool)
+    case nothing
+    case refuse(String)
+}
+
+/// What `complete` does with a reminder: mark it, leave it as it is, or refuse with the reason.
+func completionStep(repeats: Bool, completed: Bool, undo: Bool, occurrence: String?, due: String?) -> CompletionStep {
+    if !repeats {
+        if occurrence != nil {
+            return .refuse("this reminder does not repeat, so --occurrence does not apply, and nothing was changed. "
+                + "Call again without it.")
+        }
+        if undo { return completed ? .mark(completed: false) : .nothing }
+        return completed ? .nothing : .mark(completed: true)
+    }
+    if undo {
+        if completed { return .mark(completed: false) }
+        return .refuse("this reminder repeats and is open, so there is nothing to undo, and nothing was changed. "
+            + "A completed occurrence is a separate reminder, recurring false: undo it by its own id.")
+    }
+    // A series that has ended is itself completed on its last occurrence: there is nothing left to complete.
+    if completed { return .nothing }
+    guard let due else {
+        return .refuse("this reminder repeats but has no due date, so no occurrence can be named, and nothing was "
+            + "changed. Complete it in Reminders.")
+    }
+    guard let occurrence else {
+        return .refuse("this reminder repeats, and its current occurrence is due \(due); nothing was changed. "
+            + "Pass --occurrence \(due) to complete that occurrence.")
+    }
+    guard occurrence == due else {
+        return .refuse("this reminder repeats, and its current occurrence is due \(due), not \(occurrence); nothing "
+            + "was changed. The occurrence of \(occurrence) may already have been completed: see "
+            + "`iris reminders list --status completed`.")
+    }
+    return .mark(completed: true)
+}
+
+/// The occurrence a save completed: the one reminder completed after the save and not before, other than the
+/// reminder saved, due on the occurrence's date. nil when there is not exactly one such reminder.
+func completedOccurrence(before: Set<String>, after: [Reminder], saved: String, occurrence: String) -> Reminder? {
+    let new = after.filter { !before.contains($0.id) && $0.id != saved }
+    guard new.count == 1, new[0].due?.date == occurrence else { return nil }
+    return new[0]
+}
+
+/// Whether text is a date written YYYY-MM-DD, as due.date prints one.
+func isDay(_ text: String) -> Bool {
+    guard text.utf8.count == 10 else { return false }       // a year of five digits would pass what follows
+    var utc = Calendar(identifier: .gregorian)
+    utc.timeZone = TimeZone(secondsFromGMT: 0)!
+    guard let day = parseDay(text, timeZone: utc.timeZone) else { return false }
+    let parts = utc.dateComponents([.year, .month, .day], from: day)
+    return String(format: "%04ld-%02ld-%02ld", parts.year ?? 0, parts.month ?? 0, parts.day ?? 0) == text
+}
+
+/// A reminder as `complete` prints it: the 12 keys of `iris reminders list`, and completedOccurrence.
+struct CompletedReminder: Encodable {
+    let reminder: Reminder
+    let completedOccurrence: Reminder?
+
+    enum CodingKeys: CodingKey { case completedOccurrence }
+
+    func encode(to encoder: Encoder) throws {
+        try reminder.encode(to: encoder)
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(completedOccurrence, forKey: .completedOccurrence)
+    }
+}
+
 struct DeleteReminder: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "delete",

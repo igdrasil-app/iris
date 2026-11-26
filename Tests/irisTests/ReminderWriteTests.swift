@@ -147,6 +147,96 @@ final class ReminderWriteTests: XCTestCase {
         }
     }
 
+    func testCompletingAReminderThatDoesNotRepeat() {
+        func step(completed: Bool, undo: Bool) -> CompletionStep {
+            completionStep(repeats: false, completed: completed, undo: undo, occurrence: nil, due: "2030-03-04")
+        }
+        XCTAssertEqual(step(completed: false, undo: false), .mark(completed: true))
+        XCTAssertEqual(step(completed: true, undo: false), .nothing)
+        XCTAssertEqual(step(completed: true, undo: true), .mark(completed: false))
+        XCTAssertEqual(step(completed: false, undo: true), .nothing)
+        guard case .refuse(let reason) = completionStep(repeats: false, completed: false, undo: false,
+                                                        occurrence: "2030-03-04", due: "2030-03-04") else {
+            return XCTFail("an occurrence on a reminder that does not repeat must be refused")
+        }
+        XCTAssertTrue(reason.contains("does not repeat"))
+    }
+
+    func testCompletingARepeatingReminder() {
+        func step(completed: Bool = false, undo: Bool = false, occurrence: String?, due: String? = "2030-03-04") -> CompletionStep {
+            completionStep(repeats: true, completed: completed, undo: undo, occurrence: occurrence, due: due)
+        }
+        XCTAssertEqual(step(occurrence: "2030-03-04"), .mark(completed: true))
+        // A series that has ended is the reminder itself, completed: again changes nothing, undo opens it.
+        XCTAssertEqual(step(completed: true, occurrence: "2030-03-04"), .nothing)
+        XCTAssertEqual(step(completed: true, occurrence: nil), .nothing)
+        XCTAssertEqual(step(completed: true, occurrence: "2030-03-03"), .nothing)
+        XCTAssertEqual(step(completed: true, undo: true, occurrence: nil), .mark(completed: false))
+        // The same without a due date: an ended series is left as it is before anything is asked of its due.
+        for occurrence in [nil, "2030-03-04", "2030-03-03"] as [String?] {
+            XCTAssertEqual(step(completed: true, occurrence: occurrence, due: nil), .nothing)
+        }
+        XCTAssertEqual(step(completed: true, undo: true, occurrence: nil, due: nil), .mark(completed: false))
+
+        let refusals: [(CompletionStep, String)] = [
+            (step(occurrence: nil), "--occurrence 2030-03-04"),
+            (step(occurrence: "2030-03-03"), "due 2030-03-04, not 2030-03-03"),
+            (step(undo: true, occurrence: nil), "nothing to undo"),
+            (step(occurrence: "2030-03-04", due: nil), "no due date"),
+        ]
+        for (result, words) in refusals {
+            guard case .refuse(let reason) = result else { XCTFail("\(words): not refused"); continue }
+            XCTAssertTrue(reason.contains(words), reason)
+            XCTAssertTrue(reason.contains("nothing") , reason)
+        }
+    }
+
+    private func reminder(_ id: String, due: String?) -> Reminder {
+        Reminder(id: id, title: "t", list: "l", listId: "L", notes: nil,
+                 due: due.flatMap { reminderDue(try? dueComponents($0, mac: mac), mac: mac) }, priority: "none",
+                 completed: true, completedAt: nil, created: nil, modified: nil, recurring: false)
+    }
+
+    func testTheOccurrenceCompletedIsTheOneNewCompletedReminder() {
+        let before: Set<String> = ["old"]
+        let old = reminder("old", due: "2030-03-01")
+        let copy = reminder("copy", due: "2030-03-04")
+        XCTAssertEqual(completedOccurrence(before: before, after: [old, copy], saved: "series", occurrence: "2030-03-04")?.id, "copy")
+        // None, two, one on another date, or the reminder saved itself: not told apart for certain.
+        XCTAssertNil(completedOccurrence(before: before, after: [old], saved: "series", occurrence: "2030-03-04"))
+        XCTAssertNil(completedOccurrence(before: before, after: [old, copy, reminder("other", due: "2030-03-04")],
+                                         saved: "series", occurrence: "2030-03-04"))
+        XCTAssertNil(completedOccurrence(before: before, after: [copy], saved: "series", occurrence: "2030-03-05"))
+        XCTAssertNil(completedOccurrence(before: before, after: [reminder("series", due: "2030-03-04")],
+                                         saved: "series", occurrence: "2030-03-04"))
+    }
+
+    func testCompleteTakesAnOccurrenceOnlyAsADate() {
+        XCTAssertNoThrow(try CompleteReminder.parse(["some-id"]))
+        XCTAssertNoThrow(try CompleteReminder.parse(["some-id", "--undo"]))
+        XCTAssertNoThrow(try CompleteReminder.parse(["some-id", "--occurrence", "2030-03-04"]))
+        for bad in ["2030-3-4", "2030-03-04T09:00", "2030-02-30", "tomorrow", "", "10000-03-04"] {
+            XCTAssertThrowsError(try CompleteReminder.parse(["some-id", "--occurrence", bad]), bad)
+        }
+        XCTAssertThrowsError(try CompleteReminder.parse(["some-id", "--undo", "--occurrence", "2030-03-04"]))
+    }
+
+    func testCompletePrintsTheKeysOfListAndTheOccurrence() throws {
+        let encoder = JSONEncoder()
+        func keys(_ value: CompletedReminder) throws -> [String: Any] {
+            try JSONSerialization.jsonObject(with: encoder.encode(value)) as! [String: Any]
+        }
+        let plain = try keys(CompletedReminder(reminder: reminder("a", due: nil), completedOccurrence: nil))
+        XCTAssertEqual(Set(plain.keys), ["id", "title", "list", "listId", "notes", "due", "priority", "completed",
+                                         "completedAt", "created", "modified", "recurring", "completedOccurrence"])
+        XCTAssertTrue(plain["completedOccurrence"] is NSNull)
+        let done = try keys(CompletedReminder(reminder: reminder("a", due: nil), completedOccurrence: reminder("b", due: nil)))
+        let nested = try XCTUnwrap(done["completedOccurrence"] as? [String: Any])
+        XCTAssertEqual(nested["id"] as? String, "b")
+        XCTAssertEqual(Set(nested.keys), Set(plain.keys).subtracting(["completedOccurrence"]))
+        XCTAssertEqual(done.count, 13)
+    }
+
     func testTitle() {
         XCTAssertTrue(isValidTitle("Buy milk"))
         XCTAssertTrue(isValidTitle(" x "))

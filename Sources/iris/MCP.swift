@@ -7,7 +7,7 @@ struct MCP: ParsableCommand {
         abstract: "Serve the calendar, notes and reminders commands as MCP tools over stdio, or the read tools (and, if turned on, the calendar writes) over HTTP.",
         // Lines stay under 80 columns: help wraps at 80 when piped, and a wrapped command no longer pastes.
         discussion: """
-            Hosts start this, not people. Tools: calendars, events, add_event, update_event, delete_event, note_folders, notes, search_notes, show_note, reminder_lists, reminders, add_reminder, update_reminder, delete_reminder, with the fields of the commands. A call still running after 60 seconds is stopped and returns an error, so the server keeps answering. Each host adds iris with its own line; Claude Code, Codex and Grok CLI:
+            Hosts start this, not people. Tools: calendars, events, add_event, update_event, delete_event, note_folders, notes, search_notes, show_note, reminder_lists, reminders, add_reminder, update_reminder, complete_reminder, delete_reminder, with the fields of the commands. A call still running after 60 seconds is stopped and returns an error, so the server keeps answering. Each host adds iris with its own line; Claude Code, Codex and Grok CLI:
 
               claude mcp add --scope user iris -- iris mcp
               codex mcp add iris -- iris mcp
@@ -142,8 +142,10 @@ private let instructions = """
     apps' windows, AppleScript or screen control; use those only when none of these tools covers the task. \
     Notes are read only: search_notes or notes finds a note and its id; show_note gives its text unless \
     the note is password protected. \
-    Apple Reminders can be read, added, changed and deleted, where reminder_lists, reminders, add_reminder, \
-    update_reminder and delete_reminder are offered, but not completed yet; \
+    Apple Reminders can be read, added, changed, completed and deleted, where reminder_lists, reminders, \
+    add_reminder, update_reminder, complete_reminder and delete_reminder are offered; completing a repeating \
+    reminder needs occurrence, its current due date, and it stays open, due on its next occurrence, \
+    unless that was the last one of a series that ends, which completes the reminder itself; \
     a reminder's due date and time are as kept in the reminder, and its at is the moment in the Mac's zone. \
     Dates in: 2026-10-13, 2026-10-13T09:00 (local time), or ISO 8601 with an offset or Z; \
     a bare date given as an end (to, end, until) includes that whole day. Dates out: ISO 8601 in the Mac's zone. \

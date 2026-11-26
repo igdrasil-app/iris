@@ -258,6 +258,14 @@ let tools: [Tool] = [
         Parameter(name: "list", kind: .string, description: "Move the reminder to this list: id or title, from reminder_lists. Must name one writable list."),
     ]),
 
+    Tool(name: "complete_reminder",
+         description: "Mark a reminder completed, or not completed with undo. Returns it as reminders lists it, read back after the call, plus completedOccurrence. Already in the state asked for: nothing changes. A repeating reminder needs occurrence, its current due date; it then stays open (completed false) and repeating, due on its next occurrence, and the occurrence done becomes a separate completed reminder with its own id: completedOccurrence, null if it cannot be told apart. The last occurrence of a series that ends completes the reminder itself. undo on an open repeating reminder is refused: undo a completed occurrence by its own id. Alarms are never touched.",
+         command: ["reminders", "complete"], scope: nil, parameters: [
+        Parameter(name: "id", kind: .positional, description: "Reminder id, from reminders.", required: true),
+        Parameter(name: "undo", kind: .flag, description: "Mark it not completed instead. Not with occurrence. Default: off."),
+        Parameter(name: "occurrence", kind: .string, description: "Required to complete an open repeating reminder: its current due date (due.date), YYYY-MM-DD. Another date is refused, with the date it is due now. Ignored when a repeating reminder is already completed. Refused for a reminder that does not repeat, and with undo."),
+    ]),
+
     Tool(name: "delete_reminder",
          description: "Delete a reminder. Returns {deleted, title, list, listId}. A repeating reminder is deleted whole.",
          command: ["reminders", "delete"], scope: nil, parameters: [
