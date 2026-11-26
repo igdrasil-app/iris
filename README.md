@@ -51,7 +51,7 @@ While it runs, the menu bar app updates Iris itself: it checks once a day, offer
 
 Dates in are `2026-10-13`, `2026-10-13T09:00` (local time) or ISO 8601 with an offset or `Z`, seconds and fractions optional; a bare date given as an end (`--to`, `--end`, `--until`) includes that whole day. Dates out are ISO 8601 in the Mac's zone. A reminder's `due` is the exception: its `date` and `time` are as kept in the reminder, not converted, and its `at` is that moment in the Mac's zone.
 
-`iris reminders add --repeat` takes the repeat options of `iris calendar add` and needs `--due`, its first occurrence, which counts toward `--count` even off the days of `--on`. Monthly from the 29th to 31st and yearly from 29 February fall on the last day of a shorter month, as in Reminders. A date-only occurrence counts as due at the start of its day, so `--until` with a bare date makes that day the last one.
+`iris reminders add --repeat` takes the repeat options of `iris calendar add` and needs `--due`, its first occurrence, which counts toward `--count` even off the days of `--on`. Monthly from the 29th to 31st and yearly from 29 February fall on the last day of a shorter month, as in Reminders. A date-only occurrence counts as due at the start of its day, so `--until` with a bare date still allows an occurrence due that day.
 
 `iris reminders update` changes only the fields named and never an alarm or whether it is completed. It refuses `--due` on a reminder that has an alarm, which would stay at its old time, or that repeats: change those in Reminders.
 

@@ -30,7 +30,7 @@ struct AddReminder: AsyncParsableCommand {
             month too short for that day: 2026-12-31 monthly is due 2027-01-31, then 2027-02-28.
             - --until: an occurrence due after it is not made. A bare date includes that whole day; with a \
             time, an occurrence due at that time is still made. A date-only occurrence counts as due at the \
-            start of its day here, so with a date-only due --until 2026-10-20 makes 2026-10-20 the last one.
+            start of its day here, so with a date-only due --until 2026-10-20 still allows an occurrence due 2026-10-20.
             - With --count 1, or --until on the due day, it still reads recurring true, and completing its \
             one occurrence completes the reminder itself.
 
@@ -63,7 +63,7 @@ struct AddReminder: AsyncParsableCommand {
     @Option(help: "With --repeat weekly: comma-separated days, from su,mo,tu,we,th,fr,sa. Default: the weekday of --due.")
     var on: String?
 
-    @Option(help: "With --repeat: no occurrence is due after this (same formats as --due; a bare date includes that whole day). Not before --due. Not with --count. Default: no end.")
+    @Option(help: "With --repeat: no occurrence is due after this (a date, a date and time, or ISO 8601 with an offset or Z; a bare date includes that whole day). Not before --due. Not with --count. Default: no end.")
     var until: String?
 
     @Option(help: "With --repeat: stop after this many occurrences, the first included. Not with --until. Default: no limit.")

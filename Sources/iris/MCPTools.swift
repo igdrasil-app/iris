@@ -248,7 +248,7 @@ let tools: [Tool] = [
         Parameter(name: "repeat", kind: .string, description: "Needs due. Default: does not repeat. Without until or count it repeats forever.", choices: ["daily", "weekly", "monthly", "yearly"]),
         Parameter(name: "every", kind: .integer, description: "With repeat: repeat every n days, weeks, months or years. Default: 1."),
         Parameter(name: "on", kind: .string, description: "With repeat weekly: comma-separated days from su,mo,tu,we,th,fr,sa. Default: the weekday of due."),
-        Parameter(name: "until", kind: .string, description: "With repeat: no occurrence is due after this (same formats as due; a bare date includes that whole day; a date-only occurrence counts as due at the start of its day). Not before due. Not with count. Default: no end."),
+        Parameter(name: "until", kind: .string, description: "With repeat: no occurrence is due after this (a date, a date and time, or ISO 8601 with an offset or Z; a bare date includes that whole day; a date-only occurrence counts as due at the start of its day). Not before due. Not with count. Default: no end."),
         Parameter(name: "count", kind: .integer, description: "With repeat: stop after this many occurrences, the first included. Not with until. Default: no limit."),
     ]),
 
