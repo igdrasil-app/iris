@@ -25,7 +25,7 @@ struct RemoteStatus: ParsableCommand {
 
             scopeFile: path, the file read (--scope-file, or the default a server uses); modified, when it was last changed, null when it cannot be read; usable, true when a server started now with it would start, false when it would stop, null when that cannot be told without asking for a permission; problem, why, in the words a server would stop with, or why it was not checked; else null.
 
-            calendar, notes, reminders: what the scope file allows in each app, null when the file cannot be read as a scope file. access is none, read, or read and write. calendars, folders or lists is "all", or the names of those in scope as they are called now (a renamed one shows its new name), null when they could not be looked up; count is how many, null for "all". A file without lists allows no reminders. Calendar also has eventsWithOtherPeople: whether events that have anyone but you on them can be changed and deleted ("sharedEvents": true). With "writes": true and calendars [], calendar access is none, though the write tools are still offered and find nothing.
+            calendar, notes, reminders: what the scope file allows in each app, null when the file cannot be read as a scope file. access is none, read, or read and write. calendars, folders or lists is "all", or the names of those in scope as they are called now (an entry written as an id shows the current name), null when they could not be looked up; count is how many, null for "all". A file without lists allows no reminders. Calendar also has eventsWithOtherPeople: whether events that have anyone but you on them can be changed and deleted ("sharedEvents": true). With "writes": true and calendars [], calendar access is none, though the write tools are still offered and find nothing.
 
             writesPerHour: null when no write is on; else limit, the write calls allowed in any rolling hour, and counts, which writes share it.
 
@@ -73,10 +73,9 @@ struct RemoteStatus: ParsableCommand {
             tokenProblem = "\(error)"
         }
 
-        let thisFile = (scopePath as NSString).standardizingPath
+        let thisFile = URL(fileURLWithPath: scopePath).resolvingSymlinksInPath().path
         let listeners = try runningListeners().map { listener -> (Listener, ListenerState) in
-            let path = (listener.scopeFile as NSString).standardizingPath
-            let state: ListenerState = if path != thisFile {
+            let state: ListenerState = if resolvedScopeFile(of: listener) != thisFile {
                 .otherFile
             } else if let modified {
                 listener.started > modified ? .current : .changed
@@ -92,7 +91,8 @@ struct RemoteStatus: ParsableCommand {
                           "problem": orNull(problem)],
             "calendar": orNull(file.map { file in
                 var entry = appEntry(.calendars, file, file.calendars, pinned.map { $0.calendars })
-                entry["eventsWithOtherPeople"] = file.writes && file.sharedEvents ? "can be changed" : "cannot be changed"
+                let changeable = entry["access"] as? String == "read and write" && file.sharedEvents
+                entry["eventsWithOtherPeople"] = changeable ? "can be changed" : "cannot be changed"
                 return entry
             }),
             "notes": orNull(file.map { appEntry(.folders, $0, $0.folders, pinned.map { $0.folders }) }),
@@ -266,6 +266,21 @@ struct Listener {
     let port: Int
     let scopeFile: String
     let started: Date
+}
+
+/// The file a server's --scope-file names, to compare with another: a relative path is taken from the
+/// server's own working directory, and links are followed. nil when that directory cannot be read.
+private func resolvedScopeFile(of listener: Listener) -> String? {
+    var path = listener.scopeFile
+    if !(path as NSString).isAbsolutePath {
+        var info = proc_vnodepathinfo()
+        let size = Int32(MemoryLayout<proc_vnodepathinfo>.size)
+        guard proc_pidinfo(listener.pid, PROC_PIDVNODEPATHINFO, 0, &info, size) == size else { return nil }
+        let directory = withUnsafeBytes(of: info.pvi_cdir.vip_path) { String(decoding: $0.prefix { $0 != 0 }, as: UTF8.self) }
+        guard !directory.isEmpty else { return nil }
+        path = (directory as NSString).appendingPathComponent(path)
+    }
+    return URL(fileURLWithPath: path).resolvingSymlinksInPath().path
 }
 
 /// The port and scope file of an `iris mcp --http` started with this executable and these arguments (argv[0]
