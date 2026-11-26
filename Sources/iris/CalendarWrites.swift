@@ -352,6 +352,12 @@ func findEvent(_ id: String, occurrence: String?, span: EKSpan, in store: EKEven
     if id.contains("NativeStorePersistentID") {
         throw IrisError("event has no stable id (Birthdays and similar calendars) and cannot be changed")
     }
+    // event(withIdentifier:) raises an Objective-C exception, which Swift cannot catch, when given a
+    // reminder's id, also as the part after a slash; such an id names no event.
+    let parts = [id] + id.split(separator: "/").map(String.init).filter { $0 != id }
+    if parts.contains(where: { store.calendarItem(withIdentifier: $0) is EKReminder }) {
+        throw IrisError("no event with id \(id)")
+    }
     let isAllowed = { (event: EKEvent) in allowed?.contains(event.calendar.calendarIdentifier) ?? true }
     guard let event = store.event(withIdentifier: id), isAllowed(event) else { throw IrisError("no event with id \(id)") }
     guard event.calendar.allowsContentModifications else { throw IrisError("calendar \(event.calendar.title) is read-only") }
