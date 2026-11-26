@@ -4,7 +4,7 @@ import Foundation
 struct MCP: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "mcp",
-        abstract: "Serve the calendar, notes and reminders commands as MCP tools over stdio, or the read tools (and, if turned on, the calendar writes) over HTTP.",
+        abstract: "Serve the calendar, notes and reminders commands as MCP tools over stdio, or the read tools (and, if turned on, the calendar and reminder writes) over HTTP.",
         // Lines stay under 80 columns: help wraps at 80 when piped, and a wrapped command no longer pastes.
         discussion: """
             Hosts start this, not people. Tools: calendars, events, add_event, update_event, delete_event, note_folders, notes, search_notes, show_note, reminder_lists, reminders, add_reminder, update_reminder, complete_reminder, delete_reminder, with the fields of the commands. A call still running after 60 seconds is stopped and returns an error, so the server keeps answering. Each host adds iris with its own line; Claude Code, Codex and Grok CLI:
@@ -39,13 +39,13 @@ struct MCP: ParsableCommand {
               { "schema_version": 1, "mcpServers": { "iris": {
                   "command": "iris", "args": ["mcp"] } } }
 
-            Of the reminder tools, only reminder_lists and reminders are offered over HTTP, and only when the scope file names reminder lists (below); add_reminder, update_reminder, complete_reminder and delete_reminder are offered over stdio only.
+            Over HTTP the reminder tools are offered only when the scope file names reminder lists (below): reminder_lists and reminders, and add_reminder, update_reminder, complete_reminder and delete_reminder only when it also turns reminder writes on.
 
             Over HTTP, for a host that cannot start a process on this Mac:
 
               iris mcp --http
 
-            serves the read tools (calendars, events, note_folders, notes, search_notes, show_note, and reminder_lists and reminders when the scope file names reminder lists), and the calendar writes only if the scope file turns them on (below), at http://127.0.0.1:8765/mcp, with no sessions: a request gets one JSON reply and a notification an empty 202; a request with an Expect header is refused (417). At most 16 connections and 4 tool calls at a time, and 60 seconds for a request to arrive. It prints one JSON line on stdout once it listens, then one line per request on stderr: time, methods, tool, status, duration; never arguments, results or the token. It listens on 127.0.0.1 only. Iris never makes it reachable from another machine; a proxy of your own can, and then the calendars, notes and reminders in its scope are reachable from wherever that proxy is, behind one token.
+            serves the read tools (calendars, events, note_folders, notes, search_notes, show_note, and reminder_lists and reminders when the scope file names reminder lists), and the calendar and reminder writes only if the scope file turns them on (below), at http://127.0.0.1:8765/mcp, with no sessions: a request gets one JSON reply and a notification an empty 202; a request with an Expect header is refused (417). At most 16 connections and 4 tool calls at a time, and 60 seconds for a request to arrive. It prints one JSON line on stdout once it listens, then one line per request on stderr: time, methods, tool, status, duration; never arguments, results or the token. It listens on 127.0.0.1 only. Iris never makes it reachable from another machine; a proxy of your own can, and then the calendars, notes and reminders in its scope are reachable from wherever that proxy is, behind one token.
 
             Every request needs the header Authorization: Bearer <token>. The token is read once at start from --token-file, by default ~/Library/Application Support/Iris/http-token: a file of yours that only you can read (mode 600), holding at least 32 characters. Iris never creates it; this does:
 
@@ -60,7 +60,7 @@ struct MCP: ParsableCommand {
 
             The keys calendars and folders must be there; lists, for reminder lists, is optional. Each holds a list of names or ids, from iris calendar calendars, iris notes folders and iris reminders lists, or "all"; [] allows none. A name that several calendars, folders or lists share includes each; one that matches nothing stops the start. Names are matched to ids at start, so restart the server after changing the file. A calendar, folder or list renamed later stays in scope, one deleted later drops out, and one created later is not in scope, even under an allowed name; "all" is every one, those created later included.
 
-            Without lists, or with [], no reminder tool is offered and Reminders is not asked at start. With names or "all", reminder_lists and reminders are offered, read only, and the server does not start without Reminders access:
+            Without lists, or with [], no reminder tool is offered and Reminders is not asked at start. With names or "all", reminder_lists and reminders are offered, read only unless reminder writes are on (below), and the server does not start without Reminders access:
 
               (umask 077; echo '{"calendars": ["Work"], "folders": "all",
                 "lists": ["Errands"]}' \\
@@ -72,7 +72,7 @@ struct MCP: ParsableCommand {
                 '{"calendars": ["Work"], "folders": "all", "writes": true}' \\
                 > ~/Library/Application\\ Support/Iris/http-scope)
 
-            Then add_event, update_event and delete_event are offered too, in the scope's calendars only: an event is created in, changed in, moved to or deleted from an allowed calendar, and any other answers as one that does not exist, with nothing changed. Notes and reminders stay read only. Whoever holds the token can then change those events, so the guards below are there for a mistaken or misled assistant:
+            Then add_event, update_event and delete_event are offered too, in the scope's calendars only: an event is created in, changed in, moved to or deleted from an allowed calendar, and any other answers as one that does not exist, with nothing changed. Notes stay read only, and reminders unless reminder writes are on (below). Whoever holds the token can then change those events, so the guards below are there for a mistaken or misled assistant:
 
             update_event and delete_event then refuse, with nothing changed, an event that has anyone on it but you: an attendee, or an organizer who is not you. Changing or deleting such an event can notify them or cancel their meeting, which cannot be taken back. A change to all future occurrences of a repeating event (span future) is refused too, since the people on later occurrences cannot be checked; one occurrence at a time still works. Each call carries --only-mine, and the tools do not offer onlyMine. To let callers change and delete those events too, the scope file also says "sharedEvents": true (false or no key: refused; any other value, or true without "writes": true, stops the start):
 
@@ -80,9 +80,17 @@ struct MCP: ParsableCommand {
                 "writes": true, "sharedEvents": true}' \\
                 > ~/Library/Application\\ Support/Iris/http-scope)
 
-            One write at a time; reads go on meanwhile. At most 20 write calls reach their command in any rolling hour, one the command refuses included; past that a call is refused and says when the next is possible. delete_event with span future is refused: a whole series is deleted on the Mac. add_event with repeat still creates a whole series in one call; changing a whole series with update_event and span future needs "sharedEvents": true.
+            Reminder writes are off unless the scope file says "reminderWrites": true, with reminder lists named in lists; "writes" does not turn them on (false or no key: off; any other value, or true without lists or with [], stops the start):
 
-            Two files in --state-dir, by default ~/Library/Application Support/Iris, mode 600 with no access control list. The folder is created owner-only when missing; one that exists must be yours, writable by no one else and without an access control list that lets others in, or the server does not start. One server with writes on uses a folder at a time; a second one on the same folder does not start. http-write-times holds the times of the write calls counted in the last hour, saved before each one runs, so the limit holds across a restart; a write whose count cannot be saved is refused. The times are kept on a clock that setting the date does not move; after a restart of the Mac, those saved count as just made. A missing file counts as no writes; one that cannot be read, as a full hour. http-writes.log records each write that reached its command: time, tool, whether it failed, and the text iris returned, for a success the event as it now is, so a wrong change can be undone by hand. It holds calendar content, unlike the request log. When it passes 4 MB it is trimmed to its newest lines; the newest entry is always kept whole. When a write's outcome is not known (stopped at 60 seconds, or cut short), the caller is told to check with events before repeating it, and that is recorded too. The request log on stderr marks what the guards did, never what was written: write-busy, span-refused, write-limit, times-failed, record-failed.
+              (umask 077; echo '{"calendars": ["Work"], "folders": "all",
+                "lists": ["Errands"], "reminderWrites": true}' \\
+                > ~/Library/Application\\ Support/Iris/http-scope)
+
+            Then add_reminder, update_reminder, complete_reminder and delete_reminder are offered too, in the scope's lists only: a reminder is added to, changed in, moved to, completed in or deleted from an allowed list, and any other answers as one that does not exist, with nothing changed. delete_reminder refuses a repeating reminder, with nothing deleted, since deleting it deletes every occurrence: each call carries --not-repeating, and the tool does not offer notRepeating. Delete such a reminder on the Mac, or complete its occurrences one at a time.
+
+            One write at a time, calendar and reminder writes alike; reads go on meanwhile. At most 20 write calls, calendar and reminder writes counted together, reach their command in any rolling hour, one the command refuses included; past that a call is refused and says when the next is possible. delete_event with span future is refused: a whole series is deleted on the Mac. add_event with repeat still creates a whole series in one call; changing a whole series with update_event and span future needs "sharedEvents": true.
+
+            Two files in --state-dir, by default ~/Library/Application Support/Iris, mode 600 with no access control list. The folder is created owner-only when missing; one that exists must be yours, writable by no one else and without an access control list that lets others in, or the server does not start. One server with writes or reminder writes on uses a folder at a time; a second one on the same folder does not start. http-write-times holds the times of the write calls counted in the last hour, saved before each one runs, so the limit holds across a restart; a write whose count cannot be saved is refused. The times are kept on a clock that setting the date does not move; after a restart of the Mac, those saved count as just made. A missing file counts as no writes; one that cannot be read, as a full hour. http-writes.log records each write that reached its command: time, tool, whether it failed, and the text iris returned, for a success the event or reminder as it now is, so a wrong change can be undone by hand. It holds calendar and reminder content, unlike the request log. When it passes 4 MB it is trimmed to its newest lines; the newest entry is always kept whole. When a write's outcome is not known (stopped at 60 seconds, or cut short), the caller is told to check with events or reminders before repeating it, and that is recorded too. The request log on stderr marks what the guards did, never what was written: write-busy, span-refused, write-limit, times-failed, record-failed.
 
             Who can call it: a web page in your browser is stopped by the token, and by the refusal of every request that carries an Origin header. Another user of this Mac, and anything that arrives through your own proxy, is stopped by the token. A process running as you on this Mac is not stopped: it can read the token file, or run iris itself.
 
@@ -94,7 +102,7 @@ struct MCP: ParsableCommand {
             """
     )
 
-    @Flag(help: "Serve the read tools, and the calendar writes if the scope file turns them on, over HTTP on 127.0.0.1 instead of stdio.")
+    @Flag(help: "Serve the read tools, and the calendar and reminder writes if the scope file turns them on, over HTTP on 127.0.0.1 instead of stdio.")
     var http = false
 
     @Option(help: "With --http: the port. Default: 8765.")
@@ -103,10 +111,10 @@ struct MCP: ParsableCommand {
     @Option(help: "With --http: the file that holds the token. Default: ~/Library/Application Support/Iris/http-token.")
     var tokenFile: String?
 
-    @Option(help: "With --http: the file that names the calendars, note folders and reminder lists callers may read, and whether they may change events. Default: ~/Library/Application Support/Iris/http-scope.")
+    @Option(help: "With --http: the file that names the calendars, note folders and reminder lists callers may read, and whether they may change events and reminders. Default: ~/Library/Application Support/Iris/http-scope.")
     var scopeFile: String?
 
-    @Option(help: "With --http and writes on: the folder for http-writes.log and http-write-times. Default: ~/Library/Application Support/Iris.")
+    @Option(help: "With --http and writes or reminder writes on: the folder for http-writes.log and http-write-times. Default: ~/Library/Application Support/Iris.")
     var stateDir: String?
 
     func validate() throws {

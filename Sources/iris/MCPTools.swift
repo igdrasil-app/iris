@@ -141,6 +141,12 @@ let onlyMineParameter = Parameter(
     description: "Refuse, with nothing changed, an event that has anyone on it besides the Mac's owner: an attendee or an organizer who is not the owner; and span future on a repeating event, since the people on later occurrences cannot be checked. Default: off.",
     flag: "only-mine")
 
+/// Over HTTP this parameter is dropped and --not-repeating always pinned in its place (`Tool.limited(to:)`).
+let notRepeatingParameter = Parameter(
+    name: "notRepeating", kind: .flag,
+    description: "Refuse, with nothing deleted, a reminder that repeats, since deleting it deletes every occurrence. Default: off.",
+    flag: "not-repeating")
+
 private let sharedNote = " An event with other people on it can be refused, with nothing changed, where changing such events is not allowed."
 
 let tools: [Tool] = [
@@ -239,7 +245,7 @@ let tools: [Tool] = [
 
     Tool(name: "add_reminder",
          description: "Create a reminder. Returns it as reminders lists it. No alarm is set. With repeat it repeats, recurring true, and is completed one occurrence at a time: its first occurrence is due itself, also off the days of on, and counts toward count; monthly from the 29th to 31st and yearly from 29 February fall on the last day of a shorter month; with count 1, or until on the due day, completing that one occurrence completes the reminder.",
-         command: ["reminders", "add"], scope: nil, parameters: [
+         command: ["reminders", "add"], scope: .lists, parameters: [
         Parameter(name: "list", kind: .string, description: "List id or title, from reminder_lists. Must name one writable list.", required: true),
         Parameter(name: "title", kind: .string, description: "Title, not empty.", required: true),
         Parameter(name: "notes", kind: .string, description: "Notes. Default: none."),
@@ -254,7 +260,7 @@ let tools: [Tool] = [
 
     Tool(name: "update_reminder",
          description: "Change a reminder. Only the fields you name, at least one, change; the id stays. Returns it as reminders lists it. due is refused, with nothing changed, whatever its value, when the reminder has an alarm (iris cannot move it; the time is changed in Reminders) or repeats. Alarms and completed are never changed.",
-         command: ["reminders", "update"], scope: nil, parameters: [
+         command: ["reminders", "update"], scope: .lists, parameters: [
         Parameter(name: "id", kind: .positional, description: "Reminder id, from reminders.", required: true),
         Parameter(name: "title", kind: .string, description: "New title, not empty."),
         Parameter(name: "notes", kind: .string, description: "New notes. An empty string clears them."),
@@ -265,15 +271,16 @@ let tools: [Tool] = [
 
     Tool(name: "complete_reminder",
          description: "Mark a reminder completed, or not completed with undo. Returns it as reminders lists it, read back after the call, plus completedOccurrence. Already in the state asked for: nothing changes. A repeating reminder needs occurrence, its current due date; it then stays open (completed false) and repeating, due on its next occurrence, and the occurrence done becomes a separate completed reminder with its own id: completedOccurrence, null if it cannot be told apart. The last occurrence of a series that ends completes the reminder itself. undo on an open repeating reminder is refused: undo a completed occurrence by its own id. Alarms are never touched.",
-         command: ["reminders", "complete"], scope: nil, parameters: [
+         command: ["reminders", "complete"], scope: .lists, parameters: [
         Parameter(name: "id", kind: .positional, description: "Reminder id, from reminders.", required: true),
         Parameter(name: "undo", kind: .flag, description: "Mark it not completed instead. Not with occurrence. Default: off."),
         Parameter(name: "occurrence", kind: .string, description: "Required to complete an open repeating reminder: its current due date (due.date), YYYY-MM-DD. Another date is refused, with the date it is due now. Ignored when a repeating reminder is already completed. Refused for a reminder that does not repeat, and with undo."),
     ]),
 
     Tool(name: "delete_reminder",
-         description: "Delete a reminder. Returns {deleted, title, list, listId}. A repeating reminder is deleted whole.",
-         command: ["reminders", "delete"], scope: nil, parameters: [
+         description: "Delete a reminder. Returns {deleted, title, list, listId}. A repeating reminder is deleted whole; where that is not allowed it is refused, with nothing deleted.",
+         command: ["reminders", "delete"], scope: .lists, parameters: [
         Parameter(name: "id", kind: .positional, description: "Reminder id, from reminders.", required: true),
+        notRepeatingParameter,
     ]),
 ]

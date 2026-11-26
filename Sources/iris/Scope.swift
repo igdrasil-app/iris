@@ -21,14 +21,16 @@ enum ScopeKind {
 }
 
 /// The scope file as written: names or ids per kind, nil where it says "all", and no lists where it has
-/// no lists key; whether callers may create, change and delete events in the calendars it names; and
-/// whether they may also change and delete events that have other people on them.
+/// no lists key; whether callers may create, change and delete events in the calendars it names; whether
+/// they may also change and delete events that have other people on them; and whether they may add,
+/// change, complete and delete reminders in the lists it names.
 struct ScopeFile: Equatable {
     let calendars: [String]?
     let folders: [String]?
     var lists: [String]? = []
     var writes = false
     var sharedEvents = false
+    var reminderWrites = false
 }
 
 /// The scope as pinned at start: ids per kind, nil where the file says "all".
@@ -38,6 +40,7 @@ struct HTTPScope {
     var lists: Set<String>? = []
     var writes = false
     var sharedEvents = false
+    var reminderWrites = false
 
     func ids(_ kind: ScopeKind) -> Set<String>? {
         switch kind {
@@ -52,16 +55,17 @@ let scopeExample = #"{"calendars": ["Work"], "folders": "all"}"#
 private let scopeShape = #"each key holds a list of names or ids, [] for none, or "all" for every one; "#
     + #"an optional "lists" key names reminder lists the same way, none without it; "#
     + #"an optional "writes": true lets callers change events in those calendars, and with it an optional "#
-    + #""sharedEvents": true lets them change and delete events that have other people on them"#
+    + #""sharedEvents": true lets them change and delete events that have other people on them; "#
+    + #"an optional "reminderWrites": true, with lists named, lets them change reminders in those lists"#
 
 /// Two keys, calendars and folders, each "all" or a list of strings; the optional lists, the same, and
-/// none when it is not there; and the optional writes and sharedEvents, each true or false, sharedEvents
-/// true only with writes true. Anything else is an error.
+/// none when it is not there; and the optional writes, sharedEvents and reminderWrites, each true or false,
+/// sharedEvents true only with writes true, reminderWrites true only with lists named. Anything else is an error.
 func parseScopeFile(_ data: Data) throws -> ScopeFile {
     guard let object = try? JSONSerialization.jsonObject(with: data), let keys = object as? [String: Any] else {
         throw IrisError("not a JSON object")
     }
-    if let extra = keys.keys.sorted().first(where: { !["calendars", "folders", "lists", "writes", "sharedEvents"].contains($0) }) {
+    if let extra = keys.keys.sorted().first(where: { !["calendars", "folders", "lists", "writes", "sharedEvents", "reminderWrites"].contains($0) }) {
         throw IrisError("unknown key \(extra)")
     }
     // JSON true and 1 both arrive as NSNumber, so the type is checked before the value.
@@ -74,6 +78,7 @@ func parseScopeFile(_ data: Data) throws -> ScopeFile {
     }
     let writes = try flag("writes")
     let sharedEvents = try flag("sharedEvents")
+    let reminderWrites = try flag("reminderWrites")
     if sharedEvents && !writes {
         throw IrisError(#""sharedEvents": true needs "writes": true; without writes it would mean nothing"#)
     }
@@ -87,8 +92,11 @@ func parseScopeFile(_ data: Data) throws -> ScopeFile {
     }
     // A file written before reminders came to HTTP has no lists key, and offers what it did then.
     let lists = keys["lists"] == nil ? [] : try entries("lists")
+    if reminderWrites && lists?.isEmpty == true {
+        throw IrisError(#""reminderWrites": true needs reminder lists in "lists"; without them it would mean nothing"#)
+    }
     return ScopeFile(calendars: try entries("calendars"), folders: try entries("folders"), lists: lists,
-                     writes: writes, sharedEvents: sharedEvents)
+                     writes: writes, sharedEvents: sharedEvents, reminderWrites: reminderWrites)
 }
 
 /// Reads the scope file and pins its names to the ids they match now. Only a kind given as a list is
@@ -116,7 +124,7 @@ func readScope(_ path: String) throws -> HTTPScope {
     return HTTPScope(
         calendars: try file.calendars.map { try pin($0, listing: ["calendar", "calendars"], nameKey: "title", noun: "calendar", path) },
         folders: try file.folders.map { try pin($0, listing: ["notes", "folders"], nameKey: "name", noun: "folder", path) },
-        lists: lists, writes: file.writes, sharedEvents: file.sharedEvents)
+        lists: lists, writes: file.writes, sharedEvents: file.sharedEvents, reminderWrites: file.reminderWrites)
 }
 
 struct Named {
@@ -219,8 +227,8 @@ func allowedHelp(_ kind: ScopeKind) -> ArgumentHelp {
 extension Tool {
     /// This tool with the scope's ids for its kind right after the command, none where the scope file says
     /// "all". A tool that takes onlyMine also gets --only-mine in its command, and loses the parameter, unless
-    /// the scope file says "sharedEvents": true. A tool whose command takes no scope option is refused,
-    /// never offered unscoped.
+    /// the scope file says "sharedEvents": true; one that takes notRepeating always gets --not-repeating, and
+    /// loses the parameter. A tool whose command takes no scope option is refused, never offered unscoped.
     func limited(to scope: HTTPScope) throws -> Tool {
         guard let kind = self.scope else {
             throw IrisError("\(name) cannot be limited to the scope file, so it cannot be offered over HTTP")
@@ -235,6 +243,10 @@ extension Tool {
         if !scope.sharedEvents && parameters.contains(where: { $0.name == onlyMineParameter.name }) {
             command.append("--only-mine")
             parameters.removeAll { $0.name == onlyMineParameter.name }
+        }
+        if parameters.contains(where: { $0.name == notRepeatingParameter.name }) {
+            command.append("--not-repeating")
+            parameters.removeAll { $0.name == notRepeatingParameter.name }
         }
         return Tool(name: name, description: description, command: command, scope: kind, parameters: parameters)
     }

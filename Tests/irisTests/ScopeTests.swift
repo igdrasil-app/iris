@@ -75,25 +75,115 @@ final class ScopeTests: XCTestCase {
         for (name, text) in refused { XCTAssertThrowsError(try parse(text), name) }
     }
 
-    private let reminderWrites = ["add_reminder", "update_reminder", "complete_reminder", "delete_reminder"]
+    func testScopeFileReminderWrites() throws {
+        // Off unless the file says true; "writes" does not turn them on.
+        XCTAssertFalse(try parse(#"{"calendars": [], "folders": [], "lists": ["Errands"]}"#).reminderWrites)
+        XCTAssertFalse(try parse(#"{"calendars": [], "folders": [], "lists": ["Errands"], "writes": true}"#).reminderWrites)
+        XCTAssertFalse(try parse(#"{"calendars": [], "folders": [], "reminderWrites": false}"#).reminderWrites)
+        XCTAssertEqual(try parse(#"{"calendars": [], "folders": [], "lists": ["Errands"], "reminderWrites": true}"#),
+                       ScopeFile(calendars: [], folders: [], lists: ["Errands"], reminderWrites: true))
+        XCTAssertEqual(try parse(#"{"calendars": [], "folders": [], "lists": "all", "reminderWrites": true}"#),
+                       ScopeFile(calendars: [], folders: [], lists: nil, reminderWrites: true))
+        let refused = [
+            "without lists": #"{"calendars": [], "folders": [], "reminderWrites": true}"#,
+            "with lists []": #"{"calendars": [], "folders": [], "lists": [], "reminderWrites": true}"#,
+            "without lists, writes on": #"{"calendars": [], "folders": [], "writes": true, "reminderWrites": true}"#,
+            "1": #"{"calendars": [], "folders": [], "lists": ["Errands"], "reminderWrites": 1}"#,
+            "a string": #"{"calendars": [], "folders": [], "lists": ["Errands"], "reminderWrites": "true"}"#,
+            "null": #"{"calendars": [], "folders": [], "lists": ["Errands"], "reminderWrites": null}"#,
+            "ReminderWrites": #"{"calendars": [], "folders": [], "lists": ["Errands"], "ReminderWrites": true}"#,
+        ]
+        for (name, text) in refused { XCTAssertThrowsError(try parse(text), name) }
+    }
 
-    func testHTTPOffersNoReminderWrite() throws {
+    func testHTTPOffering() throws {
+        let reads = ["calendars", "events", "note_folders", "notes", "search_notes", "show_note"]
         for lists: Set<String>? in [nil, [], ["l1"]] {
-            for (writes, sharedEvents) in [(false, false), (true, false), (true, true)] {
-                let scope = HTTPScope(calendars: nil, folders: nil, lists: lists, writes: writes, sharedEvents: sharedEvents)
-                let names = try httpOffering(scope).map(\.name)
-                XCTAssertTrue(Set(names).isDisjoint(with: reminderWrites), "\(names)")
-                // No lists offers what a server offered before reminders came to HTTP.
-                let reads = lists == [] ? [] : ["reminder_lists", "reminders"]
-                XCTAssertEqual(Set(names), Set(httpToolNames.filter { !$0.hasPrefix("reminder") } + reads
-                                               + (writes ? httpWriteToolNames : [])))
+            for writes in [false, true] {
+                for reminderWrites in [false, true] {
+                    let scope = HTTPScope(calendars: nil, folders: nil, lists: lists, writes: writes, reminderWrites: reminderWrites)
+                    let names = try httpOffering(scope).map(\.name)
+                    // Calendar writes only with writes, reminder writes only with reminderWrites, and no reminder
+                    // tool without lists: no lists offers what a server offered before reminders came to HTTP.
+                    let hasLists = lists != []
+                    let expected = reads + (writes ? httpWriteToolNames : []) + (hasLists ? ["reminder_lists", "reminders"] : [])
+                        + (hasLists && reminderWrites ? httpReminderWriteToolNames : [])
+                    XCTAssertEqual(Set(names), Set(expected), "\(String(describing: lists)) \(writes) \(reminderWrites)")
+                    XCTAssertEqual(names.count, expected.count)
+                }
             }
         }
-        // Their commands take no scope option, so they could not be limited even if named.
-        for name in reminderWrites {
-            let tool = try XCTUnwrap(tools.first { $0.name == name })
-            XCTAssertFalse(httpToolNames.contains(name) || httpWriteToolNames.contains(name), name)
-            XCTAssertThrowsError(try tool.limited(to: HTTPScope(calendars: nil, folders: nil, lists: nil)), name)
+    }
+
+    func testEveryOfferedToolIsAReadOrGuarded() throws {
+        let reminderWrites = ["add_reminder", "update_reminder", "complete_reminder", "delete_reminder"]
+        XCTAssertEqual(httpReminderWriteToolNames, reminderWrites)
+        for name in httpWriteToolNames + reminderWrites {
+            XCTAssertTrue(isHTTPWrite(name), name)
+        }
+        // Every tool iris has is a read named in httpToolNames or guarded as a write: nothing is neither.
+        for tool in tools {
+            XCTAssertNotEqual(httpToolNames.contains(tool.name), isHTTPWrite(tool.name), tool.name)
+        }
+    }
+
+    func testNotRepeatingIsPinnedOverHTTP() throws {
+        let negations = ["--no-not-repeating", "--not-repeating=false", "--not-repeating", "--disable-not-repeating"]
+        let delete = try XCTUnwrap(tools.first { $0.name == "delete_reminder" })
+        // Over stdio it is the caller's.
+        XCTAssertFalse(try DeleteReminder.parse(Array(try delete.argv(["id": "r1"]).dropFirst(2))).notRepeating)
+        XCTAssertTrue(try DeleteReminder.parse(Array(try delete.argv(["id": "r1", "notRepeating": true]).dropFirst(2))).notRepeating)
+        for lists: Set<String>? in [nil, ["l1"]] {
+            for sharedEvents in [false, true] {
+                let scope = HTTPScope(calendars: nil, folders: nil, lists: lists, writes: sharedEvents,
+                                      sharedEvents: sharedEvents, reminderWrites: true)
+                let tool = try delete.limited(to: scope)
+                // Pinned in the command, whatever the scope, and not offered to the caller.
+                XCTAssertEqual(tool.command.last, "--not-repeating")
+                XCTAssertNil((tool.definition["inputSchema"] as? [String: Any])
+                    .flatMap { $0["properties"] as? [String: Any] }?["notRepeating"])
+                for value in [true, false] {
+                    XCTAssertThrowsError(try tool.argv(["id": "r1", "notRepeating": value]))
+                }
+                for word in negations {
+                    let argv = try tool.argv(["id": word])
+                    XCTAssertEqual(argv.prefix { $0 != "--" }.filter { $0 == "--not-repeating" }.count, 1, word)
+                    let parsed = try DeleteReminder.parse(Array(argv.dropFirst(2)))
+                    XCTAssertTrue(parsed.notRepeating, word)
+                    XCTAssertEqual(parsed.id, word)
+                    XCTAssertEqual(try allowedIds(parsed.allowedLists, "--allowed-lists"), lists)
+                }
+            }
+        }
+        // No other tool gets it.
+        for tool in tools where tool.name != "delete_reminder" {
+            XCTAssertFalse(try tool.limited(to: HTTPScope(calendars: nil, folders: nil, lists: nil)).command.contains("--not-repeating"),
+                           tool.name)
+        }
+    }
+
+    func testReminderWriteScopeSurvivesCallerArguments() throws {
+        let smuggled = #"--allowed-lists=["outside"]"#
+        func limited(_ name: String, _ ids: Set<String>, _ arguments: [String: Any]) throws -> [String] {
+            let argv = try XCTUnwrap(tools.first { $0.name == name })
+                .limited(to: HTTPScope(calendars: nil, folders: nil, lists: ids, reminderWrites: true)).argv(arguments)
+            XCTAssertEqual(argv.prefix { $0 != "--" }.filter { $0.hasPrefix("--allowed-lists") }.count, 1, name)
+            return Array(argv.dropFirst(2))
+        }
+        for ids: Set<String> in [[], ["l1"], ["l1", "l2"]] {
+            let add = try AddReminder.parse(try limited("add_reminder", ids, ["list": smuggled, "title": smuggled]))
+            XCTAssertEqual(try allowedIds(add.allowedLists, "--allowed-lists"), ids)
+            XCTAssertEqual(add.list, smuggled)
+            let update = try UpdateReminder.parse(try limited("update_reminder", ids, ["id": smuggled, "list": smuggled]))
+            XCTAssertEqual(try allowedIds(update.allowedLists, "--allowed-lists"), ids)
+            XCTAssertEqual(update.id, smuggled)
+            XCTAssertEqual(update.list, smuggled)
+            let complete = try CompleteReminder.parse(try limited("complete_reminder", ids, ["id": smuggled]))
+            XCTAssertEqual(try allowedIds(complete.allowedLists, "--allowed-lists"), ids)
+            XCTAssertEqual(complete.id, smuggled)
+            let delete = try DeleteReminder.parse(try limited("delete_reminder", ids, ["id": smuggled]))
+            XCTAssertEqual(try allowedIds(delete.allowedLists, "--allowed-lists"), ids)
+            XCTAssertEqual(delete.id, smuggled)
         }
     }
 
@@ -204,7 +294,7 @@ final class ScopeTests: XCTestCase {
         let unscoped = Tool(name: "unscoped", description: "", command: ["calendar", "add"], scope: nil, parameters: [])
         XCTAssertThrowsError(try unscoped.limited(to: HTTPScope(calendars: nil, folders: nil)))
         // Every tool offered over HTTP can be limited.
-        for name in httpToolNames + httpWriteToolNames {
+        for name in httpToolNames + httpWriteToolNames + httpReminderWriteToolNames {
             let tool = try XCTUnwrap(tools.first { $0.name == name })
             XCTAssertNoThrow(try tool.limited(to: scope), name)
         }
