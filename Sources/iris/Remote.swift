@@ -73,7 +73,7 @@ struct RemoteStatus: ParsableCommand {
             tokenProblem = "\(error)"
         }
 
-        let thisFile = URL(fileURLWithPath: scopePath).resolvingSymlinksInPath().path
+        let thisFile = followingLinks(scopePath)
         let listeners = try runningListeners().map { listener -> (Listener, ListenerState) in
             let state: ListenerState = if resolvedScopeFile(of: listener) != thisFile {
                 .otherFile
@@ -280,7 +280,15 @@ private func resolvedScopeFile(of listener: Listener) -> String? {
         guard !directory.isEmpty else { return nil }
         path = (directory as NSString).appendingPathComponent(path)
     }
-    return URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+    return followingLinks(path)
+}
+
+/// The path with links followed, also for a file that is gone: then its folder's links are followed, so a
+/// deleted file is still the same file by either of its paths.
+private func followingLinks(_ path: String) -> String {
+    let url = URL(fileURLWithPath: path)
+    if FileManager.default.fileExists(atPath: path) { return url.resolvingSymlinksInPath().path }
+    return url.deletingLastPathComponent().resolvingSymlinksInPath().appendingPathComponent(url.lastPathComponent).path
 }
 
 /// The port and scope file of an `iris mcp --http` started with this executable and these arguments (argv[0]
