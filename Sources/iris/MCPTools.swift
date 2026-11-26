@@ -225,15 +225,31 @@ let tools: [Tool] = [
     ]),
 
     Tool(name: "reminder_lists",
-         description: "List Apple Reminders lists: id, title, writable, source, open (how many reminders in the list are not completed). Nothing can be changed yet.",
+         description: "List Apple Reminders lists: id, title, writable, source, open (how many reminders in the list are not completed).",
          command: ["reminders", "lists"], scope: nil, parameters: []),
 
     Tool(name: "reminders",
-         description: "List Apple Reminders, open ones by default: id, title, list, listId, notes, due, priority (none, high, medium, low), completed, completedAt, created, modified, recurring; every key always there, null when empty. due is null or {date, time, timeZone, at}: date and time as kept in the reminder; time, timeZone and at null for a date-only due; timeZone null for a floating time, whose at is that clock time on this Mac. Dated reminders first by day (date only before timed), then by at; then undated, newest created first. Subtasks, tags, flags and sections are not visible; a subtask reads as an ordinary reminder. Nothing can be changed yet.",
+         description: "List Apple Reminders, open ones by default: id, title, list, listId, notes, due, priority (none, high, medium, low), completed, completedAt, created, modified, recurring; every key always there, null when empty. due is null or {date, time, timeZone, at}: date and time as kept in the reminder; time, timeZone and at null for a date-only due; timeZone null for a floating time, whose at is that clock time on this Mac. Dated reminders first by day (date only before timed), then by at; then undated, newest created first. Subtasks, tags, flags and sections are not visible; a subtask reads as an ordinary reminder.",
          command: ["reminders", "list"], scope: nil, parameters: [
         Parameter(name: "lists", kind: .strings, description: "List ids or titles, from reminder_lists. A name that matches nothing is an error. Default: every list.", flag: "list"),
         Parameter(name: "status", kind: .string, description: "open (not completed), completed or all. Default: open.", choices: ["open", "completed", "all"]),
         Parameter(name: "dueFrom", kind: .string, description: "Only reminders due at or after this: \(dateFormats). With dueFrom or dueTo, reminders without a due date are left out; a date-only due goes by its day. Default: no lower bound.", flag: "due-from"),
         Parameter(name: "dueTo", kind: .string, description: "Only reminders due at or before this, same formats; a bare date includes that whole day. Default: no upper bound.", flag: "due-to"),
+    ]),
+
+    Tool(name: "add_reminder",
+         description: "Create a reminder. Returns it as reminders lists it. No alarm is set.",
+         command: ["reminders", "add"], scope: nil, parameters: [
+        Parameter(name: "list", kind: .string, description: "List id or title, from reminder_lists. Must name one writable list.", required: true),
+        Parameter(name: "title", kind: .string, description: "Title, not empty.", required: true),
+        Parameter(name: "notes", kind: .string, description: "Notes. Default: none."),
+        Parameter(name: "due", kind: .string, description: "2026-10-13 is due that day at no set time; 2026-10-13T09:00 is that time on this Mac; with an offset or Z, that moment, kept as this Mac's clock time. Default: no due date."),
+        Parameter(name: "priority", kind: .string, description: "Default: none.", choices: ["none", "low", "medium", "high"]),
+    ]),
+
+    Tool(name: "delete_reminder",
+         description: "Delete a reminder. Returns {deleted, title, list, listId}. A repeating reminder is deleted whole.",
+         command: ["reminders", "delete"], scope: nil, parameters: [
+        Parameter(name: "id", kind: .positional, description: "Reminder id, from reminders.", required: true),
     ]),
 ]
