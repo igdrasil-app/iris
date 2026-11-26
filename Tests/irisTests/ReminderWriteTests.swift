@@ -127,7 +127,8 @@ final class ReminderWriteTests: XCTestCase {
         XCTAssertNil(start.timeZone)
     }
 
-    func testTheDueOfAReminderWithAnAlarmOrThatRepeatsIsNotChanged() {
+    // Which refusal is chosen. That a refused reminder stays as it was is checked on the device, not here.
+    func testWhichRefusalADueChangeGets() {
         XCTAssertNil(dueChangeRefusal(hasAlarms: false, repeats: false))
         XCTAssertTrue(dueChangeRefusal(hasAlarms: true, repeats: false)!.contains("alarm"))
         XCTAssertTrue(dueChangeRefusal(hasAlarms: false, repeats: true)!.contains("repeats"))
