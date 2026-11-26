@@ -30,6 +30,10 @@ final class MenuBar: NSObject, NSMenuDelegate {
     // What the last probe answered; the menu shows this, at most one timer tick old.
     private var notes = "unknown"
     private var probingNotes = false
+    // The last answer about remote access, shown while the next is worked out; and the items showing it.
+    private var remoteLines = [RemoteMenuLine(title: "Remote access: checking…")]
+    private var remoteItems: [NSMenuItem] = []
+    private lazy var remoteCheck = RemoteCheck(compute: { checkRemote() }) { [weak self] in self?.show(remote: $0) }
     private var timer: Timer?
 
     override init() {
@@ -71,6 +75,15 @@ final class MenuBar: NSObject, NSMenuDelegate {
         showStatus()
     }
 
+    private func show(remote lines: [RemoteMenuLine]) {
+        guard lines != remoteLines else { return }
+        remoteLines = lines
+        // The menu may be open: its items change in place.
+        if let menu = item.menu, remoteItems.first?.menu === menu {
+            remoteItems = placeRemoteSection(lines, in: menu, replacing: remoteItems)
+        }
+    }
+
     private func showStatus() {
         item.button?.image = botGlyph(badge: status != .fullAccess || notes == "denied")
         item.button?.toolTip = "Iris: Calendar \(describe(status)), Notes \(notes)"
@@ -100,6 +113,8 @@ final class MenuBar: NSObject, NSMenuDelegate {
         // Shown only, never asked for here: `iris reminders lists` asks.
         menu.addItem(withTitle: "Reminders: \(describe(EKEventStore.authorizationStatus(for: .reminder)))",
                      action: nil, keyEquivalent: "")
+        remoteItems = placeRemoteSection(remoteLines, in: menu, replacing: [])
+        remoteCheck.start()
 
         menu.addItem(.separator())
         menu.addItem(withTitle: "Iris \(version ?? "unknown")", action: nil, keyEquivalent: "")
@@ -170,6 +185,64 @@ final class MenuBar: NSObject, NSMenuDelegate {
         NSApp.activate()
         NSAlert(error: error).runModal()
     }
+}
+
+/// What `iris remote status` would answer, as menu lines. Reads only: it starts no server, writes no file and
+/// takes no lock, and looks nothing up that could show a permission dialog.
+private func checkRemote() -> [RemoteMenuLine] {
+    let state = try? remoteState(scopePath: (defaultScopeFile as NSString).expandingTildeInPath,
+                                 tokenPath: (defaultTokenFile as NSString).expandingTildeInPath)
+    return state.map(remoteMenuLines) ?? [RemoteMenuLine(title: "Remote access: unknown")]
+}
+
+/// Works out the remote access lines off the main thread, since a scope naming calendars or lists is looked up
+/// by child processes and can take seconds. One at a time: a start while one runs does nothing.
+@MainActor
+final class RemoteCheck {
+    private let compute: @Sendable () -> [RemoteMenuLine]
+    private let show: ([RemoteMenuLine]) -> Void
+    private var running = false
+
+    init(compute: @escaping @Sendable () -> [RemoteMenuLine], show: @escaping ([RemoteMenuLine]) -> Void) {
+        self.compute = compute
+        self.show = show
+    }
+
+    func start() {
+        guard !running else { return }
+        running = true
+        Task.detached { [weak self, compute] in
+            let lines = compute()
+            await self?.finish(lines)
+        }
+    }
+
+    private func finish(_ lines: [RemoteMenuLine]) {
+        running = false
+        show(lines)
+    }
+}
+
+/// Puts the remote access section, a separator and then its lines, where `old` is in the menu, or at the end
+/// when it is not there; returns the items put in. Like the permission lines they have no action, so they
+/// show as information.
+@MainActor
+func placeRemoteSection(_ lines: [RemoteMenuLine], in menu: NSMenu, replacing old: [NSMenuItem]) -> [NSMenuItem] {
+    let found = old.map { menu.index(of: $0) }.filter { $0 >= 0 }.min()
+    for item in old where item.menu === menu {
+        menu.removeItem(item)
+    }
+    var index = found ?? menu.numberOfItems
+    let items = [NSMenuItem.separator()] + lines.map { line in
+        let item = NSMenuItem(title: line.title, action: nil, keyEquivalent: "")
+        item.indentationLevel = line.indented ? 1 : 0
+        return item
+    }
+    for item in items {
+        menu.insertItem(item, at: index)
+        index += 1
+    }
+    return items
 }
 
 /// Drawn in the 24-point grid of Assets/mascot.svg and scaled to the menu bar's 18.

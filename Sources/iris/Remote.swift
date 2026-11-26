@@ -46,70 +46,122 @@ struct RemoteStatus: ParsableCommand {
     var tokenFile: String?
 
     func run() throws {
-        let scopePath = ((scopeFile ?? defaultScopeFile) as NSString).expandingTildeInPath
-        let tokenPath = ((tokenFile ?? defaultTokenFile) as NSString).expandingTildeInPath
-        let modified = modificationDate(scopePath)
-
-        var file: ScopeFile?
-        var pinned: PinnedScope?
-        var usable: Bool?
-        var problem: String?
-        do {
-            let read = try readScopeFile(scopePath)
-            file = read
-            pinned = try pinScope(read, scopePath, listing: listWithoutAsking)
-            usable = true
-        } catch let error as NotAsked {
-            problem = error.description
-        } catch {
-            usable = false
-            problem = "\(error)"
-        }
-
-        var tokenProblem: String?
-        do {
-            _ = try readToken(tokenPath)
-        } catch {
-            tokenProblem = "\(error)"
-        }
-
-        let thisFile = followingLinks(scopePath)
-        let listeners = try runningListeners().map { listener -> (Listener, ListenerState) in
-            let state: ListenerState = if resolvedScopeFile(of: listener) != thisFile {
-                .otherFile
-            } else if let modified {
-                listener.started > modified ? .current : .changed
-            } else {
-                .unknown
-            }
-            return (listener, state)
-        }
-
-        let status: [String: Any] = [
-            "summary": remoteSummary(usable: usable, listeners: listeners.map { ($0.0.port, $0.1) }),
-            "scopeFile": ["path": scopePath, "modified": orNull(modified.map(iso)), "usable": orNull(usable),
-                          "problem": orNull(problem)],
-            "calendar": orNull(file.map { file in
-                var entry = appEntry(.calendars, file, file.calendars, pinned.map { $0.calendars })
-                let changeable = entry["access"] as? String == "read and write" && file.sharedEvents
-                entry["eventsWithOtherPeople"] = changeable ? "can be changed" : "cannot be changed"
-                return entry
-            }),
-            "notes": orNull(file.map { appEntry(.folders, $0, $0.folders, pinned.map { $0.folders }) }),
-            "reminders": orNull(file.map { appEntry(.lists, $0, $0.lists, pinned.map { $0.lists }) }),
-            "writesPerHour": orNull(file.flatMap(writeLimit)),
-            "tools": orNull(try pinned.map { try httpOffering($0.http).map(\.name) }),
-            "tokenFile": ["path": tokenPath, "exists": FileManager.default.fileExists(atPath: tokenPath),
-                          "passes": tokenProblem == nil, "problem": orNull(tokenProblem)],
-            "listeners": listeners.map { listener, state -> [String: Any] in
-                ["pid": Int(listener.pid), "port": listener.port, "scopeFile": listener.scopeFile,
-                 "started": iso(listener.started), "usesThisScopeFile": state != .otherFile,
-                 "current": orNull(state == .current ? true : state == .changed ? false : nil)]
-            },
-        ]
-        let data = try JSONSerialization.data(withJSONObject: status, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
+        let state = try remoteState(scopePath: ((scopeFile ?? defaultScopeFile) as NSString).expandingTildeInPath,
+                                    tokenPath: ((tokenFile ?? defaultTokenFile) as NSString).expandingTildeInPath)
+        let data = try JSONSerialization.data(withJSONObject: statusJSON(state), options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
         print(String(decoding: data, as: UTF8.self))
     }
+}
+
+/// What a scope file allows in one app: the access word, and the items as they are called now.
+struct AppAccess: Equatable {
+    enum Items: Equatable {
+        case all
+        case named([String])  // [] when the file names none
+        case unknown          // the names could not be looked up
+    }
+
+    let access: String
+    let items: Items
+
+    var count: Int? {
+        if case .named(let names) = items { names.count } else { nil }
+    }
+}
+
+/// Everything `iris remote status` reports, worked out once for the command and the menu bar.
+struct RemoteState {
+    let scopePath: String
+    let modified: Date?
+    let usable: Bool?
+    let problem: String?
+    // Each nil when the file cannot be read as a scope file.
+    let calendar: AppAccess?
+    let notes: AppAccess?
+    let reminders: AppAccess?
+    let eventsWithOtherPeople: Bool
+    let writesCounted: String?
+    let tools: [String]?
+    let tokenPath: String
+    let tokenExists: Bool
+    let tokenProblem: String?
+    let listeners: [(listener: Listener, state: ListenerState)]
+}
+
+func remoteState(scopePath: String, tokenPath: String) throws -> RemoteState {
+    let modified = modificationDate(scopePath)
+
+    var file: ScopeFile?
+    var pinned: PinnedScope?
+    var usable: Bool?
+    var problem: String?
+    do {
+        let read = try readScopeFile(scopePath)
+        file = read
+        pinned = try pinScope(read, scopePath, listing: listWithoutAsking)
+        usable = true
+    } catch let error as NotAsked {
+        problem = error.description
+    } catch {
+        usable = false
+        problem = "\(error)"
+    }
+
+    var tokenProblem: String?
+    do {
+        _ = try readToken(tokenPath)
+    } catch {
+        tokenProblem = "\(error)"
+    }
+
+    let thisFile = followingLinks(scopePath)
+    let listeners = try runningListeners().map { listener -> (Listener, ListenerState) in
+        let state: ListenerState = if resolvedScopeFile(of: listener) != thisFile {
+            .otherFile
+        } else if let modified {
+            listener.started > modified ? .current : .changed
+        } else {
+            .unknown
+        }
+        return (listener, state)
+    }
+
+    let calendar = file.map { appAccess(.calendars, $0, $0.calendars, pinned.map { $0.calendars }) }
+    return RemoteState(
+        scopePath: scopePath, modified: modified, usable: usable, problem: problem,
+        calendar: calendar,
+        notes: file.map { appAccess(.folders, $0, $0.folders, pinned.map { $0.folders }) },
+        reminders: file.map { appAccess(.lists, $0, $0.lists, pinned.map { $0.lists }) },
+        eventsWithOtherPeople: calendar?.access == "read and write" && file?.sharedEvents == true,
+        writesCounted: file.flatMap(writesCounted),
+        tools: try pinned.map { try httpOffering($0.http).map(\.name) },
+        tokenPath: tokenPath, tokenExists: FileManager.default.fileExists(atPath: tokenPath), tokenProblem: tokenProblem,
+        listeners: listeners)
+}
+
+/// The object `iris remote status` prints.
+private func statusJSON(_ state: RemoteState) -> [String: Any] {
+    [
+        "summary": remoteSummary(usable: state.usable, listeners: state.listeners.map { ($0.listener.port, $0.state) }),
+        "scopeFile": ["path": state.scopePath, "modified": orNull(state.modified.map(iso)), "usable": orNull(state.usable),
+                      "problem": orNull(state.problem)],
+        "calendar": orNull(state.calendar.map { calendar in
+            var entry = appEntry("calendars", calendar)
+            entry["eventsWithOtherPeople"] = state.eventsWithOtherPeople ? "can be changed" : "cannot be changed"
+            return entry
+        }),
+        "notes": orNull(state.notes.map { appEntry("folders", $0) }),
+        "reminders": orNull(state.reminders.map { appEntry("lists", $0) }),
+        "writesPerHour": orNull(state.writesCounted.map { ["limit": writesPerHour, "counts": $0] }),
+        "tools": orNull(state.tools),
+        "tokenFile": ["path": state.tokenPath, "exists": state.tokenExists,
+                      "passes": state.tokenProblem == nil, "problem": orNull(state.tokenProblem)],
+        "listeners": state.listeners.map { listener, use -> [String: Any] in
+            ["pid": Int(listener.pid), "port": listener.port, "scopeFile": listener.scopeFile,
+             "started": iso(listener.started), "usesThisScopeFile": use != .otherFile,
+             "current": orNull(use == .current ? true : use == .changed ? false : nil)]
+        },
+    ]
 }
 
 /// What the scope file allows in one app: none when it names none of the kind (no lists key names no
@@ -123,41 +175,40 @@ func accessWord(_ kind: ScopeKind, _ file: ScopeFile) -> String {
 }
 
 /// `named` is nil when the scope could not be pinned, and holds nil when the file says "all".
-private func appEntry(_ kind: ScopeKind, _ file: ScopeFile, _ written: [String]?, _ named: [Named]??) -> [String: Any] {
-    let key = switch kind {
-    case .calendars: "calendars"
-    case .folders: "folders"
-    case .lists: "lists"
-    }
-    var entry: [String: Any] = ["access": accessWord(kind, file)]
-    if written == nil {
-        entry[key] = "all"
-        entry["count"] = NSNull()
+private func appAccess(_ kind: ScopeKind, _ file: ScopeFile, _ written: [String]?, _ named: [Named]??) -> AppAccess {
+    let items: AppAccess.Items = if written == nil {
+        .all
     } else if written == [] {
-        entry[key] = [String]()
-        entry["count"] = 0
-    } else if let named, let items = named {
-        entry[key] = items.map(\.name)
-        entry["count"] = items.count
+        .named([])
+    } else if let named, let pinned = named {
+        .named(pinned.map(\.name))
     } else {
-        entry[key] = NSNull()
-        entry["count"] = NSNull()
+        .unknown
     }
-    return entry
+    return AppAccess(access: accessWord(kind, file), items: items)
+}
+
+private func appEntry(_ key: String, _ app: AppAccess) -> [String: Any] {
+    let items: Any = switch app.items {
+    case .all: "all"
+    case .named(let names): names
+    case .unknown: NSNull()
+    }
+    return ["access": app.access, key: items, "count": orNull(app.count)]
 }
 
 private func orNull(_ value: Any?) -> Any {
     value ?? NSNull()
 }
 
-private func writeLimit(_ file: ScopeFile) -> [String: Any]? {
-    let counts = switch (file.writes, file.reminderWrites) {
+/// Which writes share the hourly limit; nil when no write is on.
+private func writesCounted(_ file: ScopeFile) -> String? {
+    switch (file.writes, file.reminderWrites) {
     case (true, true): "calendar and reminder writes together"
     case (true, false): "calendar writes"
     case (false, true): "reminder writes"
-    case (false, false): ""
+    case (false, false): nil
     }
-    return counts.isEmpty ? nil : ["limit": writesPerHour, "counts": counts]
 }
 
 private func modificationDate(_ path: String) -> Date? {
@@ -253,6 +304,48 @@ func remoteSummary(usable: Bool?, listeners: [(port: Int, state: ListenerState)]
         sentences.append("The one\(other.count == 1 ? "" : "s") on \(ports(other)) \(other.count == 1 ? "uses" : "use") another scope file.")
     }
     return sentences.joined(separator: " ")
+}
+
+struct RemoteMenuLine: Equatable {
+    let title: String
+    var indented = false
+}
+
+/// The menu bar's remote access section: a headline, and under it what each app allows, only while a server
+/// runs with this scope file; counts, never names.
+func remoteMenuLines(_ state: RemoteState) -> [RemoteMenuLine] {
+    let listeners = state.listeners
+    guard !listeners.isEmpty else { return [RemoteMenuLine(title: "Remote access: off")] }
+    let ours = listeners.filter { $0.state != .otherFile }
+    var headline = "Remote access: on, "
+    headline += listeners.count == 1 ? "" : "\(listeners.count) servers, "
+    headline += ports(listeners.map(\.listener.port))
+    if ours.isEmpty {
+        headline += " — started with other settings"
+    } else if state.usable == false {
+        headline += " — settings have a problem"
+    } else if ours.contains(where: { $0.state == .changed }) {
+        headline += " — restart to apply changes"
+    }
+    var lines = [RemoteMenuLine(title: headline)]
+    guard !ours.isEmpty else { return lines }
+    let apps = [("Calendar", state.calendar, "calendar"), ("Notes", state.notes, "folder"), ("Reminders", state.reminders, "list")]
+    for (app, access, noun) in apps {
+        guard let access else { continue }
+        let allows = switch (access.access, access.items) {
+        case ("none", _): "off"
+        case (let word, .all): "\(word), all \(noun)s"
+        case (let word, .named(let names)): "\(word), \(names.count) \(noun)\(names.count == 1 ? "" : "s")"
+        case (let word, .unknown): word
+        }
+        lines.append(RemoteMenuLine(title: "\(app): \(allows)", indented: true))
+    }
+    // The lines above are this scope file's; a server started with another file allows something else.
+    let others = listeners.filter { $0.state == .otherFile }.map(\.listener.port)
+    if !others.isEmpty {
+        lines.append(RemoteMenuLine(title: "Other settings on \(ports(others))", indented: true))
+    }
+    return lines
 }
 
 private func ports(_ numbers: [Int]) -> String {
