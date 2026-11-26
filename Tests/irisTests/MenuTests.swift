@@ -109,17 +109,18 @@ final class MenuTests: XCTestCase {
             }
             let notesDenied = Permissions(calendar: .fullAccess, reminders: .fullAccess, notes: "denied")
             XCTAssertEqual(rows(notesDenied, remote)[2], needs("Notes", .open(.automation)))
-            // Not determined is no problem for Reminders or Notes; a click on Notes asks, as Allow Notes Access… did.
+            // Not determined is no problem for Reminders or Notes, and their rows do nothing: Settings offers to ask Notes.
             let undecided = Permissions(calendar: .fullAccess, reminders: .notDetermined, notes: "not determined")
-            let fineRows = rows(fine, remote)
-            XCTAssertEqual(rows(undecided, remote), Array(fineRows.prefix(2))
-                               + [AppRow(title: "Notes", detail: fineRows[2].detail, problem: false, action: .askNotes)])
+            XCTAssertEqual(rows(undecided, remote), rows(fine, remote))
+            XCTAssertTrue(menuModel(remote, undecided).offersNotesAccess)
+            XCTAssertFalse(menuModel(remote, fine).offersNotesAccess)
+            XCTAssertFalse(menuModel(remote, notesDenied).offersNotesAccess)
         }
 
         let undecided = Permissions(calendar: .fullAccess, reminders: .notDetermined, notes: "not determined")
         XCTAssertEqual(rows(undecided, on), [AppRow(title: "Calendar", detail: "Read & write", problem: false, action: nil),
                                              AppRow(title: "Reminders", detail: "Off", problem: false, action: nil),
-                                             AppRow(title: "Notes", detail: "Read only", problem: false, action: .askNotes)])
+                                             AppRow(title: "Notes", detail: "Read only", problem: false, action: nil)])
         for notes in ["unknown (Notes not running)", "unknown (-1)"] {
             XCTAssertEqual(rows(Permissions(calendar: .fullAccess, reminders: .fullAccess, notes: notes), on), rows(fine, on))
         }
@@ -198,7 +199,12 @@ final class MenuTests: XCTestCase {
         // version has no action, so it shows as information.
         let settings = menu.items[6].submenu!
         XCTAssertTrue(settings.autoenablesItems)
-        XCTAssertEqual(settings.items.map(\.title), ["Iris 1.0", "Check for Updates…", "Open at Login"])
+        XCTAssertEqual(settings.items.map(\.title), ["Iris 1.0", "Check for Updates…", "Open at Login", "Allow Notes Access…"])
+        // Offered only while Notes was never asked.
+        XCTAssertTrue(settings.items[3].isHidden)
+        items.show(menuModel(.checking, Permissions(calendar: .fullAccess, reminders: .fullAccess, notes: "not determined")))
+        XCTAssertFalse(settings.items[3].isHidden)
+        XCTAssertEqual(settings.items[3].representedObject as? RowAction, .askNotes)
         XCTAssertNil(settings.items[0].action)
         XCTAssertEqual(settings.items[2].state, .on)
         XCTAssertTrue(settings.items[2].target === actions)
@@ -206,9 +212,9 @@ final class MenuTests: XCTestCase {
         XCTAssertEqual(settings.items[1].action, #selector(SPUStandardUpdaterController.checkForUpdates))
     }
 
-    /// The menu is as wide as the header's longest line needs, also when that line comes in while the menu is open.
+    /// A menu already measured grows for a longer header line. Not a test of a menu that is open.
     @MainActor
-    func testHeaderWidth() {
+    func testHeaderWidthBeforeOpening() {
         let actions = Actions()
         let long = menuModel(.known(state(listeners: [(8765, .current), (8788, .otherFile)])), fine)
         for first in [long, menuModel(.known(state(listeners: [])), fine)] {
@@ -216,6 +222,7 @@ final class MenuTests: XCTestCase {
             let items = MenuItems(target: actions)
             fill(menu, with: items, version: "1.0", openAtLogin: .off, target: actions, updater: nil)
             items.show(first)
+            _ = menu.size
             items.show(long)
             XCTAssertGreaterThanOrEqual(menu.size.width, items.headerView.fittingSize.width, first.status)
         }

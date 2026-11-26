@@ -44,9 +44,12 @@ final class MenuBar: NSObject, NSMenuDelegate, MenuActions {
         showStatus()
         probeNotes()
         // The grant changes in System Settings, which tells no one; asking is cheap.
-        timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+        // In the common modes, so it also runs while the menu is open.
+        let timer = Timer(timeInterval: 5, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.refresh() }
         }
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
     }
 
     private func refresh() {
@@ -229,14 +232,15 @@ struct AppRow: Equatable {
 struct MenuModel: Equatable {
     let status: String  // the header's grey line
     let rows: [AppRow]
+    var offersNotesAccess = false  // Allow Notes Access… under Settings, while Notes was never asked
 }
 
 /// The menu for a remote access answer and the permissions. The rows show what the scope file allows, also
 /// while no server runs: what turning remote access on would allow. They show nothing they cannot know: no
 /// answer yet, or every server started with another file. A missing permission takes a row's place: Calendar
 /// short of full access, Reminders denied or write only, Notes denied. Not determined is no problem for
-/// Reminders or Notes, as for the icon's dot: many people never use them with Iris, and `iris reminders lists`
-/// or a click on the Notes row asks.
+/// Reminders or Notes, as for the icon's dot: many people never use them with Iris; `iris reminders lists`
+/// asks for Reminders, and Allow Notes Access… under Settings for Notes. A row that looks well never asks.
 func menuModel(_ remote: RemoteAnswer, _ permissions: Permissions) -> MenuModel {
     var status = "Checking…"
     var allows: (AppAccess?) -> String? = { _ in nil }
@@ -254,9 +258,9 @@ func menuModel(_ remote: RemoteAnswer, _ permissions: Permissions) -> MenuModel 
         }
     }
 
-    func row(_ title: String, _ access: AppAccess?, problem fix: RowAction?, otherwise action: RowAction? = nil) -> AppRow {
+    func row(_ title: String, _ access: AppAccess?, problem fix: RowAction?) -> AppRow {
         if let fix { return AppRow(title: title, detail: "Needs access", problem: true, action: fix) }
-        return AppRow(title: title, detail: allows(access), problem: false, action: action)
+        return AppRow(title: title, detail: allows(access), problem: false, action: nil)
     }
     let calendarFix: RowAction? = switch permissions.calendar {
     case .fullAccess: nil
@@ -271,9 +275,8 @@ func menuModel(_ remote: RemoteAnswer, _ permissions: Permissions) -> MenuModel 
     return MenuModel(status: status, rows: [
         row("Calendar", state?.calendar, problem: calendarFix),
         row("Reminders", state?.reminders, problem: remindersFix),
-        row("Notes", state?.notes, problem: permissions.notes == "denied" ? .open(.automation) : nil,
-            otherwise: permissions.notes == "not determined" ? .askNotes : nil),
-    ])
+        row("Notes", state?.notes, problem: permissions.notes == "denied" ? .open(.automation) : nil),
+    ], offersNotesAccess: permissions.notes == "not determined")
 }
 
 private func accessWords(_ access: AppAccess) -> String {
@@ -315,11 +318,15 @@ final class MenuItems {
     let header = NSMenuItem()
     let headerView = MenuHeader()
     let rows: [NSMenuItem]
+    let notesAccess = NSMenuItem(title: "Allow Notes Access…", action: #selector(MenuActions.chooseRow), keyEquivalent: "")
     private var shown: MenuModel?
 
     init(target: MenuActions) {
         header.view = headerView
         header.isEnabled = false
+        notesAccess.target = target
+        notesAccess.representedObject = RowAction.askNotes
+        notesAccess.isHidden = true
         rows = (0..<3).map { _ in
             let item = NSMenuItem(title: "", action: #selector(MenuActions.chooseRow), keyEquivalent: "")
             item.target = target
@@ -336,6 +343,7 @@ final class MenuItems {
             item.badge = row.detail.map { NSMenuItemBadge(string: $0) }
             item.representedObject = row.action
         }
+        notesAccess.isHidden = !model.offersNotesAccess
     }
 }
 
@@ -361,6 +369,7 @@ func fill(_ menu: NSMenu, with items: MenuItems, version: String?, openAtLogin: 
     login.target = target
     login.state = openAtLogin
     settings.addItem(login)
+    settings.addItem(items.notesAccess)
     let settingsItem = NSMenuItem(title: "Settings", action: nil, keyEquivalent: "")
     settingsItem.submenu = settings
     menu.addItem(settingsItem)
