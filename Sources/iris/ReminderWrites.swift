@@ -198,7 +198,9 @@ struct CompleteReminder: AsyncParsableCommand {
             occurrence: its current due date, due.date as `iris reminders list` prints it. Without \
             --occurrence, or with another date, nothing is changed and the error says the date it is due \
             now; another date can be an occurrence already completed. So the same call sent twice completes \
-            one occurrence, and the second call is refused, since the reminder is due later by then.
+            one occurrence, and the second call is refused, since the reminder is due later by then. That \
+            holds for calls made one after the other; a change made at the same moment by another device or \
+            program is not guarded against.
 
             Completing an occurrence works as it does in Reminders: the reminder keeps its id, stays open \
             (completed false) and repeating, and is now due on its next occurrence, which Reminders chooses. \
@@ -234,7 +236,7 @@ struct CompleteReminder: AsyncParsableCommand {
     @Flag(help: "Mark it not completed instead.")
     var undo = false
 
-    @Option(help: "For a repeating reminder: the occurrence to complete, YYYY-MM-DD, which must be its current due date. Required when it repeats; refused when it does not.")
+    @Option(help: "Required to complete an open repeating reminder: its current due date, YYYY-MM-DD. Ignored when a repeating reminder is already completed. Refused for a reminder that does not repeat, and with --undo.")
     var occurrence: String?
 
     func validate() throws {
@@ -278,7 +280,9 @@ struct CompleteReminder: AsyncParsableCommand {
         // so a lookup that fails leaves completedOccurrence null instead of reporting an error.
         if let completedBefore, let occurrence, !saved.completed,
            let after = try? await fetchReminders(in: store, lists: [list], status: .completed, mac: mac) {
-            copy = completedOccurrence(before: completedBefore, after: after, saved: saved.id, occurrence: occurrence)
+            // The occurrence carries the series' title and does not repeat; anything else is another reminder.
+            let found = completedOccurrence(before: completedBefore, after: after, saved: saved.id, occurrence: occurrence)
+            if let found, found.title == saved.title, !found.recurring { copy = found }
         }
         try emit(CompletedReminder(reminder: saved, completedOccurrence: copy))
     }
@@ -333,6 +337,7 @@ func completedOccurrence(before: Set<String>, after: [Reminder], saved: String, 
 
 /// Whether text is a date written YYYY-MM-DD, as due.date prints one.
 func isDay(_ text: String) -> Bool {
+    guard text.utf8.count == 10 else { return false }       // a year of five digits would pass what follows
     var utc = Calendar(identifier: .gregorian)
     utc.timeZone = TimeZone(secondsFromGMT: 0)!
     guard let day = parseDay(text, timeZone: utc.timeZone) else { return false }

@@ -172,6 +172,11 @@ final class ReminderWriteTests: XCTestCase {
         XCTAssertEqual(step(completed: true, occurrence: nil), .nothing)
         XCTAssertEqual(step(completed: true, occurrence: "2030-03-03"), .nothing)
         XCTAssertEqual(step(completed: true, undo: true, occurrence: nil), .mark(completed: false))
+        // The same without a due date: an ended series is left as it is before anything is asked of its due.
+        for occurrence in [nil, "2030-03-04", "2030-03-03"] as [String?] {
+            XCTAssertEqual(step(completed: true, occurrence: occurrence, due: nil), .nothing)
+        }
+        XCTAssertEqual(step(completed: true, undo: true, occurrence: nil, due: nil), .mark(completed: false))
 
         let refusals: [(CompletionStep, String)] = [
             (step(occurrence: nil), "--occurrence 2030-03-04"),
@@ -210,7 +215,7 @@ final class ReminderWriteTests: XCTestCase {
         XCTAssertNoThrow(try CompleteReminder.parse(["some-id"]))
         XCTAssertNoThrow(try CompleteReminder.parse(["some-id", "--undo"]))
         XCTAssertNoThrow(try CompleteReminder.parse(["some-id", "--occurrence", "2030-03-04"]))
-        for bad in ["2030-3-4", "2030-03-04T09:00", "2030-02-30", "tomorrow", ""] {
+        for bad in ["2030-3-4", "2030-03-04T09:00", "2030-02-30", "tomorrow", "", "10000-03-04"] {
             XCTAssertThrowsError(try CompleteReminder.parse(["some-id", "--occurrence", bad]), bad)
         }
         XCTAssertThrowsError(try CompleteReminder.parse(["some-id", "--undo", "--occurrence", "2030-03-04"]))
@@ -226,7 +231,9 @@ final class ReminderWriteTests: XCTestCase {
                                          "completedAt", "created", "modified", "recurring", "completedOccurrence"])
         XCTAssertTrue(plain["completedOccurrence"] is NSNull)
         let done = try keys(CompletedReminder(reminder: reminder("a", due: nil), completedOccurrence: reminder("b", due: nil)))
-        XCTAssertEqual((done["completedOccurrence"] as? [String: Any])?["id"] as? String, "b")
+        let nested = try XCTUnwrap(done["completedOccurrence"] as? [String: Any])
+        XCTAssertEqual(nested["id"] as? String, "b")
+        XCTAssertEqual(Set(nested.keys), Set(plain.keys).subtracting(["completedOccurrence"]))
         XCTAssertEqual(done.count, 13)
     }
 

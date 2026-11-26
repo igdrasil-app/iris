@@ -144,7 +144,8 @@ private let instructions = """
     the note is password protected. \
     Apple Reminders can be read, added, changed, completed and deleted, where reminder_lists, reminders, \
     add_reminder, update_reminder, complete_reminder and delete_reminder are offered; completing a repeating \
-    reminder needs occurrence, its current due date, and it stays open, due on its next occurrence; \
+    reminder needs occurrence, its current due date, and it stays open, due on its next occurrence, \
+    unless that was the last one of a series that ends, which completes the reminder itself; \
     a reminder's due date and time are as kept in the reminder, and its at is the moment in the Mac's zone. \
     Dates in: 2026-10-13, 2026-10-13T09:00 (local time), or ISO 8601 with an offset or Z; \
     a bare date given as an end (to, end, until) includes that whole day. Dates out: ISO 8601 in the Mac's zone. \

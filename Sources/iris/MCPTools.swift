@@ -263,7 +263,7 @@ let tools: [Tool] = [
          command: ["reminders", "complete"], scope: nil, parameters: [
         Parameter(name: "id", kind: .positional, description: "Reminder id, from reminders.", required: true),
         Parameter(name: "undo", kind: .flag, description: "Mark it not completed instead. Not with occurrence. Default: off."),
-        Parameter(name: "occurrence", kind: .string, description: "For a repeating reminder, required: the occurrence to complete, YYYY-MM-DD, which must be its current due date (due.date). Another date is refused, with the date it is due now. Refused for a reminder that does not repeat."),
+        Parameter(name: "occurrence", kind: .string, description: "Required to complete an open repeating reminder: its current due date (due.date), YYYY-MM-DD. Another date is refused, with the date it is due now. Ignored when a repeating reminder is already completed. Refused for a reminder that does not repeat, and with undo."),
     ]),
 
     Tool(name: "delete_reminder",
