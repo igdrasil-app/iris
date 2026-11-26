@@ -15,6 +15,6 @@ iris is a macOS binary that gives coding agents (Claude Code, Cursor, Codex, Ope
 - Over HTTP, unless the scope file says `"sharedEvents": true`, every update_event and delete_event carries `--only-mine`, pinned at start like the scope: an event with anyone else on it is refused, and so is `--span future` on a repeating event, after scope and existence and before any change.
 - A calendar name that matches nothing is an error, never a silent widening to every calendar.
 - Writes change one event per call and print the result. A recurring event needs `--occurrence` or `--span future`; placeholder ids and read-only calendars are refused.
-- Reminders: only `iris reminders lists` so far (tool `reminder_lists`, stdio only); reminders themselves cannot be read or changed yet.
+- Reminders are read only so far: `iris reminders lists` and `iris reminders list` (tools `reminder_lists` and `reminders`, stdio only). EventKit reads an empty list of lists as every list: never pass one.
 - Notes are read only, through batched Apple Events: one event per property, never one per note. The only caller text ever put into a script is a note id that passed the id check.
 - Plain, readable Swift over clever Swift. Comment only what the code does not already say.
