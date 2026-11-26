@@ -104,6 +104,15 @@ final class ReminderTests: XCTestCase {
         XCTAssertEqual(reminderDue(components(2030, 2, 30), mac: mac)!.date, "2030-02-30")
     }
 
+    // 02:30 on the night Chicago's clocks go forward is skipped: the system reads it as 03:30, and so does at.
+    func testAClockTimeTheZoneSkipsReadsAnHourLater() {
+        let due = reminderDue(components(2030, 3, 10, 2, 30, zone: "America/Chicago"), mac: mac)!
+        XCTAssertEqual(due.time, "02:30")
+        XCTAssertEqual(due.at, instant("2030-03-10T08:30:00Z"))          // 03:30 at -05:00
+        // The hour that comes twice in autumn names a moment as it is.
+        XCTAssertNotNil(reminderDue(components(2030, 11, 3, 1, 30, zone: "America/Chicago"), mac: mac)!.at)
+    }
+
     // MARK: priority
 
     func testPriorityWords() {
@@ -146,6 +155,11 @@ final class ReminderTests: XCTestCase {
         XCTAssertFalse(passes(timed("2030-03-04T16:00:01Z"), from, to))
         XCTAssertTrue(passes(timed("2031-01-01T00:00:00Z"), from, nil))
         XCTAssertTrue(passes(timed("2029-01-01T00:00:00Z"), nil, to))
+        // One bound alone still bounds.
+        XCTAssertFalse(passes(timed("2030-03-04T14:59:59Z"), from, nil))
+        XCTAssertTrue(passes(timed(from), from, nil))
+        XCTAssertTrue(passes(timed(to), nil, to))
+        XCTAssertFalse(passes(timed("2030-03-04T16:00:01Z"), nil, to))
     }
 
     // Chicago's 4 March runs from 06:00Z on the 4th to 06:00Z on the 5th.
@@ -244,6 +258,15 @@ final class ReminderTests: XCTestCase {
         }
         assertOrder([timed("a", "Ann", at: 1_800_000_000.9), timed("b", "Bob", at: 1_800_000_000.2),
                      timed("c", "Ann", at: 1_800_000_001.0)])
+    }
+
+    // What is printed is the second the time falls in, never the next one, so it agrees with the order.
+    func testATimeIsPrintedAsTheSecondItFallsIn() {
+        let late = Date(timeIntervalSince1970: 1_800_000_000.9999)
+        XCTAssertEqual(reminderISO(late), reminderISO(Date(timeIntervalSince1970: 1_800_000_000)))
+        XCTAssertNotEqual(reminderISO(late), reminderISO(Date(timeIntervalSince1970: 1_800_000_001)))
+        XCTAssertEqual(wholeSecond(Date(timeIntervalSince1970: -0.5)), -1)
+        XCTAssertEqual(reminderISO(Date(timeIntervalSince1970: -0.5)), reminderISO(Date(timeIntervalSince1970: -1)))
     }
 
     func testAReminderDoesNotPrecedeItself() {

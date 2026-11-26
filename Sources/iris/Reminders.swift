@@ -69,7 +69,9 @@ struct ReminderList: AsyncParsableCommand {
             - A floating time, kept without a zone, which each device reads as its own clock time, say 14:00: \
             time says 14:00, timeZone is null, and at is 14:00 that day on this Mac, in its zone now; a Mac \
             in another zone gives another at.
-            at is also null when the date and time kept do not name a moment.
+            at is also null when the date and time kept do not name a moment, as 30 February does not. A \
+            clock time the zone skips when its clocks go forward, say 02:30 that night, does name one: \
+            at is then an hour later, 03:30, as the system reads it, while time still says 02:30.
 
             --due-from and --due-to keep the reminders due in that range, both ends included. Without either, \
             every reminder is listed, with or without a due date; with either, one without a due date is left \
@@ -164,9 +166,9 @@ struct Reminder: Encodable {
         try container.encode(due, forKey: .due)
         try container.encode(priority, forKey: .priority)
         try container.encode(completed, forKey: .completed)
-        try container.encode(completedAt.map(iso), forKey: .completedAt)
-        try container.encode(created.map(iso), forKey: .created)
-        try container.encode(modified.map(iso), forKey: .modified)
+        try container.encode(completedAt.map(reminderISO), forKey: .completedAt)
+        try container.encode(created.map(reminderISO), forKey: .created)
+        try container.encode(modified.map(reminderISO), forKey: .modified)
         try container.encode(recurring, forKey: .recurring)
     }
 }
@@ -203,7 +205,7 @@ struct Due: Encodable, Equatable {
         try container.encode(date, forKey: .date)
         try container.encode(time, forKey: .time)
         try container.encode(timeZone, forKey: .timeZone)
-        try container.encode(at.map(iso), forKey: .at)
+        try container.encode(at.map(reminderISO), forKey: .at)
     }
 }
 
@@ -242,15 +244,15 @@ func reminderDue(_ components: DateComponents?, mac: Calendar) -> Due? {
     guard let components, let year = components.year, let month = components.month, let day = components.day else {
         return nil
     }
-    let date = String(format: "%04d-%02d-%02d", year, month, day)
+    let date = String(format: "%04ld-%02ld-%02ld", year, month, day)
     let ownDay = Day(year: year, month: month, day: day)
     guard let hour = components.hour else {
         return Due(date: date, time: nil, timeZone: nil, at: nil, day: ownDay)
     }
     let minute = components.minute ?? 0
     let second = components.second ?? 0
-    let time = second == 0 ? String(format: "%02d:%02d", hour, minute)
-                           : String(format: "%02d:%02d:%02d", hour, minute, second)
+    let time = second == 0 ? String(format: "%02ld:%02ld", hour, minute)
+                           : String(format: "%02ld:%02ld:%02ld", hour, minute, second)
     var calendar = Calendar(identifier: .gregorian)
     calendar.timeZone = components.timeZone ?? mac.timeZone
     let at = moment(year, month, day, hour, minute, second, in: calendar)
@@ -318,10 +320,16 @@ private func newerFirst(_ a: Date?, _ b: Date?) -> Bool? {
     }
 }
 
-/// Times are printed to the second, so they are ordered to the second: the order can then be told from
-/// the output, and a fraction nobody sees never decides it.
-private func wholeSecond(_ date: Date) -> Int {
+/// Times are ordered and printed by the whole second they fall in, so the order can be told from the
+/// output and a fraction nobody sees never decides it.
+func wholeSecond(_ date: Date) -> Int {
     Int(date.timeIntervalSince1970.rounded(.down))
+}
+
+/// A reminder's time as printed: cut to its whole second first, since the formatter would round a late
+/// fraction up into the next second and so disagree with the order.
+func reminderISO(_ date: Date) -> String {
+    iso(Date(timeIntervalSince1970: TimeInterval(wholeSecond(date))))
 }
 
 /// How long a person at the Mac has to answer the Reminders prompt before the command gives up.

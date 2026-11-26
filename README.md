@@ -43,7 +43,7 @@ While it runs, the menu bar app updates Iris itself: it checks once a day, offer
     iris mcp                                                        # MCP server over stdio; hosts start it, see below
     iris mcp --http                                                 # over HTTP on 127.0.0.1:8765, behind a token: reads, writes if turned on
 
-Dates in are `2026-10-13`, `2026-10-13T09:00` (local time) or ISO 8601 with an offset or `Z`, seconds and fractions optional; a bare date given as an end (`--to`, `--end`, `--until`) includes that whole day. Dates out are ISO 8601 in the Mac's zone.
+Dates in are `2026-10-13`, `2026-10-13T09:00` (local time) or ISO 8601 with an offset or `Z`, seconds and fractions optional; a bare date given as an end (`--to`, `--end`, `--until`) includes that whole day. Dates out are ISO 8601 in the Mac's zone. A reminder's `due` is the exception: its `date` and `time` are as kept in the reminder, not converted, and its `at` is that moment in the Mac's zone.
 
 ## Hosts
 
