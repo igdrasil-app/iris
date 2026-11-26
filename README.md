@@ -3,7 +3,7 @@
 Apple Calendar, Notes and Reminders for the agents you already run: Claude Code, Cursor, Codex, OpenClaw.
 One signed app that holds the permissions, a CLI and an MCP server.
 
-Calendar: read and write. Notes: read. Reminders: read, the lists and the reminders in them; nothing can be changed yet.
+Calendar: read and write. Notes: read. Reminders: read, add and delete; nothing can be changed or completed yet.
 
 ## Why
 
@@ -40,6 +40,8 @@ While it runs, the menu bar app updates Iris itself: it checks once a day, offer
     iris notes show <id>                                            # one note with its text; --html adds the HTML body
     iris reminders lists                                            # id, title, writable, source, open (not completed)
     iris reminders list --list Errands --due-to 2026-10-20          # open by default; --status completed or all
+    iris reminders add --list Errands --title "Buy milk" --due 2026-10-14   # a bare date is date only; no alarm is set
+    iris reminders delete <id>                                      # a repeating reminder is deleted whole
     iris mcp                                                        # MCP server over stdio; hosts start it, see below
     iris mcp --http                                                 # over HTTP on 127.0.0.1:8765, behind a token: reads, writes if turned on
 
@@ -47,7 +49,7 @@ Dates in are `2026-10-13`, `2026-10-13T09:00` (local time) or ISO 8601 with an o
 
 ## Hosts
 
-`iris mcp` serves the calendar, notes and reminders commands as MCP tools over stdio: `calendars`, `events`, `add_event`, `update_event`, `delete_event`, `note_folders`, `notes`, `search_notes`, `show_note`, `reminder_lists`, `reminders`, with the fields of the commands. A call still running after 60 seconds is stopped and returns an error, so the server keeps answering. Any host that starts local MCP servers can use it. Claude Code, Codex and Grok CLI:
+`iris mcp` serves the calendar, notes and reminders commands as MCP tools over stdio: `calendars`, `events`, `add_event`, `update_event`, `delete_event`, `note_folders`, `notes`, `search_notes`, `show_note`, `reminder_lists`, `reminders`, `add_reminder`, `delete_reminder`, with the fields of the commands. A call still running after 60 seconds is stopped and returns an error, so the server keeps answering. Any host that starts local MCP servers can use it. Claude Code, Codex and Grok CLI:
 
     claude mcp add --scope user iris -- iris mcp
     codex mcp add iris -- iris mcp
@@ -74,7 +76,7 @@ Muse Code (`~/.config/muse/settings.json`):
 
 ### Over HTTP
 
-`reminder_lists` and `reminders` are offered over stdio only, not over HTTP.
+The reminder tools are offered over stdio only, not over HTTP.
 
 `iris mcp --http` serves the read tools (`calendars`, `events`, `note_folders`, `notes`, `search_notes`, `show_note`), and the calendar writes only if you turn them on (below), at `http://127.0.0.1:8765/mcp` (a request gets one JSON reply and a notification an empty 202), for a host that cannot start a process on this Mac. It listens on 127.0.0.1 and nowhere else, and every request needs `Authorization: Bearer <token>`, with the token read at start from `~/Library/Application Support/Iris/http-token` (or `--token-file`; `--port` changes the port). Iris never creates the token file; this does:
 
@@ -112,7 +114,7 @@ Assistants that run in a vendor's cloud, such as Grok Bot, the Meta Muse app and
 
     make app                     # universal swift build, bundle as build/Iris.app, codesign; needs a Developer ID certificate
     build/Iris.app/Contents/MacOS/iris status
-    swift test                   # the HTTP gate (token, Origin, path, method, body framing), scope (who sees what), write guards, events with other people on them, alarm minutes, availability, attendees, the Reminders prompt time limit, how a reminder's due and priority read, the due filter and the order of reminders
+    swift test                   # the HTTP gate (token, Origin, path, method, body framing), scope (who sees what), write guards, events with other people on them, alarm minutes, availability, attendees, the Reminders prompt time limit, how a reminder's due and priority read and are written, the due filter and the order of reminders
     ./release.sh                 # the version in Info.plist: notarize, tar, GitHub release, bump the cask and the Sparkle appcast
                                  # bump CFBundleVersion with the version; Sparkle compares only that, and release.sh refuses a repeat
                                  # over SSH or from an agent, where the keychain cannot prompt: NOTARY_KEY=<p8> NOTARY_KEY_ID=<id> NOTARY_ISSUER=<uuid> SPARKLE_KEY=<file> ./release.sh

@@ -443,10 +443,12 @@ func parseDate(_ text: String) throws -> Date {
     throw ValidationError("unrecognised date '\(text)'; use 2026-10-13, 2026-10-13T09:00, or ISO 8601 with offset")
 }
 
-/// A bare date such as 2026-10-13, at local midnight; nil for anything with a time.
-func parseDay(_ text: String) -> Date? {
+/// A bare date such as 2026-10-13, at midnight in `timeZone`, the Mac's unless given; nil for anything with
+/// a time.
+func parseDay(_ text: String, timeZone: TimeZone = .current) -> Date? {
     let formatter = DateFormatter()
     formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.timeZone = timeZone
     formatter.dateFormat = "yyyy-MM-dd"
     return formatter.date(from: text)
 }
