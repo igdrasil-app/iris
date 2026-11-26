@@ -341,6 +341,35 @@ final class RemoteServerTests: XCTestCase {
         switched.turn(on: false)
     }
 
+    /// One that could not be identified and does not stop on SIGTERM keeps the failure through off and on, with no
+    /// second start beside it; once it has exited, the usual try follows.
+    @MainActor
+    func testUnidentifiedServerThatWillNotStop() throws {
+        let stubborn = try script(#"trap "" TERM; echo '{"port": 1}'; exec sleep 600"#)
+        let switched = server(stubborn, timing: RemoteServerTiming(retry: 0.5), lookup: { _ in nil })
+        switched.turn(on: true)
+        let pid = try XCTUnwrap(switched.status.pid)
+        let identity = ServerIdentity(pid: pid, started: try XCTUnwrap(processStart(pid)).started)
+        defer { killStill(identity) }
+        wait(10) { switched.status.phase != .starting }
+        XCTAssertEqual(switched.status.phase, .failed(unidentifiedServer))
+        switched.turn(on: false)
+        XCTAssertEqual(switched.status.phase, .failed(unidentifiedServer))
+        switched.turn(on: true)
+        XCTAssertEqual(switched.status.phase, .failed(unidentifiedServer))
+        wait(1) { false }
+        XCTAssertTrue(running(pid))
+        XCTAssertEqual(switched.status.pid, pid)
+        XCTAssertEqual(switched.starts, 1)
+        killStill(identity)
+        wait(5) { switched.starts > 1 }
+        XCTAssertEqual(switched.starts, 2)
+        let second = try XCTUnwrap(switched.status.pid)
+        let secondIdentity = ServerIdentity(pid: second, started: try XCTUnwrap(processStart(second)).started)
+        defer { killStill(secondIdentity) }
+        switched.turn(on: false)
+    }
+
     /// A recorded pid now with another start time is another process: it gets no signal, and Iris goes on.
     @MainActor
     func testNoSignalToAnotherProcess() throws {

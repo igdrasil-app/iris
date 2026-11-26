@@ -174,7 +174,10 @@ final class MenuBar: NSObject, NSMenuDelegate, MenuActions {
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "Remote access couldn't start"
-        alert.informativeText = reason + "\n\n" + remoteRetryNote
+        // A server that would not stop still runs: no try can be made until it has exited.
+        let retry = server.status.pid == nil ? remoteRetryNote
+            : "Iris must wait for the previous server to exit before it can try again."
+        alert.informativeText = reason + "\n\n" + retry
         alert.runModal()
     }
 
@@ -368,8 +371,11 @@ func remoteStatusLine(_ remote: RemoteAnswer, _ server: RemoteServerStatus) -> S
         return "Remote access · couldn't start"
     case .on(let port):
         guard others.isEmpty else {
-            // The warning is for every server on this scope file, the switch's own included.
-            let all: [ListenerState?] = if case .known(let state) = remote { state.listeners.map(\.state) } else { [] }
+            // The warning is for every server on this scope file running now, the switch's own included.
+            // An earlier server of the switch's, still in a check made before it was replaced, does not count.
+            let all: [ListenerState?] = if case .known(let state) = remote {
+                state.listeners.filter { $0.listener.pid == server.pid || !server.started($0.listener) }.map(\.state)
+            } else { [] }
             return "Remote access · \(others.count + 1) servers · \(others.count) run outside Iris" + settingsWarning(remote, all)
         }
         guard case .known(let state) = remote, let mine = state.listeners.first(where: { $0.listener.pid == server.pid }) else {

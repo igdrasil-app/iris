@@ -155,7 +155,8 @@ final class RemoteServer {
         guard !quitting, leftover == nil else { return }
         if let child {
             if !isOn && !child.stopping { stop(child) }
-            if child.stopping { status.phase = isOn ? .starting : .off }
+            // One that could not be identified keeps saying so until it has exited: it may still be serving.
+            if child.stopping && !child.unidentified { status.phase = isOn ? .starting : .off }
             return
         }
         let running: [Listener]
@@ -331,10 +332,10 @@ final class RemoteServer {
         self.child = nil
         let process = child.process
         status.pid = nil
-        if quitting || child.stopping {
-            reconcile()
-        } else if child.unidentified {
+        if child.unidentified && isOn && !quitting {
             fail(unidentifiedServer)
+        } else if quitting || child.stopping || child.unidentified {
+            reconcile()
         } else if let readyAt = child.readyAt {
             if DispatchTime.now() >= readyAt + timing.stable { crashes = 0 }
             let delay = timing.restart[min(crashes, timing.restart.count - 1)]

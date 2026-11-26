@@ -105,6 +105,11 @@ final class MenuTests: XCTestCase {
                        ["Remote access · 3 servers · 2 run outside Iris · restart to apply changes"] + usual)
         XCTAssertEqual(shown(.known(state(listeners: [(8788, .changed), (8765, .current)])), nil, mine),
                        ["Remote access · 2 servers · 1 run outside Iris · restart to apply changes"] + usual)
+        // A check made before the switch's server was replaced still lists the earlier one (100, changed): it does
+        // not count. The current one (102) is not in that check yet.
+        let replaced = RemoteServerStatus(phase: .on(port: 8788), pid: 102, ours: [id(100), id(102)])
+        XCTAssertEqual(shown(.known(state(listeners: [(8788, .changed), (8765, .current)])), nil, replaced),
+                       ["Remote access · 2 servers · 1 run outside Iris"] + usual)
         // The others' settings warning stays beside the switch's own server.
         XCTAssertEqual(shown(.known(state(listeners: [(8788, .current), (8765, .changed)])), nil, mine),
                        ["Remote access · 2 servers · 1 run outside Iris · restart to apply changes"] + usual)
