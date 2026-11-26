@@ -459,6 +459,21 @@ final class ScopeTests: XCTestCase {
         XCTAssertEqual(tick(.remove(.calendars, "Old"), ScopeFile(calendars: ["Old", "c1"], folders: [])),
                        ScopeFile(calendars: ["c1"], folders: []))
         XCTAssertEqual(tick(.remove(.calendars, "Old"), ScopeFile(calendars: ["Old"], folders: [], writes: true)), none)
+        // Removing one turns the rest of the key into ids, as every change to a key does.
+        XCTAssertEqual(tick(.remove(.calendars, "Gone"), ScopeFile(calendars: ["Work", "Gone"], folders: [])),
+                       ScopeFile(calendars: ["c1"], folders: []))
+        // Against the items listed just now: an id that is gone is refused, and so is an entry that is one item's id
+        // and another's name while that other is not shared.
+        XCTAssertThrowsError(try checkedApplying(.item(.calendars, "c9", true), to: ScopeFile(calendars: [], folders: []), items: named)) {
+            XCTAssertEqual("\($0)", "That calendar no longer exists, so nothing was changed.")
+        }
+        let confusing = named + [Named(id: "c4", name: "c1")]
+        XCTAssertThrowsError(try checkedApplying(.item(.calendars, "c1", true), to: ScopeFile(calendars: [], folders: []), items: confusing))
+        XCTAssertEqual(try checkedApplying(.item(.calendars, "c4", true), to: ScopeFile(calendars: ["c1"], folders: []), items: confusing),
+                       ScopeFile(calendars: ["c1", "c4"], folders: []))
+        // An entry that was there already and names nothing does not stop another change.
+        XCTAssertEqual(try checkedApplying(.item(.calendars, "c2", true), to: ScopeFile(calendars: ["Old"], folders: []), items: named),
+                       ScopeFile(calendars: ["Old", "c2"], folders: []))
         // Changes, and events with other people, which need changes.
         let one = ScopeFile(calendars: ["c1"], folders: [])
         XCTAssertEqual(tick(.writes(true), one), ScopeFile(calendars: ["c1"], folders: [], writes: true))
@@ -579,7 +594,7 @@ final class ScopeTests: XCTestCase {
         let broken = Data("{\"calendars\": [\"c1\"".utf8)
         try broken.write(to: URL(fileURLWithPath: path))
         guard case .broken = loadScopeFile(path) else { return XCTFail("a broken file reads as broken") }
-        let changes = ScopeChanges(path: path) {}
+        let changes = ScopeChanges(path: path, listing: { _ in [] }) {}
         XCTAssertThrowsError(try changes.apply(.all(.calendars, true), items: []))
         XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: path)), broken)
         let copy = try resetScopeFile(path, now: Date(timeIntervalSince1970: 0))
@@ -587,9 +602,120 @@ final class ScopeTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: copy)), broken)
         XCTAssertEqual(loadScopeFile(path), .file(ScopeFile(calendars: [], folders: [])))
         XCTAssertEqual(mode(path), 0o600)
-        // A file the server would refuse for its mode is no scope file to write over either.
+        // Reset does nothing to a file that reads well, as one fixed by hand while its alert was open.
+        XCTAssertNil(try changes.reset())
+        // A file the server would refuse for its mode is no scope file to write over either: a tick leaves it as it
+        // is, mode and all, rather than fix it quietly.
         chmod(path, 0o644)
         guard case .broken = loadScopeFile(path) else { return XCTFail("a file others can read reads as broken") }
+        let loose = try Data(contentsOf: URL(fileURLWithPath: path))
+        XCTAssertThrowsError(try changes.apply(.all(.calendars, true), items: []))
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: path)), loose)
+        XCTAssertEqual(mode(path), 0o644)
+
+        // Through a link: the file it leads to is replaced, the link stays, and its folder is the one checked.
+        chmod(path, 0o600)
+        try FileManager.default.createDirectory(atPath: folder + "/links", withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(atPath: folder + "/links/http-scope", withDestinationPath: path)
+        _ = try ScopeChanges(path: folder + "/links/http-scope", listing: { _ in [] }) {}.apply(.all(.folders, true), items: [])
+        XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: folder + "/links/http-scope"), path)
+        XCTAssertEqual(loadScopeFile(path), .file(ScopeFile(calendars: [], folders: nil)))
+    }
+
+    /// The lock is held for the whole change: a change while another holds it waits, and gives up when it is not let go.
+    func testScopeLock() throws {
+        let folder = NSTemporaryDirectory() + "iris-lock-" + UUID().uuidString
+        defer { try? FileManager.default.removeItem(atPath: folder) }
+        let path = folder + "/http-scope"
+        let held = DispatchSemaphore(value: 0)
+        let release = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            try? withScopeLock(path) {
+                held.signal()
+                release.wait()
+            }
+        }
+        held.wait()
+        let begun = Date()
+        XCTAssertThrowsError(try withScopeLock(path, wait: 0.3) {}) { error in
+            XCTAssertEqual("\(error)", "Another copy of Iris is changing what is shared; try again.")
+        }
+        XCTAssertGreaterThanOrEqual(Date().timeIntervalSince(begun), 0.3)
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.2) { release.signal() }
+        XCTAssertNoThrow(try withScopeLock(path, wait: 2) {})
+    }
+
+    /// Ticks against listings that change between them: items deleted, renamed, named like another's id, added, and a
+    /// menu that still shows a deleted one. After each tick that is not refused, the file reads back as itself; a file a
+    /// server would start with still is; and nothing is shared that was not before the tick or ticked by it.
+    func testTicksAgainstChangingListings() throws {
+        var random = SplitMix(seed: 126)
+        var items = named
+        var added = 10
+        var deleted: [String] = []
+        func pinned(_ file: ScopeFile) -> Set<String>?? {
+            let listing = { (_: [String]) throws -> Data in
+                try JSONSerialization.data(withJSONObject: items.map { ["id": $0.id, "title": $0.name] })
+            }
+            guard let scope = try? pinScope(file, "/x/scope", listing: listing) else { return nil }
+            return .some(scope.calendars.map { Set($0.map(\.id)) })
+        }
+        var refused = 0
+        var accepted = 0
+        for start in [ScopeFile(calendars: [], folders: []), ScopeFile(calendars: nil, folders: []),
+                      ScopeFile(calendars: ["Work", "c2"], folders: [], writes: true)] {
+            var file = start
+            for _ in 0..<300 {
+                let index = Int(random.next() % UInt64(items.count))
+                switch random.next() % 8 {
+                case 0 where items.count > 1:
+                    deleted.append(items.remove(at: index).id)
+                case 1:
+                    items[index] = Named(id: items[index].id, name: items[Int(random.next() % UInt64(items.count))].id)
+                case 2:
+                    items[index] = Named(id: items[index].id, name: items[Int(random.next() % UInt64(items.count))].name)
+                case 3:
+                    added += 1
+                    items.append(Named(id: "c\(added)", name: ["Work", "Family", "Trips", "c1"][Int(random.next() % 4)]))
+                default:
+                    break
+                }
+                let stale = deleted.isEmpty ? nil : deleted[Int(random.next() % UInt64(deleted.count))]
+                let current = items[Int(random.next() % UInt64(items.count))].id
+                let id = random.next() % 6 == 0 ? stale ?? current : current
+                let missing = (file.calendars ?? []).first { entry in !items.contains { $0.id == entry || $0.name == entry } }
+                let on = random.next() % 2 == 0
+                let tick: ScopeTick = switch random.next() % 6 {
+                case 0: .all(.calendars, on)
+                case 1: missing.map { .remove(.calendars, $0) } ?? .writes(on)
+                case 2: .writes(on)
+                default: .item(.calendars, id, on)
+                }
+                let before = pinned(file)
+                let after: ScopeFile
+                do {
+                    after = try checkedApplying(tick, to: file, items: items)
+                } catch {
+                    refused += 1
+                    continue
+                }
+                XCTAssertEqual(try parseScopeFile(encodeScopeFile(after)), after, "\(tick)")
+                if let shared = before {
+                    let now = try XCTUnwrap(pinned(after), "a file a server took is refused after \(tick)")
+                    accepted += 1
+                    if case .all(_, true) = tick { } else if let now, let shared {
+                        let ticked: Set<String> = if case .item(_, let id, true) = tick { [id] } else { [] }
+                        XCTAssertTrue(now.isSubset(of: shared.union(ticked)), "\(tick) shared more than it was given")
+                    } else if now == nil {
+                        XCTAssertNil(shared, "\(tick) turned a list into all")
+                    }
+                }
+                file = after
+            }
+        }
+        // Both happen often enough to mean something.
+        XCTAssertGreaterThan(refused, 20)
+        XCTAssertGreaterThan(accepted, 300)
     }
 
     func testOnlyMineIsTheCallersWithSharedEvents() throws {

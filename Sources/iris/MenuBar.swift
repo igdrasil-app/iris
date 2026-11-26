@@ -38,9 +38,11 @@ final class MenuBar: NSObject, NSMenuDelegate, MenuActions {
     // The switch's server: this binary, with the server's default paths.
     private lazy var server = RemoteServer(executable: executablePath() ?? Bundle.main.executablePath ?? "iris",
                                            defaults: .standard) { [weak self] _ in self?.serverChanged() }
-    // What the rows' submenus share: the scope file as last read, and each app's items as last listed.
-    private lazy var scopeChanges = ScopeChanges(path: (defaultScopeFile as NSString).expandingTildeInPath) { [weak self] in
-        self?.server.restart()
+    // What the rows' submenus show: the scope file as last read, and each app's items as last listed. Only shown: a
+    // tick lists its app again before it is applied.
+    private lazy var scopeChanges = ScopeChanges(path: (defaultScopeFile as NSString).expandingTildeInPath,
+                                                 listing: { listShareItems($0)?.map { Named(id: $0.id, name: $0.name) } }) {
+        [weak self] in self?.server.restart()
     }
     private var scopeFile = ScopeFileState.missing
     private var listed: [ScopeKind: [ShareItem]] = [:]
@@ -191,17 +193,20 @@ final class MenuBar: NSObject, NSMenuDelegate, MenuActions {
         }
     }
 
-    /// Writes the tick to the scope file at once; the rows say what it allows once the check has read it again.
+    /// Writes the tick to the scope file; the rows say what it allows once the check has read it again.
     private func change(_ tick: ScopeTick) {
-        let items = (listed[tick.kind] ?? []).map { Named(id: $0.id, name: $0.name) }
-        do {
-            scopeFile = .file(try scopeChanges.apply(tick, items: items))
-        } catch {
-            scopeFile = loadScopeFile(scopeChanges.path)
-            showProblem("Couldn't change what is shared", "\(error)")
+        scopeChanges.submit(tick) { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success(let file):
+                scopeFile = .file(file)
+            case .failure(let error):
+                scopeFile = loadScopeFile(scopeChanges.path)
+                showProblem("Couldn't change what is shared", "\(error)")
+            }
+            showMenu()
+            remoteCheck.start()
         }
-        showMenu()
-        remoteCheck.start()
     }
 
     /// The problem, and a choice: Reset, after keeping the file beside it, or leave it to be fixed by hand.
@@ -216,13 +221,11 @@ final class MenuBar: NSObject, NSMenuDelegate, MenuActions {
         alert.addButton(withTitle: "Reset")
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
-        // Fixed by hand while the alert was open: nothing to reset.
-        if case .broken = loadScopeFile(scopeChanges.path) {
-            do {
-                _ = try scopeChanges.reset()
-            } catch {
-                showProblem("Couldn't reset the settings file", "\(error)")
-            }
+        // Fixed by hand while the alert was open: nothing is reset.
+        do {
+            _ = try scopeChanges.reset()
+        } catch {
+            showProblem("Couldn't reset the settings file", "\(error)")
         }
         scopeFile = loadScopeFile(scopeChanges.path)
         showMenu()

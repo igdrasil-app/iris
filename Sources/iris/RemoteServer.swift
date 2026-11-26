@@ -403,43 +403,95 @@ final class RemoteServer {
     }
 }
 
-/// The menu's ticks. Each is applied to the scope file as it is on disk at that moment and written at once, on the
-/// main thread, so ticks never overlap and none is lost. The switch's server is restarted once the ticks have
-/// stopped for `quiet` seconds: every tick puts the restart off again, and the restart comes after the last write,
-/// so the server it starts reads the last tick.
+/// The menu's ticks, applied one at a time in the order made. A tick that changes which items are shared first
+/// lists that app again, off the main thread, and is applied against that answer, never an older one; one that
+/// cannot be listed changes nothing, and says so. Each is applied to the scope file as it is on disk then, under the
+/// lock every copy of Iris takes, and written at once. The switch's server is restarted once the ticks have stopped
+/// for `quiet` seconds: every tick puts the restart off again, and the restart comes after the last write, so the
+/// server it starts reads the last tick.
 @MainActor
 final class ScopeChanges {
     let path: String
     private let quiet: Double
+    private let listing: @Sendable (ScopeKind) -> [Named]?
     private let restart: () -> Void
     private var pending: DispatchWorkItem?
+    private var queue: [(tick: ScopeTick, done: (Result<ScopeFile, Error>) -> Void)] = []
+    private var busy = false
 
-    init(path: String, quiet: Double = 0.5, restart: @escaping () -> Void) {
+    /// `listing` lists one app's items now, nil when it cannot without asking for a permission or opening Notes.
+    init(path: String, quiet: Double = 0.5, listing: @escaping @Sendable (ScopeKind) -> [Named]?,
+         restart: @escaping () -> Void) {
         self.path = path
         self.quiet = quiet
+        self.listing = listing
         self.restart = restart
     }
 
-    /// The scope file after the tick. A missing file starts from one that shares nothing; a file that cannot be
-    /// read is never written over, and its problem is the error.
-    func apply(_ tick: ScopeTick, items: [Named]) throws -> ScopeFile {
-        let current: ScopeFile
-        switch loadScopeFile(path) {
-        case .missing: current = ScopeFile(calendars: [], folders: [])
-        case .file(let file): current = file
-        case .broken(let problem): throw IrisError(problem)
-        }
-        let changed = applying(tick, to: current, items: items)
-        guard changed != current else { return current }
-        try writeScopeFile(changed, to: path)
-        restartSoon()
-        return changed
+    /// Queues the tick behind any still waiting for a listing; `done` gets the file after it, or why nothing changed.
+    func submit(_ tick: ScopeTick, done: @escaping (Result<ScopeFile, Error>) -> Void) {
+        queue.append((tick, done))
+        if !busy { next() }
     }
 
-    /// Keeps the file that cannot be read beside it and shares nothing; the copy's path.
-    func reset() throws -> String {
-        let copy = try resetScopeFile(path)
-        restartSoon()
+    private func next() {
+        guard !queue.isEmpty else {
+            busy = false
+            return
+        }
+        busy = true
+        let (tick, done) = queue.removeFirst()
+        guard tick.needsListing else {
+            done(Result { try apply(tick, items: []) })
+            return next()
+        }
+        Task.detached { [weak self, listing] in
+            let items = listing(tick.kind)
+            await self?.finish(tick, items, done)
+        }
+    }
+
+    private func finish(_ tick: ScopeTick, _ items: [Named]?, _ done: (Result<ScopeFile, Error>) -> Void) {
+        if let items {
+            done(Result { try apply(tick, items: items) })
+        } else {
+            let things = switch tick.kind {
+            case .calendars: "calendars"
+            case .lists: "reminder lists"
+            case .folders: "note folders"
+            }
+            done(.failure(IrisError("Iris could not read your \(things) just now, so nothing was changed.")))
+        }
+        next()
+    }
+
+    /// The scope file after the tick, `items` being the kind's items as listed just now. A missing file starts from
+    /// one that shares nothing; a file that cannot be read is never written over, and its problem is the error.
+    func apply(_ tick: ScopeTick, items: [Named]) throws -> ScopeFile {
+        let (file, written) = try withScopeLock(path) { () -> (ScopeFile, Bool) in
+            let current: ScopeFile
+            switch loadScopeFile(path) {
+            case .missing: current = ScopeFile(calendars: [], folders: [])
+            case .file(let file): current = file
+            case .broken(let problem): throw IrisError(problem)
+            }
+            let changed = try checkedApplying(tick, to: current, items: items)
+            guard changed != current else { return (current, false) }
+            try writeScopeFile(changed, to: path)
+            return (changed, true)
+        }
+        if written { restartSoon() }
+        return file
+    }
+
+    /// Keeps a file that cannot be read beside it and shares nothing; the copy's path, or nil when the file was
+    /// fixed meanwhile and nothing was done.
+    func reset() throws -> String? {
+        let copy = try withScopeLock(path) { () -> String? in
+            guard case .broken = loadScopeFile(path) else { return nil }
+            return try resetScopeFile(path)
+        }
+        if copy != nil { restartSoon() }
         return copy
     }
 

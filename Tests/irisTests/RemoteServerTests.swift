@@ -253,8 +253,8 @@ final class RemoteServerTests: XCTestCase {
     @MainActor
     func testTicksRestartOnce() throws {
         var restarts = 0
-        let changes = ScopeChanges(path: folder + "/state/scope", quiet: 0.3) { restarts += 1 }
         let items = (1...5).map { Named(id: "c\($0)", name: "Calendar \($0)") }
+        let changes = ScopeChanges(path: folder + "/state/scope", quiet: 0.3, listing: { _ in items }) { restarts += 1 }
         var expected = ScopeFile(calendars: [], folders: [])
         for index in 0..<20 {
             let tick = ScopeTick.item(.calendars, "c\(index % 5 + 1)", index % 3 != 2)
@@ -270,6 +270,49 @@ final class RemoteServerTests: XCTestCase {
         XCTAssertEqual(try changes.apply(.sharedEvents(true), items: items), expected)
         wait(0.6) { false }
         XCTAssertEqual(restarts, 1)
+    }
+
+    /// Ticks made while one waits for its listing queue behind it: each is applied in the order made, against the
+    /// listing made for it, and each answers, a failed listing with nothing changed.
+    @MainActor
+    func testTicksWaitForTheirListing() throws {
+        final class Listings: @unchecked Sendable {
+            let lock = NSLock()
+            var calls = 0
+        }
+        let listings = Listings()
+        let items = (1...3).map { Named(id: "c\($0)", name: "Calendar \($0)") }
+        let changes = ScopeChanges(path: folder + "/state/scope", listing: { _ in
+            let call = listings.lock.withLock {
+                listings.calls += 1
+                return listings.calls
+            }
+            usleep(UInt32(150_000 - 40_000 * min(call, 3)))
+            // The third listing fails, as Calendar not answering does.
+            return call == 3 ? nil : items
+        }) {}
+        let ticks: [ScopeTick] = [.item(.calendars, "c1", true), .writes(true), .item(.calendars, "c2", true),
+                                  .item(.calendars, "c3", true), .all(.folders, true), .item(.calendars, "c1", false),
+                                  .sharedEvents(true)]
+        var answers: [(Int, String)] = []
+        for (index, tick) in ticks.enumerated() {
+            changes.submit(tick) { result in
+                switch result {
+                case .success(let file): answers.append((index, "\(file.calendars ?? []) \(file.writes) \(file.sharedEvents)"))
+                case .failure(let error): answers.append((index, "\(error)"))
+                }
+            }
+        }
+        wait(10) { answers.count == ticks.count }
+        XCTAssertEqual(answers.map(\.0), Array(ticks.indices))
+        XCTAssertEqual(answers.map(\.1), [
+            #"["c1"] false false"#, #"["c1"] true false"#, #"["c1", "c2"] true false"#,
+            "Iris could not read your calendars just now, so nothing was changed.",
+            #"["c1", "c2"] true false"#, #"["c2"] true false"#, #"["c2"] true true"#,
+        ])
+        XCTAssertEqual(listings.lock.withLock { listings.calls }, 4)
+        XCTAssertEqual(try readScopeFile(folder + "/state/scope"),
+                       ScopeFile(calendars: ["c2"], folders: nil, writes: true, sharedEvents: true))
     }
 
     @MainActor

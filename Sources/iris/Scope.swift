@@ -147,13 +147,21 @@ enum ScopeTick: Equatable {
         case .reminderWrites: .lists
         }
     }
+
+    /// Whether the tick needs the kind's items as they are now: it changes which items are shared, by id.
+    var needsListing: Bool {
+        switch self {
+        case .item, .remove: true
+        default: false
+        }
+    }
 }
 
 /// The scope file after one tick, `items` being the kind's calendars, lists or folders as they are now.
 ///
 /// All on is "all"; All off shares none. An item ticked while the file says "all" leaves every other item shared;
-/// otherwise it is added or taken out. A key an item tick changes is written by id: each entry that names items
-/// becomes their ids, and one that names nothing stays as written, until it is removed on its own.
+/// otherwise it is added or taken out. A key an item tick or a removal changes is written by id: each entry that
+/// names items becomes their ids, and one that names nothing stays as written, until it is removed on its own.
 ///
 /// The file's rules hold after every tick, and changes need something shared: a tick of Calendar that leaves no
 /// calendars turns writes and events with other people off, one of Reminders that leaves no lists turns reminder
@@ -164,16 +172,12 @@ func applying(_ tick: ScopeTick, to file: ScopeFile, items: [Named]) -> ScopeFil
     case .all(let kind, let on):
         file[kind] = on ? nil : []
     case .item(let kind, let id, let on):
-        var ids: [String] = []
-        for entry in file[kind] ?? items.map(\.id) {
-            let found = pick([entry], from: items, allowed: nil, id: \.id, name: \.name).found ?? []
-            for named in found.isEmpty ? [entry] : found.map(\.id) where !ids.contains(named) { ids.append(named) }
-        }
+        var ids = asIds(file[kind] ?? items.map(\.id), items)
         ids.removeAll { $0 == id }
         if on { ids.append(id) }
         file[kind] = ids
     case .remove(let kind, let entry):
-        file[kind]?.removeAll { $0 == entry }
+        file[kind] = file[kind].map { asIds($0.filter { $0 != entry }, items) }
     case .writes(let on):
         file.writes = on
     case .sharedEvents(let on):
@@ -191,6 +195,67 @@ func applying(_ tick: ScopeTick, to file: ScopeFile, items: [Named]) -> ScopeFil
         break
     }
     return file
+}
+
+/// The entries as the ids of the items they name, each once; one that names nothing stays as written.
+private func asIds(_ entries: [String], _ items: [Named]) -> [String] {
+    var ids: [String] = []
+    for entry in entries {
+        let found = pick([entry], from: items, allowed: nil, id: \.id, name: \.name).found ?? []
+        for id in found.isEmpty ? [entry] : found.map(\.id) where !ids.contains(id) { ids.append(id) }
+    }
+    return ids
+}
+
+/// `applying`, refused when the key it changes would not mean to a server what the menu showed, `items` being the
+/// kind's items listed just now: an entry it adds that names nothing (an item deleted since the menu listed it), or
+/// an entry that is one item's id and another's name while that other is not shared, which a server would take
+/// for the other should the first be deleted. Refused, nothing is written and the error says why.
+func checkedApplying(_ tick: ScopeTick, to file: ScopeFile, items: [Named]) throws -> ScopeFile {
+    let changed = applying(tick, to: file, items: items)
+    let kind = tick.kind
+    guard let entries = changed[kind], entries != file[kind] else { return changed }
+    let (noun, app) = switch kind {
+    case .calendars: ("calendar", "Calendar")
+    case .lists: ("reminder list", "Reminders")
+    case .folders: ("folder", "Notes")
+    }
+    let ids = Set(items.map(\.id))
+    let before = Set(file[kind] ?? [])
+    if entries.contains(where: { !ids.contains($0) && !before.contains($0) }) {
+        throw IrisError("That \(noun) no longer exists, so nothing was changed.")
+    }
+    let shared = Set(entries)
+    if items.contains(where: { shared.contains($0.name) && ids.contains($0.name) && !shared.contains($0.id) }) {
+        throw IrisError("One \(noun) is named exactly like another \(noun)'s internal id, so Iris cannot tell them apart "
+            + "safely. Rename it in \(app) and try again; nothing was changed.")
+    }
+    return changed
+}
+
+/// Runs `body` holding an exclusive lock that every copy of Iris takes before it reads the scope file to change it,
+/// so two changes never overwrite each other. The lock is on the file's folder (its target's, when the path is a
+/// link), since each write replaces the file itself. Waits at most `wait` seconds for another copy to finish.
+func withScopeLock<T>(_ path: String, wait: Double = 2, _ body: () throws -> T) throws -> T {
+    let directory = (URL(fileURLWithPath: path).resolvingSymlinksInPath().path as NSString).deletingLastPathComponent
+    do {
+        try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true,
+                                                attributes: [.posixPermissions: 0o700])
+    } catch {
+        throw IrisError("cannot create \(directory): \(error.localizedDescription)")
+    }
+    let folder = open(directory, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+    guard folder >= 0 else { throw IrisError("cannot open \(directory): \(String(cString: strerror(errno)))") }
+    // Closing the folder releases the lock.
+    defer { close(folder) }
+    let deadline = Date().addingTimeInterval(wait)
+    while flock(folder, LOCK_EX | LOCK_NB) != 0 {
+        guard errno == EWOULDBLOCK, Date() < deadline else {
+            throw IrisError("Another copy of Iris is changing what is shared; try again.")
+        }
+        usleep(10_000)
+    }
+    return try body()
 }
 
 /// The scope file at a path as the menu bar finds it.
