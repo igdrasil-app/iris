@@ -368,7 +368,9 @@ func remoteStatusLine(_ remote: RemoteAnswer, _ server: RemoteServerStatus) -> S
         return "Remote access · couldn't start"
     case .on(let port):
         guard others.isEmpty else {
-            return "Remote access · \(others.count + 1) servers · \(others.count) run outside Iris" + settingsWarning(remote, others.map(\.state))
+            // The warning is for every server on this scope file, the switch's own included.
+            let all: [ListenerState?] = if case .known(let state) = remote { state.listeners.map(\.state) } else { [] }
+            return "Remote access · \(others.count + 1) servers · \(others.count) run outside Iris" + settingsWarning(remote, all)
         }
         guard case .known(let state) = remote, let mine = state.listeners.first(where: { $0.listener.pid == server.pid }) else {
             return "Remote access · port \(port)"

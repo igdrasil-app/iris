@@ -36,8 +36,12 @@ struct ServerIdentity: Equatable {
     let pid: pid_t
     let started: Double
 
+    /// The same pid and the same start time to the microsecond, the kernel's resolution. Compared as whole
+    /// microseconds, not as Doubles: a listener's start time passes through Date, and this stays right whatever
+    /// that does to the last bits (measured: nothing). A pid can in principle be given to a process started in
+    /// the same microsecond; nothing here rules that out, only makes it as unlikely as the kernel does.
     func names(pid other: pid_t, started time: Double) -> Bool {
-        other == pid && abs(time - started) < 0.001
+        other == pid && (time * 1e6).rounded() == (started * 1e6).rounded()
     }
 }
 
@@ -63,6 +67,7 @@ final class RemoteServer {
     private let scopeFile: String?
     private let stateDir: String?
     private let listeners: () throws -> [Listener]
+    private let lookup: (pid_t) -> (started: Double, parent: pid_t)?
     private let timing: RemoteServerTiming
     private let changed: (RemoteServerStatus) -> Void
 
@@ -79,6 +84,7 @@ final class RemoteServer {
     /// nil paths are the server's defaults, and are not passed to it.
     init(executable: String, log: String = defaultHTTPLog, defaults: UserDefaults, tokenFile: String? = nil,
          scopeFile: String? = nil, stateDir: String? = nil, listeners: @escaping () throws -> [Listener] = runningListeners,
+         lookup: @escaping (pid_t) -> (started: Double, parent: pid_t)? = processStart,
          timing: RemoteServerTiming = RemoteServerTiming(), changed: @escaping (RemoteServerStatus) -> Void) {
         self.executable = executable
         self.log = (log as NSString).expandingTildeInPath
@@ -87,6 +93,7 @@ final class RemoteServer {
         self.scopeFile = scopeFile
         self.stateDir = stateDir
         self.listeners = listeners
+        self.lookup = lookup
         self.timing = timing
         self.changed = changed
     }
@@ -133,11 +140,13 @@ final class RemoteServer {
         while child.process.isRunning && DispatchTime.now() < killed { usleep(10_000) }
     }
 
-    /// Signals the child only while it is still that process: running, by Foundation's account, and with the
-    /// start time it had at launch, so not a pid reaped and given to another process in between.
+    /// Signals the child only while it is still that process, checked immediately before: running, by
+    /// Foundation's account, and with the pid and start time it had at launch, so not a pid reaped and given to
+    /// another process before the check. The check and the signal are two calls, not one: a pid freed and given
+    /// away between them would get it.
     private func send(_ signal: Int32, to child: Child) {
         let pid = child.process.processIdentifier
-        guard child.process.isRunning, let identity = child.identity, let now = processStart(pid),
+        guard child.process.isRunning, let identity = child.identity, let now = lookup(pid),
               identity.names(pid: pid, started: now.started) else { return }
         kill(pid, signal)
     }
@@ -157,7 +166,7 @@ final class RemoteServer {
             return
         }
         // Left from an earlier run: stopped whatever the choice, since that run is over.
-        if let record, running.contains(where: { isLeftover(pid: $0.pid, now: processStart($0.pid), record: record) }) {
+        if let record, running.contains(where: { isLeftover(pid: $0.pid, now: lookup($0.pid), record: record) }) {
             stopLeftover(record)
             return
         }
@@ -247,7 +256,7 @@ final class RemoteServer {
         }
         starts += 1
         let pid = process.processIdentifier
-        child.identity = processStart(pid).map { ServerIdentity(pid: pid, started: $0.started) }
+        child.identity = identify(pid)
         self.child = child
         status = RemoteServerStatus(phase: .starting, pid: pid, ours: status.ours + (child.identity.map { [$0] } ?? []))
 
@@ -283,10 +292,29 @@ final class RemoteServer {
         }
     }
 
+    /// Its pid and start time, looked up while it is this process's child; nil when the lookup fails.
+    private func identify(_ pid: pid_t) -> ServerIdentity? {
+        guard let now = lookup(pid), now.parent == getpid() else { return nil }
+        return ServerIdentity(pid: pid, started: now.started)
+    }
+
+    /// A server whose process cannot be identified is one Iris cannot promise to stop (SIGKILL needs its
+    /// identity), so it is not accepted: it is asked to stop and counts as a start that failed.
     private func ready(_ child: Child) {
         guard child === self.child, !child.stopping else { return }
+        if child.identity == nil, child.process.isRunning, let identity = identify(child.process.processIdentifier) {
+            child.identity = identity
+            status.ours.append(identity)
+        }
+        guard let identity = child.identity else {
+            child.unidentified = true
+            child.process.terminate()
+            // Said now, not only once it has exited: one that does not stop on SIGTERM shows it too.
+            status.phase = .failed(unidentifiedServer)
+            return
+        }
         child.readyAt = .now()
-        if let identity = child.identity { remember(identity) }
+        remember(identity)
         status.phase = .on(port: child.port)
     }
 
@@ -305,6 +333,8 @@ final class RemoteServer {
         status.pid = nil
         if quitting || child.stopping {
             reconcile()
+        } else if child.unidentified {
+            fail(unidentifiedServer)
         } else if let readyAt = child.readyAt {
             if DispatchTime.now() >= readyAt + timing.stable { crashes = 0 }
             let delay = timing.restart[min(crashes, timing.restart.count - 1)]
@@ -317,10 +347,11 @@ final class RemoteServer {
         }
     }
 
-    /// Whether the recorded leftover is still that process, left by its run; checked right before each signal,
-    /// so none reaches a process that was given its pid since.
+    /// Whether the recorded leftover is still that process, left by its run: the same pid, the same start time
+    /// to the microsecond, and launchd as its parent. Checked immediately before each signal; the check and the
+    /// signal are two calls, not one, so a pid freed and given away between them would get it.
     private func stillLeftover(_ identity: ServerIdentity) -> Bool {
-        isLeftover(pid: identity.pid, now: processStart(identity.pid), record: identity)
+        isLeftover(pid: identity.pid, now: lookup(identity.pid), record: identity)
     }
 
     /// SIGTERM, SIGKILL after the grace period; looked at every tenth of a second until it is gone.
@@ -334,30 +365,37 @@ final class RemoteServer {
         kill(identity.pid, SIGTERM)
         leftover = (identity, .now() + timing.stopGrace)
         status = RemoteServerStatus(phase: isOn ? .starting : .off, pid: nil, ours: status.ours + [identity])
-        func look() {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-                MainActor.assumeIsolated {
-                    guard let self, !self.quitting, let leftover = self.leftover else { return }
-                    if self.stillLeftover(identity) {
-                        if DispatchTime.now() > leftover.deadline { kill(identity.pid, SIGKILL) }
-                        look()
-                        return
-                    }
-                    self.leftover = nil
-                    self.reconcile()
+        pollLeftover(identity)
+    }
+
+    /// A tenth of a second on: gone, then on to a start; else SIGKILL once the deadline has passed, and again.
+    /// Holds the supervisor weakly: one released meanwhile sends nothing more.
+    private func pollLeftover(_ identity: ServerIdentity) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, !self.quitting, let leftover = self.leftover else { return }
+                if self.stillLeftover(identity) {
+                    if DispatchTime.now() > leftover.deadline { kill(identity.pid, SIGKILL) }
+                    self.pollLeftover(identity)
+                    return
                 }
+                self.leftover = nil
+                self.reconcile()
             }
         }
-        look()
     }
 }
+
+let unidentifiedServer = "could not confirm the server's process, so it was asked to stop; a server Iris cannot "
+    + "identify is one it cannot promise to stop"
 
 /// One server process, and what its output has said.
 private final class Child: @unchecked Sendable {
     let process: Process
     let port: Int
     let done = DispatchGroup()     // its exit, and the end of both of its outputs
-    var identity: ServerIdentity?  // on the main thread only, as stopping and readyAt
+    var identity: ServerIdentity?  // on the main thread only, as the three below
+    var unidentified = false        // ready, but its identity could not be looked up, so it was stopped
     var stopping = false
     var readyAt: DispatchTime?
     private let lock = NSLock()
@@ -384,8 +422,8 @@ private final class Child: @unchecked Sendable {
     }
 }
 
-/// A process is the server this Iris recorded in an earlier run, and that run is over, when its start time is
-/// the record's and its parent is launchd. Another copy of Iris shares the defaults, and its server's parent is
+/// A process is the server this Iris recorded in an earlier run, and that run is over, when its pid and start
+/// time (to the microsecond) are the record's and its parent is launchd. Another copy of Iris shares the defaults, and its server's parent is
 /// that copy, so it is never taken for a leftover. Never pid 1 or below.
 func isLeftover(pid: pid_t, now: (started: Double, parent: pid_t)?, record: ServerIdentity?) -> Bool {
     guard pid > 1, let now, let record, now.parent == 1 else { return false }

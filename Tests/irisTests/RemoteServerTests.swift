@@ -29,16 +29,21 @@ final class RemoteServerTests: XCTestCase {
 
     @MainActor
     private func server(_ executable: String, listeners: [Listener] = [], timing: RemoteServerTiming = RemoteServerTiming(),
+                        lookup: @escaping (pid_t) -> (started: Double, parent: pid_t)? = processStart,
                         seen: @escaping (RemoteServerStatus) -> Void = { _ in }) -> RemoteServer {
         RemoteServer(executable: executable, log: folder + "/logs/http.log", defaults: defaults,
                      tokenFile: folder + "/state/token", scopeFile: folder + "/state/scope", stateDir: folder + "/state",
-                     listeners: { listeners }, timing: timing, changed: seen)
+                     listeners: { listeners }, lookup: lookup, timing: timing, changed: seen)
     }
 
     @MainActor
     private func wait(_ seconds: Double, until done: () -> Bool) {
-        let deadline = Date().addingTimeInterval(seconds)
-        while !done() && Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.02)) }
+        let deadline = DispatchTime.now() + seconds
+        while !done() && DispatchTime.now() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.02)) }
+    }
+
+    private func seconds(since start: DispatchTime) -> Double {
+        Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1e9
     }
 
     private func running(_ pid: pid_t?) -> Bool {
@@ -222,6 +227,11 @@ final class RemoteServerTests: XCTestCase {
         XCTAssertFalse(isLeftover(pid: 500, now: (1_800_000_000.25, 1), record: nil))
         XCTAssertFalse(isLeftover(pid: 501, now: (1_800_000_000.25, 1), record: record))
         XCTAssertFalse(isLeftover(pid: 500, now: (1_800_000_001.25, 1), record: record))
+        // The same microsecond, not merely close: a microsecond apart is another process.
+        XCTAssertFalse(isLeftover(pid: 500, now: (1_800_000_000.250001, 1), record: record))
+        // A start time through Date and back, as a listener's is, still matches.
+        let time = Date(timeIntervalSince1970: 1_800_000_000.123457).timeIntervalSince1970
+        XCTAssertTrue(isLeftover(pid: 500, now: (time, 1), record: ServerIdentity(pid: 500, started: 1_800_000_000.123457)))
         XCTAssertFalse(isLeftover(pid: 500, now: nil, record: record))
         // Never launchd itself, or the kernel.
         for pid: pid_t in [1, 0, -1] {
@@ -240,8 +250,8 @@ final class RemoteServerTests: XCTestCase {
         let text = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
         shell.waitUntilExit()
         let pid = try XCTUnwrap(pid_t(text.trimmingCharacters(in: .whitespacesAndNewlines)))
-        let deadline = Date().addingTimeInterval(5)
-        while processStart(pid)?.parent != 1 && Date() < deadline { usleep(10_000) }
+        let deadline = DispatchTime.now() + 5
+        while processStart(pid)?.parent != 1 && DispatchTime.now() < deadline { usleep(10_000) }
         let started = try XCTUnwrap(processStart(pid)).started
         XCTAssertEqual(processStart(pid)?.parent, 1)
         return ServerIdentity(pid: pid, started: started)
@@ -267,12 +277,68 @@ final class RemoteServerTests: XCTestCase {
         XCTAssertEqual(switched.status.ours, [old])
         wait(0.3) { false }
         XCTAssertNotNil(processStart(old.pid))
-        let quit = Date()
+        let quit = DispatchTime.now()
         switched.quit()
         XCTAssertNil(processStart(old.pid))
-        XCTAssertLessThan(Date().timeIntervalSince(quit), 2.5)
+        XCTAssertLessThan(seconds(since: quit), 2.5)
         // The record stays; it names no process now.
         XCTAssertEqual(defaults.object(forKey: RemoteAccessKey.childPid) as? Int, Int(old.pid))
+    }
+
+    /// A supervisor released while it polls a leftover goes away, and sends nothing more: past the deadline the
+    /// leftover, which ignores SIGTERM, is still there.
+    @MainActor
+    func testReleasedWhilePolling() throws {
+        let old = try orphanIgnoringTerm()
+        defer { if isLeftover(pid: old.pid, now: processStart(old.pid), record: old) { kill(old.pid, SIGKILL) } }
+        record(old)
+        weak var gone: RemoteServer?
+        do {
+            let switched = server("/nonexistent", listeners: [listener(old)], timing: RemoteServerTiming(stopGrace: 0.3))
+            switched.start()
+            XCTAssertEqual(switched.status.ours, [old])
+            gone = switched
+        }
+        XCTAssertNil(gone)
+        wait(1) { false }
+        XCTAssertTrue(isLeftover(pid: old.pid, now: processStart(old.pid), record: old))
+    }
+
+    /// The child's identity is looked up at launch; one lookup that fails is made again when it is ready.
+    @MainActor
+    func testIdentityLookedUpAgain() throws {
+        let serving = try script(#"sleep 0.3; echo '{"port": 1}'; exec sleep 600"#)
+        var calls = 0
+        let switched = server(serving, lookup: { pid in
+            calls += 1
+            return calls == 1 ? nil : processStart(pid)
+        })
+        switched.turn(on: true)
+        XCTAssertEqual(switched.status.ours, [])
+        wait(10) { switched.status.phase == .on(port: defaultHTTPPort) }
+        let pid = try XCTUnwrap(switched.status.pid)
+        XCTAssertEqual(switched.status.ours.map(\.pid), [pid])
+        XCTAssertEqual(defaults.object(forKey: RemoteAccessKey.childPid) as? Int, Int(pid))
+        switched.turn(on: false)
+        wait(10) { !running(pid) }
+        XCTAssertFalse(running(pid))
+    }
+
+    /// A child whose identity cannot be looked up at all is not accepted: it is stopped and counts as a failed
+    /// start, tried again after the usual delay.
+    @MainActor
+    func testUnidentifiedServerIsStopped() throws {
+        let serving = try script(#"echo '{"port": 1}'; exec sleep 600"#)
+        let switched = server(serving, lookup: { _ in nil })
+        switched.turn(on: true)
+        let pid = try XCTUnwrap(switched.status.pid)
+        wait(10) { !running(pid) && switched.status.pid == nil }
+        XCTAssertFalse(running(pid))
+        XCTAssertEqual(switched.status.phase, .failed(unidentifiedServer))
+        XCTAssertNil(defaults.object(forKey: RemoteAccessKey.childPid))
+        wait(1) { switched.starts > 1 }
+        XCTAssertEqual(switched.starts, 1)
+        switched.turn(on: false)
     }
 
     /// A recorded pid now with another start time is another process: it gets no signal, and Iris goes on.
