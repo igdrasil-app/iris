@@ -354,7 +354,7 @@ func findEvent(_ id: String, occurrence: String?, span: EKSpan, in store: EKEven
     }
     // event(withIdentifier:) raises an Objective-C exception, which Swift cannot catch, when given a
     // reminder's id, also as the part after a slash; such an id names no event.
-    let parts = [id] + id.split(separator: "/").map(String.init)
+    let parts = [id] + id.split(separator: "/").map(String.init).filter { $0 != id }
     if parts.contains(where: { store.calendarItem(withIdentifier: $0) is EKReminder }) {
         throw IrisError("no event with id \(id)")
     }
