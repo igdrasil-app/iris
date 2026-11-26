@@ -225,6 +225,15 @@ let tools: [Tool] = [
     ]),
 
     Tool(name: "reminder_lists",
-         description: "List Apple Reminders lists: id, title, writable, source, open (how many reminders in the list are not completed). Reminders themselves cannot be read or changed yet.",
+         description: "List Apple Reminders lists: id, title, writable, source, open (how many reminders in the list are not completed). Nothing can be changed yet.",
          command: ["reminders", "lists"], scope: nil, parameters: []),
+
+    Tool(name: "reminders",
+         description: "List Apple Reminders, open ones by default: id, title, list, listId, notes, due, priority (none, high, medium, low), completed, completedAt, created, modified, recurring; every key always there, null when empty. due is null or {date, time, timeZone, at}: date and time as kept in the reminder; time, timeZone and at null for a date-only due; timeZone null for a floating time, whose at is that clock time on this Mac. Dated reminders first by day (date only before timed), then by at; then undated, newest created first. Subtasks, tags, flags and sections are not visible; a subtask reads as an ordinary reminder. Nothing can be changed yet.",
+         command: ["reminders", "list"], scope: nil, parameters: [
+        Parameter(name: "lists", kind: .strings, description: "List ids or titles, from reminder_lists. A name that matches nothing is an error. Default: every list.", flag: "list"),
+        Parameter(name: "status", kind: .string, description: "open (not completed), completed or all. Default: open.", choices: ["open", "completed", "all"]),
+        Parameter(name: "dueFrom", kind: .string, description: "Only reminders due at or after this: \(dateFormats). With dueFrom or dueTo, reminders without a due date are left out; a date-only due goes by its day. Default: no lower bound.", flag: "due-from"),
+        Parameter(name: "dueTo", kind: .string, description: "Only reminders due at or before this, same formats; a bare date includes that whole day. Default: no upper bound.", flag: "due-to"),
+    ]),
 ]
