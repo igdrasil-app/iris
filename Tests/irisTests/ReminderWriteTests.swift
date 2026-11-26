@@ -95,7 +95,15 @@ final class ReminderWriteTests: XCTestCase {
     }
 
     // A date is a date even where the clocks skip its midnight; an impossible one is still refused.
+    // Havana skips midnight on 10 March 2030, so the date does not parse there; read in UTC it does. On a
+    // Mac in such a zone this was checked with the real command; here only the rule is pinned.
     func testABareDateNeedsNoMidnight() throws {
+        let havana = try XCTUnwrap(TimeZone(identifier: "America/Havana"))
+        XCTAssertNil(parseDay("2030-03-10", timeZone: havana))
+        XCTAssertNotNil(parseDay("2030-03-10", timeZone: TimeZone(secondsFromGMT: 0)!))
+        var there = Calendar(identifier: .gregorian)
+        there.timeZone = havana
+        XCTAssertEqual(try dueComponents("2030-03-10", mac: there).day, 10)
         let parts = try dueComponents("2030-03-10", mac: mac)
         XCTAssertEqual([parts.year, parts.month, parts.day], [2030, 3, 10])
         XCTAssertNil(parts.hour)
