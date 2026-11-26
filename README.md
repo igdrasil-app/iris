@@ -41,6 +41,7 @@ While it runs, the menu bar app updates Iris itself: it checks once a day, offer
     iris reminders lists                                            # id, title, writable, source, open (not completed)
     iris reminders list --list Errands --due-to 2026-10-20          # open by default; --status completed or all
     iris reminders add --list Errands --title "Buy milk" --due 2026-10-14   # a bare date is date only; no alarm is set
+    iris reminders add --list Errands --title Bins --due 2026-10-14 --repeat weekly --until 2026-12-31   # repeats; needs --due
     iris reminders update <id> --due 2026-10-15 --notes ""          # only what you name changes; "" clears
     iris reminders complete <id>                                    # --undo opens it again; a repeat once more changes nothing
     iris reminders complete <id> --occurrence 2026-10-14            # a repeating one: its current due date; it moves to the next
@@ -49,6 +50,8 @@ While it runs, the menu bar app updates Iris itself: it checks once a day, offer
     iris mcp --http                                                 # over HTTP on 127.0.0.1:8765, behind a token: reads, writes if turned on
 
 Dates in are `2026-10-13`, `2026-10-13T09:00` (local time) or ISO 8601 with an offset or `Z`, seconds and fractions optional; a bare date given as an end (`--to`, `--end`, `--until`) includes that whole day. Dates out are ISO 8601 in the Mac's zone. A reminder's `due` is the exception: its `date` and `time` are as kept in the reminder, not converted, and its `at` is that moment in the Mac's zone.
+
+`iris reminders add --repeat` takes the repeat options of `iris calendar add` and needs `--due`, its first occurrence, which counts toward `--count` even off the days of `--on`. Monthly from the 29th to 31st and yearly from 29 February fall on the last day of a shorter month, as in Reminders. A date-only occurrence counts as due at the start of its day, so `--until` with a bare date still allows an occurrence due that day.
 
 `iris reminders update` changes only the fields named and never an alarm or whether it is completed. It refuses `--due` on a reminder that has an alarm, which would stay at its old time, or that repeats: change those in Reminders.
 
@@ -121,7 +124,7 @@ Assistants that run in a vendor's cloud, such as Grok Bot, the Meta Muse app and
 
     make app                     # universal swift build, bundle as build/Iris.app, codesign; needs a Developer ID certificate
     build/Iris.app/Contents/MacOS/iris status
-    swift test                   # the HTTP gate (token, Origin, path, method, body framing), scope (who sees what), write guards, events with other people on them, alarm minutes, availability, attendees, the Reminders prompt time limit, how a reminder's due and priority read and are written, when an update may change the due and the start date that follows it, the due filter and the order of reminders, what complete does with a reminder and which reminder is the occurrence it completed
+    swift test                   # the HTTP gate (token, Origin, path, method, body framing), scope (who sees what), write guards, events with other people on them, alarm minutes, availability, attendees, the Reminders prompt time limit, how a reminder's due and priority read and are written, when an update may change the due and the start date that follows it, the due filter and the order of reminders, what complete does with a reminder and which reminder is the occurrence it completed, the repeat options add takes and the rule they make
     ./release.sh                 # the version in Info.plist: notarize, tar, GitHub release, bump the cask and the Sparkle appcast
                                  # bump CFBundleVersion with the version; Sparkle compares only that, and release.sh refuses a repeat
                                  # over SSH or from an agent, where the keychain cannot prompt: NOTARY_KEY=<p8> NOTARY_KEY_ID=<id> NOTARY_ISSUER=<uuid> SPARKLE_KEY=<file> ./release.sh

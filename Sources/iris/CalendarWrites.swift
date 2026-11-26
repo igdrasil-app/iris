@@ -61,15 +61,7 @@ struct AddEvent: AsyncParsableCommand {
         _ = try availability.map(parseAvailability)
         if alarms.contains(where: { $0 < 0 }) { throw ValidationError("--alarm takes minutes of 0 or more") }
         if let url, URL(string: url)?.scheme == nil { throw ValidationError("--url needs a scheme, like https://example.com") }
-        if repeatFrequency == nil, every != nil || on != nil || until != nil || count != nil {
-            throw ValidationError("--every, --on, --until and --count need --repeat")
-        }
-        if until != nil, count != nil { throw ValidationError("use --until or --count, not both") }
-        if let every, every < 1 { throw ValidationError("--every must be 1 or more") }
-        if let count, count < 1 { throw ValidationError("--count must be 1 or more") }
-        if on != nil, repeatFrequency != "weekly" { throw ValidationError("--on only works with --repeat weekly") }
-        _ = try repeatFrequency.map(parseFrequency)
-        _ = try on.map(parseWeekdays)
+        try checkRepeat(repeatFrequency, every: every, on: on, until: until, count: count)
         let (startDate, _) = try dates()
         if let until, try parseEnd(until) < startDate { throw ValidationError("--until must not be before --start") }
     }
@@ -94,7 +86,8 @@ struct AddEvent: AsyncParsableCommand {
         if let newAvailability { event.availability = newAvailability }
         setAlarms(alarms, on: event)
         if let repeatFrequency {
-            event.recurrenceRules = [try recurrenceRule(frequency: repeatFrequency)]
+            event.recurrenceRules = [try recurrenceRule(repeatFrequency, every: every, on: on,
+                                                        until: until.map(parseEnd), count: count)]
         }
 
         try save(event, span: .thisEvent, in: store)
@@ -109,25 +102,40 @@ struct AddEvent: AsyncParsableCommand {
         guard first < last else { throw ValidationError("--end must be after --start") }
         return (first, last)
     }
+}
 
-    private func recurrenceRule(frequency: String) throws -> EKRecurrenceRule {
-        let recurrenceEnd: EKRecurrenceEnd?
-        if let until {
-            recurrenceEnd = EKRecurrenceEnd(end: try parseEnd(until))
-        } else if let count {
-            recurrenceEnd = EKRecurrenceEnd(occurrenceCount: count)
-        } else {
-            recurrenceEnd = nil
-        }
-        return EKRecurrenceRule(
-            recurrenceWith: try parseFrequency(frequency),
-            interval: every ?? 1,
-            daysOfTheWeek: try on.map(parseWeekdays),
-            daysOfTheMonth: nil, monthsOfTheYear: nil, weeksOfTheYear: nil,
-            daysOfTheYear: nil, setPositions: nil,
-            end: recurrenceEnd
-        )
+/// The usage errors of --repeat, --every, --on, --until and --count, as `calendar add` and `reminders add`
+/// take them.
+func checkRepeat(_ frequency: String?, every: Int?, on: String?, until: String?, count: Int?) throws {
+    if frequency == nil, every != nil || on != nil || until != nil || count != nil {
+        throw ValidationError("--every, --on, --until and --count need --repeat")
     }
+    if until != nil, count != nil { throw ValidationError("use --until or --count, not both") }
+    if let every, every < 1 { throw ValidationError("--every must be 1 or more") }
+    if let count, count < 1 { throw ValidationError("--count must be 1 or more") }
+    if on != nil, frequency != "weekly" { throw ValidationError("--on only works with --repeat weekly") }
+    _ = try frequency.map(parseFrequency)
+    _ = try on.map(parseWeekdays)
+}
+
+/// A new rule from --repeat, --every, --on and an end, a date or a count. Each item gets its own rule object.
+func recurrenceRule(_ frequency: String, every: Int?, on: String?, until: Date?, count: Int?) throws -> EKRecurrenceRule {
+    let recurrenceEnd: EKRecurrenceEnd?
+    if let until {
+        recurrenceEnd = EKRecurrenceEnd(end: until)
+    } else if let count {
+        recurrenceEnd = EKRecurrenceEnd(occurrenceCount: count)
+    } else {
+        recurrenceEnd = nil
+    }
+    return EKRecurrenceRule(
+        recurrenceWith: try parseFrequency(frequency),
+        interval: every ?? 1,
+        daysOfTheWeek: try on.map(parseWeekdays),
+        daysOfTheMonth: nil, monthsOfTheYear: nil, weeksOfTheYear: nil,
+        daysOfTheYear: nil, setPositions: nil,
+        end: recurrenceEnd
+    )
 }
 
 struct UpdateEvent: AsyncParsableCommand {

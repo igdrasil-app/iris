@@ -21,8 +21,21 @@ struct AddReminder: AsyncParsableCommand {
             that comes twice when this Mac's clocks go back is refused: a reminder keeps a clock time and \
             could not tell it from the first.
 
+            --repeat makes it repeat, and needs --due: the due is its first occurrence, recurring is true, \
+            and it is completed one occurrence at a time with `iris reminders complete --occurrence`. As in \
+            Reminders:
+            - The first occurrence is --due itself, also when its weekday is not among the days of --on, and \
+            it counts toward --count. The occurrences after it fall on the days of --on.
+            - Monthly from the 29th, 30th or 31st, and yearly from 29 February, fall on the last day of a \
+            month too short for that day: 2026-12-31 monthly is due 2027-01-31, then 2027-02-28.
+            - --until: an occurrence due after it is not made. A bare date includes that whole day; with a \
+            time, an occurrence due at that time is still made. A date-only occurrence counts as due at the \
+            start of its day here, so with a date-only due --until 2026-10-20 still allows an occurrence due 2026-10-20.
+            - With --count 1, or --until on the due day, it still reads recurring true, and completing its \
+            one occurrence completes the reminder itself.
+
             No alarm is set, whatever the due, and nothing here promises a notification. Not offered: \
-            alarms, URL, location, repeating, start date, completed.
+            alarms, URL, location, start date, completed.
             """
     )
 
@@ -41,14 +54,33 @@ struct AddReminder: AsyncParsableCommand {
     @Option(help: "Priority, in the words `iris reminders list` prints.")
     var priority: ReminderPriority = .none
 
+    @Option(name: .customLong("repeat"), help: "Repeat daily, weekly, monthly or yearly. Needs --due. Default: does not repeat. Without --until or --count it repeats forever.")
+    var repeatFrequency: String?
+
+    @Option(help: "With --repeat: repeat every n days/weeks/months/years. Default: 1.")
+    var every: Int?
+
+    @Option(help: "With --repeat weekly: comma-separated days, from su,mo,tu,we,th,fr,sa. Default: the weekday of --due.")
+    var on: String?
+
+    @Option(help: "With --repeat: no occurrence is due after this (a date, a date and time, or ISO 8601 with an offset or Z; a bare date includes that whole day). Not before --due. Not with --count. Default: no end.")
+    var until: String?
+
+    @Option(help: "With --repeat: stop after this many occurrences, the first included. Not with --until. Default: no limit.")
+    var count: Int?
+
     func validate() throws {
         guard isValidTitle(title) else { throw ValidationError("--title must not be empty") }
-        _ = try due.map { try dueComponents($0, mac: macCalendar()) }
+        let dueParts = try due.map { try dueComponents($0, mac: macCalendar()) }
+        try checkRepeat(repeatFrequency, every: every, on: on, until: until, count: count)
+        if repeatFrequency != nil, dueParts == nil { throw ValidationError("--repeat needs --due") }
+        _ = try repeatEnd(dueParts)
     }
 
     func run() async throws {
         let mac = macCalendar()
         let dueParts = try due.map { try dueComponents($0, mac: mac) }
+        let end = try repeatEnd(dueParts)
         let store = try await grantedReminderStore()
         let target = try writableList(list, in: store, allowed: nil)
 
@@ -58,6 +90,9 @@ struct AddReminder: AsyncParsableCommand {
         reminder.notes = notes.flatMap { $0.isEmpty ? nil : $0 }
         reminder.dueDateComponents = dueParts
         reminder.priority = priority.value
+        if let repeatFrequency {
+            reminder.recurrenceRules = [try recurrenceRule(repeatFrequency, every: every, on: on, until: end, count: count)]
+        }
 
         do {
             try store.save(reminder, commit: true)
@@ -66,6 +101,24 @@ struct AddReminder: AsyncParsableCommand {
         }
         try emit(Reminder(reminder, mac: mac))
     }
+
+    /// The end --until stores: a moment, which Reminders compares with a date-only occurrence as the start of
+    /// its day on this Mac.
+    private func repeatEnd(_ dueParts: DateComponents?) throws -> Date? {
+        guard let until else { return nil }
+        let end = try parseEnd(until)
+        if let dueParts, let first = firstOccurrence(dueParts, mac: macCalendar()), end < first {
+            throw ValidationError("--until must not be before --due")
+        }
+        return end
+    }
+}
+
+/// When a repeating reminder with this due first occurs, as an end date is compared with it: its moment, or the
+/// start of its day on `mac` for a date-only due.
+func firstOccurrence(_ due: DateComponents, mac: Calendar) -> Date? {
+    guard let parsed = reminderDue(due, mac: mac) else { return nil }
+    return parsed.at ?? mac.date(from: DateComponents(year: parsed.day.year, month: parsed.day.month, day: parsed.day.day))
 }
 
 struct UpdateReminder: AsyncParsableCommand {

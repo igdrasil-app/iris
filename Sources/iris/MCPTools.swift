@@ -238,13 +238,18 @@ let tools: [Tool] = [
     ]),
 
     Tool(name: "add_reminder",
-         description: "Create a reminder. Returns it as reminders lists it. No alarm is set.",
+         description: "Create a reminder. Returns it as reminders lists it. No alarm is set. With repeat it repeats, recurring true, and is completed one occurrence at a time: its first occurrence is due itself, also off the days of on, and counts toward count; monthly from the 29th to 31st and yearly from 29 February fall on the last day of a shorter month; with count 1, or until on the due day, completing that one occurrence completes the reminder.",
          command: ["reminders", "add"], scope: nil, parameters: [
         Parameter(name: "list", kind: .string, description: "List id or title, from reminder_lists. Must name one writable list.", required: true),
         Parameter(name: "title", kind: .string, description: "Title, not empty.", required: true),
         Parameter(name: "notes", kind: .string, description: "Notes. Default: none."),
         Parameter(name: "due", kind: .string, description: "2026-10-13 is due that day at no set time; 2026-10-13T09:00 is that time on this Mac; with an offset or Z, that moment, kept as this Mac's clock time. Default: no due date."),
         Parameter(name: "priority", kind: .string, description: "Default: none.", choices: ["none", "low", "medium", "high"]),
+        Parameter(name: "repeat", kind: .string, description: "Needs due. Default: does not repeat. Without until or count it repeats forever.", choices: ["daily", "weekly", "monthly", "yearly"]),
+        Parameter(name: "every", kind: .integer, description: "With repeat: repeat every n days, weeks, months or years. Default: 1."),
+        Parameter(name: "on", kind: .string, description: "With repeat weekly: comma-separated days from su,mo,tu,we,th,fr,sa. Default: the weekday of due."),
+        Parameter(name: "until", kind: .string, description: "With repeat: no occurrence is due after this (a date, a date and time, or ISO 8601 with an offset or Z; a bare date includes that whole day; a date-only occurrence counts as due at the start of its day). Not before due. Not with count. Default: no end."),
+        Parameter(name: "count", kind: .integer, description: "With repeat: stop after this many occurrences, the first included. Not with until. Default: no limit."),
     ]),
 
     Tool(name: "update_reminder",

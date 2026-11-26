@@ -118,6 +118,76 @@ final class ReminderWriteTests: XCTestCase {
         XCTAssertNoThrow(try AddReminder.parse(["--list", "unused", "--title", "Buy milk"]))
     }
 
+    private func addRefusal(_ args: [String]) -> String? {
+        do {
+            _ = try AddReminder.parse(["--list", "unused", "--title", "x"] + args)
+            return nil
+        } catch {
+            return AddReminder.message(for: error)
+        }
+    }
+
+    func testAddTakesTheRepeatOptionsOnlyTogether() {
+        let refused: [([String], String)] = [
+            (["--repeat", "daily"], "--repeat needs --due"),
+            (["--due", "2030-03-04", "--every", "2"], "need --repeat"),
+            (["--due", "2030-03-04", "--on", "mo"], "need --repeat"),
+            (["--due", "2030-03-04", "--until", "2030-04-01"], "need --repeat"),
+            (["--due", "2030-03-04", "--count", "2"], "need --repeat"),
+            (["--due", "2030-03-04", "--repeat", "daily", "--on", "mo"], "--on only works with --repeat weekly"),
+            (["--due", "2030-03-04", "--repeat", "daily", "--until", "2030-04-01", "--count", "2"], "not both"),
+            (["--due", "2030-03-04", "--repeat", "daily", "--every", "0"], "--every must be 1 or more"),
+            (["--due", "2030-03-04", "--repeat", "daily", "--count", "0"], "--count must be 1 or more"),
+            (["--due", "2030-03-04", "--repeat", "hourly"], "--repeat must be"),
+            (["--due", "2030-03-04", "--repeat", "weekly", "--on", "mo,xx"], "--on takes"),
+            (["--due", "2030-03-04", "--repeat", "daily", "--until", "soon"], "unrecognised date"),
+        ]
+        for (args, words) in refused {
+            let message = addRefusal(args)
+            XCTAssertTrue(message?.contains(words) == true, "\(args): \(message ?? "accepted")")
+        }
+        let accepted = [
+            ["--due", "2030-03-04", "--repeat", "daily"],
+            ["--due", "2030-03-04T09:30", "--repeat", "weekly", "--every", "2", "--on", "we,fr", "--count", "3"],
+            ["--due", "2030-03-04", "--repeat", "monthly", "--until", "2030-12-31"],
+            ["--due", "2030-03-04", "--repeat", "yearly", "--count", "1"],
+        ]
+        for args in accepted { XCTAssertNil(addRefusal(args), "\(args)") }
+    }
+
+    // Measured on a Mac: an end date is compared with a date-only occurrence as the start of its day, and with
+    // a timed one as its moment, the end itself included.
+    func testUntilMayNotEndBeforeTheFirstOccurrence() {
+        let before = "--until must not be before --due"
+        XCTAssertEqual(addRefusal(["--due", "2030-03-04", "--repeat", "daily", "--until", "2030-03-03"]), before)
+        XCTAssertEqual(addRefusal(["--due", "2030-03-04", "--repeat", "daily", "--until", "2030-03-03T23:59"]), before)
+        XCTAssertNil(addRefusal(["--due", "2030-03-04", "--repeat", "daily", "--until", "2030-03-04"]))
+        XCTAssertNil(addRefusal(["--due", "2030-03-04", "--repeat", "daily", "--until", "2030-03-04T00:00"]))
+        XCTAssertEqual(addRefusal(["--due", "2030-03-04T09:30", "--repeat", "daily", "--until", "2030-03-04T09:29"]), before)
+        XCTAssertNil(addRefusal(["--due", "2030-03-04T09:30", "--repeat", "daily", "--until", "2030-03-04T09:30"]))
+    }
+
+    func testTheFirstOccurrenceOfADue() throws {
+        let day = firstOccurrence(try dueComponents("2030-03-04", mac: mac), mac: mac)
+        XCTAssertEqual(day, instant("2030-03-04T06:00:00Z"))
+        let timed = firstOccurrence(try dueComponents("2030-03-04T09:30-06:00", mac: mac), mac: mac)
+        XCTAssertEqual(timed, instant("2030-03-04T15:30:00Z"))
+    }
+
+    func testTheRuleTheRepeatOptionsMake() throws {
+        let end = instant("2030-12-31T23:59:59Z")
+        let rule = try recurrenceRule("weekly", every: 2, on: "we,fr", until: end, count: nil)
+        XCTAssertEqual(rule.frequency, .weekly)
+        XCTAssertEqual(rule.interval, 2)
+        XCTAssertEqual(rule.daysOfTheWeek?.map(\.dayOfTheWeek), [.wednesday, .friday])
+        XCTAssertEqual(rule.recurrenceEnd?.endDate, end)
+        let counted = try recurrenceRule("daily", every: nil, on: nil, until: nil, count: 3)
+        XCTAssertEqual(counted.interval, 1)
+        XCTAssertNil(counted.daysOfTheWeek)
+        XCTAssertEqual(counted.recurrenceEnd?.occurrenceCount, 3)
+        XCTAssertNil(try recurrenceRule("monthly", every: nil, on: nil, until: nil, count: nil).recurrenceEnd)
+    }
+
     // Measured on a Mac: a first save keeps the due as the start for a time, and 00:00 with no zone for a date.
     func testTheStartIsWhatAFirstSaveKeeps() throws {
         let timed = try dueComponents("2030-03-04T09:30:15", mac: mac)
