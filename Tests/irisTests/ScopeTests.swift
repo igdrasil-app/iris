@@ -176,6 +176,13 @@ final class ScopeTests: XCTestCase {
         XCTAssertNil(pick([], from: items, allowed: nil, id: \.id, name: \.name).found)
     }
 
+    func testPickTakesAnIdBeforeAName() {
+        let items = [Named(id: "c1", name: "Work"), Named(id: "c2", name: "c1")]
+        XCTAssertEqual(pick(["c1"], from: items, allowed: nil, id: \.id, name: \.name).found?.map(\.id), ["c1"])
+        // The name still reaches the other when the id is out of scope.
+        XCTAssertEqual(pick(["c1"], from: items, allowed: ["c2"], id: \.id, name: \.name).found?.map(\.id), ["c2"])
+    }
+
     func testAllowedIds() throws {
         XCTAssertNil(try allowedIds(nil, "--allowed-folders"))
         XCTAssertEqual(try allowedIds("[]", "--allowed-folders"), [])

@@ -187,7 +187,9 @@ func pick<Item>(_ tokens: [String], from items: [Item], allowed: Set<String>?,
     var found: [Item] = []
     var missing: [String] = []
     for token in tokens {
-        let hits = visible.filter { $0[keyPath: id] == token || $0[keyPath: name] == token }
+        // An id names that one item, also when another item has it as its name.
+        let byId = visible.filter { $0[keyPath: id] == token }
+        let hits = byId.isEmpty ? visible.filter { $0[keyPath: name] == token } : byId
         if hits.isEmpty { missing.append(token) } else { found += hits }
     }
     return (found, missing)

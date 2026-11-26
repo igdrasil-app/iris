@@ -39,7 +39,7 @@ struct MCP: ParsableCommand {
               { "schema_version": 1, "mcpServers": { "iris": {
                   "command": "iris", "args": ["mcp"] } } }
 
-            Over HTTP only reminder_lists and reminders are offered, and only when the scope file names reminder lists (below); add_reminder, update_reminder, complete_reminder and delete_reminder are offered over stdio only.
+            Of the reminder tools, only reminder_lists and reminders are offered over HTTP, and only when the scope file names reminder lists (below); add_reminder, update_reminder, complete_reminder and delete_reminder are offered over stdio only.
 
             Over HTTP, for a host that cannot start a process on this Mac:
 
