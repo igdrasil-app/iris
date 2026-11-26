@@ -33,7 +33,11 @@ final class MenuBar: NSObject, NSMenuDelegate, MenuActions {
     // The last answer about remote access, shown while the next is worked out; and the items of the last opening.
     private var remote = RemoteAnswer.checking
     private var shown: MenuItems?
+    private var menuOpen = false
     private lazy var remoteCheck = RemoteCheck(compute: { checkRemote() }) { [weak self] in self?.show(remote: $0) }
+    // The switch's server: this binary, with the server's default paths.
+    private lazy var server = RemoteServer(executable: executablePath() ?? Bundle.main.executablePath ?? "iris",
+                                           defaults: .standard) { [weak self] _ in self?.serverChanged() }
     private var timer: Timer?
 
     override init() {
@@ -50,6 +54,12 @@ final class MenuBar: NSObject, NSMenuDelegate, MenuActions {
         }
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
+        server.start()
+        // Quit Iris, and logging out, end in terminate, which posts this; a server left by any other end is
+        // stopped at the next launch.
+        NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: nil) { [weak self] _ in
+            MainActor.assumeIsolated { self?.server.quit() }
+        }
     }
 
     private func refresh() {
@@ -63,7 +73,15 @@ final class MenuBar: NSObject, NSMenuDelegate, MenuActions {
 
     private func model() -> MenuModel {
         menuModel(remote, Permissions(calendar: EKEventStore.authorizationStatus(for: .event),
-                                      reminders: EKEventStore.authorizationStatus(for: .reminder), notes: notes))
+                                      reminders: EKEventStore.authorizationStatus(for: .reminder), notes: notes),
+                  server.status)
+    }
+
+    // While the menu is open, what the rows allow is worked out again for the server now running, or not; a
+    // closed menu has it worked out when it opens.
+    private func serverChanged() {
+        shown?.show(model())
+        if menuOpen { remoteCheck.start() }
     }
 
     /// Asks about Notes off the main thread: the call takes milliseconds and has been known to hang.
@@ -110,6 +128,14 @@ final class MenuBar: NSObject, NSMenuDelegate, MenuActions {
         remoteCheck.start()
     }
 
+    func menuWillOpen(_ menu: NSMenu) {
+        menuOpen = true
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        menuOpen = false
+    }
+
     func chooseRow(_ sender: NSMenuItem) {
         switch sender.representedObject as? RowAction {
         case .askCalendar: allowAccess()
@@ -135,6 +161,24 @@ final class MenuBar: NSObject, NSMenuDelegate, MenuActions {
     private func allowNotesAccess() {
         NSApp.activate()
         probeNotes(ask: true)
+    }
+
+    func toggleRemoteAccess(_ sender: NSSwitch) {
+        server.turn(on: sender.state == .on)
+        shown?.show(model())
+    }
+
+    func showRemoteFailure() {
+        guard case .failed(let reason) = server.status.phase else { return }
+        NSApp.activate()
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Remote access couldn't start"
+        // A server that would not stop still runs: no try can be made until it has exited.
+        let retry = server.status.pid == nil ? remoteRetryNote
+            : "Iris must wait for the previous server to exit before it can try again."
+        alert.informativeText = reason + "\n\n" + retry
+        alert.runModal()
     }
 
     func toggleOpenAtLogin() {
@@ -233,7 +277,12 @@ struct MenuModel: Equatable {
     let status: String  // the header's grey line
     let rows: [AppRow]
     var offersNotesAccess = false  // Allow Notes Access… under Settings, while Notes was never asked
+    var switchOn = false
+    var switchEnabled = true
+    var failure: String?  // why remote access could not start, behind an item under the header
 }
+
+let remoteRetryNote = "Iris tries again every \(Int(RemoteServerTiming().retry)) seconds. To try now, turn remote access off and on."
 
 /// The menu for a remote access answer and the permissions. The rows show what the scope file allows, also
 /// while no server runs: what turning remote access on would allow. They show nothing they cannot know: no
@@ -241,16 +290,12 @@ struct MenuModel: Equatable {
 /// short of full access, Reminders denied or write only, Notes denied. Not determined is no problem for
 /// Reminders or Notes, as for the icon's dot: many people never use them with Iris; `iris reminders lists`
 /// asks for Reminders, and Allow Notes Access… under Settings for Notes. A row that looks well never asks.
-func menuModel(_ remote: RemoteAnswer, _ permissions: Permissions) -> MenuModel {
-    var status = "Checking…"
+///
+/// The switch is on while the switch's server runs, starts or cannot start, and while any other server runs; it
+/// cannot be turned off while only others run, since Iris does not stop what it did not start.
+func menuModel(_ remote: RemoteAnswer, _ permissions: Permissions, _ server: RemoteServerStatus = RemoteServerStatus()) -> MenuModel {
     var allows: (AppAccess?) -> String? = { _ in nil }
-    switch remote {
-    case .checking:
-        break
-    case .unknown:
-        status = "Remote access unknown"
-    case .known(let state):
-        status = remoteStatusLine(state)
+    if case .known(let state) = remote {
         let listeners = state.listeners
         if listeners.isEmpty || listeners.contains(where: { $0.state != .otherFile }) {
             // A file that cannot be read allows nothing; while a server runs, it allows what it read at start.
@@ -272,11 +317,36 @@ func menuModel(_ remote: RemoteAnswer, _ permissions: Permissions) -> MenuModel 
     default: .open(.reminders)
     }
     let state: RemoteState? = if case .known(let state) = remote { state } else { nil }
-    return MenuModel(status: status, rows: [
+    // With no server of its own running, any other running is what the menu shows, a failure to start included.
+    let outside = server.pid == nil && !otherServers(remote, server).isEmpty
+    let failure: String? = if case .failed(let reason) = server.phase, !outside { reason } else { nil }
+    return MenuModel(status: remoteStatusLine(remote, server), rows: [
         row("Calendar", state?.calendar, problem: calendarFix),
         row("Reminders", state?.reminders, problem: remindersFix),
         row("Notes", state?.notes, problem: permissions.notes == "denied" ? .open(.automation) : nil),
-    ], offersNotesAccess: permissions.notes == "not determined")
+    ], offersNotesAccess: permissions.notes == "not determined",
+       switchOn: server.phase != .off || outside, switchEnabled: !outside, failure: failure)
+}
+
+/// The servers running that the switch did not start, with what they use of the scope file: as the last check
+/// found them, else, with nothing known of the file, as the switch's own look before it would have started one.
+private func otherServers(_ remote: RemoteAnswer, _ server: RemoteServerStatus) -> [(port: Int, state: ListenerState?)] {
+    if case .known(let state) = remote {
+        let others = state.listeners.filter { !server.started($0.listener) }.map { ($0.listener.port, Optional($0.state)) }
+        if !others.isEmpty { return others }
+    }
+    if case .outside(let ports) = server.phase { return ports.map { ($0, nil) } }
+    return []
+}
+
+/// What these servers' settings need, from the last check: nothing, a restart for a changed scope file, or a
+/// scope file that would now stop a start, which outweighs a change. Only servers on this scope file count.
+private func settingsWarning(_ remote: RemoteAnswer, _ states: [ListenerState?]) -> String {
+    guard case .known(let state) = remote else { return "" }
+    let onThisFile = states.compactMap { $0 }.filter { $0 != .otherFile }
+    if onThisFile.isEmpty { return "" }
+    if state.usable == false { return " · settings have a problem" }
+    return onThisFile.contains(.changed) ? " · restart to apply changes" : ""
 }
 
 private func accessWords(_ access: AppAccess) -> String {
@@ -288,26 +358,43 @@ private func accessWords(_ access: AppAccess) -> String {
 }
 
 /// One short line: on or off, the port or how many servers, and the one thing most worth knowing.
-func remoteStatusLine(_ state: RemoteState) -> String {
-    let listeners = state.listeners
-    guard !listeners.isEmpty else { return "Remote access off" }
-    var line = "Remote access · " + (listeners.count == 1 ? "port \(listeners[0].listener.port)" : "\(listeners.count) servers")
-    let others = listeners.filter { $0.state == .otherFile }.count
-    if others == listeners.count {
-        line += " · started with other settings"
-    } else if state.usable == false {
-        // Outweighs a change: a restart would not start.
-        line += " · settings have a problem"
-    } else if listeners.contains(where: { $0.state == .changed }) {
-        line += " · restart to apply changes"
-    } else if others > 0 {
-        line += " · \(others) started with other settings"
+func remoteStatusLine(_ remote: RemoteAnswer, _ server: RemoteServerStatus) -> String {
+    let others = otherServers(remote, server)
+    if server.pid == nil && !others.isEmpty {
+        return "Remote access · " + (others.count == 1 ? "port \(others[0].port)" : "\(others.count) servers")
+            + " · run outside Iris" + settingsWarning(remote, others.map(\.state))
     }
-    return line
+    switch server.phase {
+    case .starting:
+        return "Remote access · starting…"
+    case .failed:
+        return "Remote access · couldn't start"
+    case .on(let port):
+        guard others.isEmpty else {
+            // The warning is for every server on this scope file running now, the switch's own included.
+            // An earlier server of the switch's, still in a check made before it was replaced, does not count.
+            let all: [ListenerState?] = if case .known(let state) = remote {
+                state.listeners.filter { $0.listener.pid == server.pid || !server.started($0.listener) }.map(\.state)
+            } else { [] }
+            return "Remote access · \(others.count + 1) servers · \(others.count) run outside Iris" + settingsWarning(remote, all)
+        }
+        guard case .known(let state) = remote, let mine = state.listeners.first(where: { $0.listener.pid == server.pid }) else {
+            return "Remote access · port \(port)"
+        }
+        return "Remote access · port \(port)" + settingsWarning(remote, [mine.state])
+    case .off, .outside:
+        switch remote {
+        case .checking: return "Checking…"
+        case .unknown: return "Remote access unknown"
+        case .known: return "Remote access off"
+        }
+    }
 }
 
 @MainActor @objc protocol MenuActions {
     func chooseRow(_ sender: NSMenuItem)
+    func toggleRemoteAccess(_ sender: NSSwitch)
+    func showRemoteFailure()
     func toggleOpenAtLogin()
 }
 
@@ -317,6 +404,7 @@ func remoteStatusLine(_ state: RemoteState) -> String {
 final class MenuItems {
     let header = NSMenuItem()
     let headerView = MenuHeader()
+    let failure = NSMenuItem(title: "Why It Couldn't Start…", action: #selector(MenuActions.showRemoteFailure), keyEquivalent: "")
     let rows: [NSMenuItem]
     let notesAccess = NSMenuItem(title: "Allow Notes Access…", action: #selector(MenuActions.chooseRow), keyEquivalent: "")
     private var shown: MenuModel?
@@ -324,6 +412,10 @@ final class MenuItems {
     init(target: MenuActions) {
         header.view = headerView
         header.isEnabled = false
+        headerView.toggle.target = target
+        headerView.toggle.action = #selector(MenuActions.toggleRemoteAccess)
+        failure.target = target
+        failure.isHidden = true
         notesAccess.target = target
         notesAccess.representedObject = RowAction.askNotes
         notesAccess.isHidden = true
@@ -335,8 +427,12 @@ final class MenuItems {
     }
 
     func show(_ model: MenuModel) {
+        // Also when the model is the same: a click may have moved the switch to where the model does not have it.
+        headerView.toggle.state = model.switchOn ? .on : .off
         guard model != shown else { return }
         shown = model
+        headerView.toggle.isEnabled = model.switchEnabled
+        failure.isHidden = model.failure == nil
         headerView.status = model.status
         for (item, row) in zip(rows, model.rows) {
             item.title = row.title
@@ -356,6 +452,7 @@ func fill(_ menu: NSMenu, with items: MenuItems, version: String?, openAtLogin: 
     menu.autoenablesItems = false
     menu.showsStateColumn = false
     menu.addItem(items.header)
+    menu.addItem(items.failure)
     menu.addItem(.separator())
     items.rows.forEach(menu.addItem)
     menu.addItem(.separator())
@@ -378,12 +475,14 @@ func fill(_ menu: NSMenu, with items: MenuItems, version: String?, openAtLogin: 
     menu.addItem(withTitle: "Quit Iris", action: #selector(NSApplication.terminate), keyEquivalent: "q")
 }
 
-/// The menu's first item, not a row: Iris, and under it the state of remote access in grey. Never highlighted;
-/// its right side is free for a control.
+/// The menu's first item, not a row: Iris, and under it the state of remote access in grey, with the remote
+/// access switch at the right. Never highlighted. A click on the switch leaves the menu open, as the switches in
+/// the system's menus do, and the line under Iris follows as the server starts.
 @MainActor
 final class MenuHeader: NSView {
     private let name = NSTextField(labelWithString: "Iris")
     private let state = NSTextField(labelWithString: "")
+    let toggle = NSSwitch()
 
     var status: String {
         get { state.stringValue }
@@ -407,12 +506,18 @@ final class MenuHeader: NSView {
         lines.spacing = 1
         lines.translatesAutoresizingMaskIntoConstraints = false
         addSubview(lines)
+        toggle.controlSize = .small
+        toggle.setAccessibilityLabel("Remote access")
+        toggle.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(toggle)
         let inset = menuTitleInset()
         NSLayoutConstraint.activate([
             lines.leadingAnchor.constraint(equalTo: leadingAnchor, constant: inset),
-            lines.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -inset),
+            lines.trailingAnchor.constraint(lessThanOrEqualTo: toggle.leadingAnchor, constant: -16),
             lines.topAnchor.constraint(equalTo: topAnchor, constant: 4),
             lines.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -5),
+            toggle.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -inset),
+            toggle.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
         autoresizingMask = [.width]
     }

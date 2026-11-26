@@ -21,7 +21,8 @@ let package = Package(
         // caller see, how an alarm reads back, which availability a calendar takes, how a reply status or
         // address reads, whether an unanswered prompt ends the call, and which reminders a due range keeps
         // and in what order could change silently, and no hand check would notice. So could the menu bar's
-        // menu, in states and permissions nobody sets up by hand to look at.
+        // menu, in states and permissions nobody sets up by hand to look at, and how its remote access switch
+        // starts, restarts and stops its server after a crash or a failed start.
         .testTarget(name: "irisTests", dependencies: ["iris"]),
     ]
 )

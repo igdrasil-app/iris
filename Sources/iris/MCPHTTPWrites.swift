@@ -120,14 +120,7 @@ final class WriteGuard {
         let descriptor = open(directory, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
         guard descriptor >= 0 else { throw failure(directory) }
         folder = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
-        var info = stat()
-        guard fstat(descriptor, &info) == 0, info.st_uid == getuid(), info.st_mode & 0o022 == 0 else {
-            throw IrisError("the state folder \(directory) must be yours and writable by you only: chmod go-w \"\(directory)\"")
-        }
-        if try aclAllows(descriptor, directory) {
-            throw IrisError("the state folder \(directory) has an access control list that lets others in; "
-                + "remove it: chmod -N \"\(directory)\"")
-        }
+        try checkFolder(descriptor, directory, "the state folder", forbidden: 0o022, only: "writable by you only", fix: "chmod go-w")
         guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else {
             throw IrisError("the state folder \(directory) is in use by another iris mcp --http with writes on; "
                 + "give each its own --state-dir")
@@ -272,11 +265,23 @@ private func replaceFile(_ path: String, with data: Data) throws {
 
 /// Mode 600 and an empty access control list: mode alone is not owner-only when an ACL, set or inherited,
 /// grants others access.
-private func makePrivate(_ descriptor: Int32, _ path: String) throws {
+func makePrivate(_ descriptor: Int32, _ path: String) throws {
     guard let empty = acl_init(0) else { throw failure(path) }
     defer { acl_free(UnsafeMutableRawPointer(empty)) }
     guard acl_set_fd_np(descriptor, empty, ACL_TYPE_EXTENDED) == 0, fchmod(descriptor, 0o600) == 0 else {
         throw failure(path)
+    }
+}
+
+/// An open folder must be this user's, with none of the `forbidden` mode bits, and without an access control list
+/// entry that lets anyone in; else the error says which rule and how to fix it.
+func checkFolder(_ descriptor: Int32, _ directory: String, _ noun: String, forbidden: mode_t, only: String, fix: String) throws {
+    var info = stat()
+    guard fstat(descriptor, &info) == 0, info.st_uid == getuid(), info.st_mode & forbidden == 0 else {
+        throw IrisError("\(noun) \(directory) must be yours and \(only): \(fix) \"\(directory)\"")
+    }
+    if try aclAllows(descriptor, directory) {
+        throw IrisError("\(noun) \(directory) has an access control list that lets others in; remove it: chmod -N \"\(directory)\"")
     }
 }
 

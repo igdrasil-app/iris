@@ -16,13 +16,20 @@ final class MenuTests: XCTestCase {
                     reminders: reminders, eventsWithOtherPeople: false, writesCounted: nil, tools: nil, tokenPath: "/t",
                     tokenExists: true, tokenProblem: nil,
                     listeners: listeners.enumerated().map { index, listener in
-                        (Listener(pid: pid_t(100 + index), port: listener.0, scopeFile: scope, started: Date()), listener.1)
+                        (Listener(pid: pid_t(100 + index), port: listener.0, scopeFile: scope, started: started(100 + index)), listener.1)
                     })
     }
 
+    /// The listeners `state` makes are pids 100, 101 and on, each started at its own second.
+    private func started(_ pid: Int) -> Date { Date(timeIntervalSince1970: Double(1000 + pid)) }
+    private func id(_ pid: pid_t) -> ServerIdentity { ServerIdentity(pid: pid, started: Double(1000 + Int(pid))) }
+
+    /// The switch's server, as pid 100, the first listener `state` makes.
+    private var mine: RemoteServerStatus { RemoteServerStatus(phase: .on(port: 8788), pid: 100, ours: [id(100)]) }
+
     /// The model as text: the header's line, then each row as title, the text at the right, ! for a problem.
-    private func shown(_ remote: RemoteAnswer, _ permissions: Permissions? = nil) -> [String] {
-        let model = menuModel(remote, permissions ?? fine)
+    private func shown(_ remote: RemoteAnswer, _ permissions: Permissions? = nil, _ server: RemoteServerStatus = RemoteServerStatus()) -> [String] {
+        let model = menuModel(remote, permissions ?? fine, server)
         return [model.status] + model.rows.map { "\($0.title): \($0.detail ?? "-")\($0.problem ? " !" : "")" }
     }
 
@@ -44,34 +51,114 @@ final class MenuTests: XCTestCase {
     }
 
     func testOneServer() {
-        XCTAssertEqual(shown(.known(state(listeners: [(8788, .current)]))), ["Remote access · port 8788"] + usual)
-        XCTAssertEqual(shown(.known(state(listeners: [(8788, .changed)]))),
+        XCTAssertEqual(shown(.known(state(listeners: [(8788, .current)])), nil, mine), ["Remote access · port 8788"] + usual)
+        XCTAssertEqual(shown(.known(state(listeners: [(8788, .changed)])), nil, mine),
                        ["Remote access · port 8788 · restart to apply changes"] + usual)
         // A name that matches nothing: the access stands.
-        XCTAssertEqual(shown(.known(state(usable: false, calendar: AppAccess(access: "read", items: .unknown), listeners: [(8788, .current)]))),
+        XCTAssertEqual(shown(.known(state(usable: false, calendar: AppAccess(access: "read", items: .unknown), listeners: [(8788, .current)])), nil, mine),
                        ["Remote access · port 8788 · settings have a problem", "Calendar: Read only", "Reminders: Off", "Notes: Read only"])
         // A problem outweighs a change: a restart would not start. A file that cannot be read says nothing of what runs.
-        XCTAssertEqual(shown(.known(state(usable: false, calendar: nil, notes: nil, reminders: nil, listeners: [(8788, .changed)]))),
+        XCTAssertEqual(shown(.known(state(usable: false, calendar: nil, notes: nil, reminders: nil, listeners: [(8788, .changed)])), nil, mine),
                        ["Remote access · port 8788 · settings have a problem"] + blank)
-        XCTAssertEqual(shown(.known(state(usable: false, calendar: nil, notes: nil, reminders: nil, listeners: [(8788, .unknown)]))),
+        XCTAssertEqual(shown(.known(state(usable: false, calendar: nil, notes: nil, reminders: nil, listeners: [(8788, .unknown)])), nil, mine),
                        ["Remote access · port 8788 · settings have a problem"] + blank)
         // Not checked, since checking would ask for a permission: no problem known.
-        XCTAssertEqual(shown(.known(state(usable: nil, calendar: AppAccess(access: "read", items: .unknown), listeners: [(8788, .current)]))),
+        XCTAssertEqual(shown(.known(state(usable: nil, calendar: AppAccess(access: "read", items: .unknown), listeners: [(8788, .current)])), nil, mine),
                        ["Remote access · port 8788", "Calendar: Read only", "Reminders: Off", "Notes: Read only"])
-        // A server on another file: what this file allows is not what it allows.
-        XCTAssertEqual(shown(.known(state(listeners: [(8770, .otherFile)]))), ["Remote access · port 8770 · started with other settings"] + blank)
+        // The last check has not seen the server yet, or not since it started again: the port is the switch's.
+        XCTAssertEqual(shown(.known(state(listeners: [])), nil, mine), ["Remote access · port 8788"] + usual)
+        XCTAssertEqual(shown(.checking, nil, mine), ["Remote access · port 8788"] + blank)
+        let again = RemoteServerStatus(phase: .on(port: 8788), pid: 101, ours: [id(100), id(101)])
+        XCTAssertEqual(shown(.known(state(listeners: [(8788, .changed)])), nil, again), ["Remote access · port 8788"] + usual)
+    }
+
+    func testOutside() {
+        XCTAssertEqual(shown(.known(state(listeners: [(8788, .current)]))), ["Remote access · port 8788 · run outside Iris"] + usual)
+        // What its settings need is still said, as for the switch's own server.
+        XCTAssertEqual(shown(.known(state(listeners: [(8788, .changed)]))),
+                       ["Remote access · port 8788 · run outside Iris · restart to apply changes"] + usual)
+        XCTAssertEqual(shown(.known(state(usable: false, listeners: [(8788, .changed)]))),
+                       ["Remote access · port 8788 · run outside Iris · settings have a problem"] + usual)
+        XCTAssertEqual(shown(.known(state(usable: false, calendar: nil, notes: nil, reminders: nil, listeners: [(8788, .unknown)]))),
+                       ["Remote access · port 8788 · run outside Iris · settings have a problem"] + blank)
+        // A server on another file: what this file allows is not what it allows, and its problems are not its.
+        XCTAssertEqual(shown(.known(state(listeners: [(8770, .otherFile)]))), ["Remote access · port 8770 · run outside Iris"] + blank)
+        XCTAssertEqual(shown(.known(state(usable: false, listeners: [(8770, .otherFile)]))),
+                       ["Remote access · port 8770 · run outside Iris"] + blank)
+        XCTAssertEqual(shown(.known(state(listeners: [(8765, .otherFile), (8788, .current)]))),
+                       ["Remote access · 2 servers · run outside Iris"] + usual)
+        XCTAssertEqual(shown(.known(state(listeners: [(8765, .otherFile), (8788, .changed)]))),
+                       ["Remote access · 2 servers · run outside Iris · restart to apply changes"] + usual)
+        XCTAssertEqual(shown(.known(state(usable: false, listeners: [(8765, .current), (8788, .changed)]))),
+                       ["Remote access · 2 servers · run outside Iris · settings have a problem"] + usual)
+        // The switch found them before the check did.
+        let found = RemoteServerStatus(phase: .outside([8788]))
+        XCTAssertEqual(shown(.checking, nil, found), ["Remote access · port 8788 · run outside Iris"] + blank)
+        XCTAssertEqual(shown(.known(state(listeners: [])), nil, found), ["Remote access · port 8788 · run outside Iris"] + usual)
     }
 
     func testSeveralServers() {
-        XCTAssertEqual(shown(.known(state(listeners: [(8765, .current), (8788, .current)]))), ["Remote access · 2 servers"] + usual)
-        XCTAssertEqual(shown(.known(state(listeners: [(8765, .current), (8766, .changed), (8788, .otherFile)]))),
-                       ["Remote access · 3 servers · restart to apply changes"] + usual)
-        XCTAssertEqual(shown(.known(state(listeners: [(8765, .current), (8788, .otherFile)]))),
-                       ["Remote access · 2 servers · 1 started with other settings"] + usual)
-        XCTAssertEqual(shown(.known(state(usable: false, listeners: [(8765, .changed), (8788, .otherFile)]))),
-                       ["Remote access · 2 servers · settings have a problem"] + usual)
-        XCTAssertEqual(shown(.known(state(listeners: [(8765, .otherFile), (8788, .otherFile)]))),
-                       ["Remote access · 2 servers · started with other settings"] + blank)
+        XCTAssertEqual(shown(.known(state(listeners: [(8788, .current), (8765, .current)])), nil, mine),
+                       ["Remote access · 2 servers · 1 run outside Iris"] + usual)
+        // The warning is for every server on this file, the switch's own included.
+        XCTAssertEqual(shown(.known(state(listeners: [(8788, .changed), (8765, .current), (8766, .otherFile)])), nil, mine),
+                       ["Remote access · 3 servers · 2 run outside Iris · restart to apply changes"] + usual)
+        XCTAssertEqual(shown(.known(state(listeners: [(8788, .changed), (8765, .current)])), nil, mine),
+                       ["Remote access · 2 servers · 1 run outside Iris · restart to apply changes"] + usual)
+        // A check made before the switch's server was replaced still lists the earlier one (100, changed): it does
+        // not count. The current one (102) is not in that check yet.
+        let replaced = RemoteServerStatus(phase: .on(port: 8788), pid: 102, ours: [id(100), id(102)])
+        XCTAssertEqual(shown(.known(state(listeners: [(8788, .changed), (8765, .current)])), nil, replaced),
+                       ["Remote access · 2 servers · 1 run outside Iris"] + usual)
+        // The others' settings warning stays beside the switch's own server.
+        XCTAssertEqual(shown(.known(state(listeners: [(8788, .current), (8765, .changed)])), nil, mine),
+                       ["Remote access · 2 servers · 1 run outside Iris · restart to apply changes"] + usual)
+        XCTAssertEqual(shown(.known(state(usable: false, listeners: [(8788, .current), (8765, .current)])), nil, mine),
+                       ["Remote access · 2 servers · 1 run outside Iris · settings have a problem"] + usual)
+        XCTAssertEqual(shown(.known(state(usable: false, listeners: [(8788, .current), (8765, .otherFile)])), nil, mine),
+                       ["Remote access · 2 servers · 1 run outside Iris · settings have a problem"] + usual)
+        // No server on this file, the switch's own on another (as only a test sets up): no warning.
+        XCTAssertEqual(shown(.known(state(usable: false, listeners: [(8788, .otherFile), (8765, .otherFile)])), nil, mine),
+                       ["Remote access · 2 servers · 1 run outside Iris"] + blank)
+    }
+
+    /// The header's line, the switch (on or off, then - when it cannot be used) and the reason behind the item
+    /// under the header, for each state of the switch's server and the servers running.
+    func testSwitch() {
+        func header(_ remote: RemoteAnswer, _ server: RemoteServerStatus) -> [String] {
+            let model = menuModel(remote, fine, server)
+            return [model.status, (model.switchOn ? "on" : "off") + (model.switchEnabled ? "" : " -"), model.failure ?? "-"]
+        }
+        let none = RemoteAnswer.known(state(listeners: []))
+        let foreign = RemoteAnswer.known(state(listeners: [(8788, .current)]))
+        let reason = "/x/http-scope: not a JSON object"
+        XCTAssertEqual(header(.checking, RemoteServerStatus()), ["Checking…", "off", "-"])
+        XCTAssertEqual(header(.unknown, RemoteServerStatus()), ["Remote access unknown", "off", "-"])
+        XCTAssertEqual(header(none, RemoteServerStatus()), ["Remote access off", "off", "-"])
+        for remote in [RemoteAnswer.checking, none] {
+            XCTAssertEqual(header(remote, RemoteServerStatus(phase: .starting, pid: 100, ours: [id(100)])), ["Remote access · starting…", "on", "-"])
+            XCTAssertEqual(header(remote, RemoteServerStatus(phase: .failed(reason))), ["Remote access · couldn't start", "on", reason])
+            XCTAssertEqual(header(remote, RemoteServerStatus(phase: .on(port: 8765), pid: 100, ours: [id(100)])), ["Remote access · port 8765", "on", "-"])
+        }
+        // Not started by this Iris: on, and it cannot be turned off here, whether the choice is off or on.
+        XCTAssertEqual(header(foreign, RemoteServerStatus()), ["Remote access · port 8788 · run outside Iris", "on -", "-"])
+        XCTAssertEqual(header(foreign, RemoteServerStatus(phase: .outside([8788]))), ["Remote access · port 8788 · run outside Iris", "on -", "-"])
+        // While left from an earlier run and being stopped, it is not someone else's.
+        XCTAssertEqual(header(foreign, RemoteServerStatus(phase: .starting, ours: [id(100)])), ["Remote access · starting…", "on", "-"])
+        XCTAssertEqual(header(foreign, RemoteServerStatus(phase: .off, ours: [id(100)])), ["Remote access off", "off", "-"])
+        // With none of its own running (could not start, waiting to start again), another server is what shows.
+        XCTAssertEqual(header(foreign, RemoteServerStatus(phase: .failed(reason))), ["Remote access · port 8788 · run outside Iris", "on -", "-"])
+        XCTAssertEqual(header(foreign, RemoteServerStatus(phase: .starting, ours: [id(105)])),
+                       ["Remote access · port 8788 · run outside Iris", "on -", "-"])
+        XCTAssertEqual(header(foreign, RemoteServerStatus(phase: .on(port: 8765), pid: 105, ours: [id(105)])),
+                       ["Remote access · 2 servers · 1 run outside Iris", "on", "-"])
+        // A pid the switch once had, now another process's: that server is someone else's.
+        XCTAssertEqual(header(foreign, RemoteServerStatus(phase: .off, ours: [ServerIdentity(pid: 100, started: 5)])),
+                       ["Remote access · port 8788 · run outside Iris", "on -", "-"])
+        // Beside the switch's own server, the switch turns that one off.
+        XCTAssertEqual(header(.known(state(listeners: [(8765, .current), (8788, .current)])),
+                              RemoteServerStatus(phase: .on(port: 8765), pid: 100, ours: [id(100)])),
+                       ["Remote access · 2 servers · 1 run outside Iris", "on", "-"])
     }
 
     func testAccessWords() {
@@ -126,8 +213,8 @@ final class MenuTests: XCTestCase {
         }
         // Each app's problem shows on its own row only.
         let none = Permissions(calendar: .denied, reminders: .denied, notes: "denied")
-        XCTAssertEqual(shown(on, none), ["Remote access · port 8788", "Calendar: Needs access !", "Reminders: Needs access !",
-                                         "Notes: Needs access !"])
+        XCTAssertEqual(shown(on, none, mine), ["Remote access · port 8788", "Calendar: Needs access !", "Reminders: Needs access !",
+                                               "Notes: Needs access !"])
     }
 
     func testPanes() {
@@ -138,7 +225,11 @@ final class MenuTests: XCTestCase {
 
     @MainActor
     private final class Actions: NSObject, MenuActions {
+        var switched: [NSControl.StateValue] = []
+        var failuresShown = 0
         func chooseRow(_ sender: NSMenuItem) {}
+        func toggleRemoteAccess(_ sender: NSSwitch) { switched.append(sender.state) }
+        func showRemoteFailure() { failuresShown += 1 }
         func toggleOpenAtLogin() {}
     }
 
@@ -157,7 +248,7 @@ final class MenuTests: XCTestCase {
 
         func described(_ menu: NSMenu) -> [String] {
             menu.update()
-            return menu.items.map { item in
+            return menu.items.filter { !$0.isHidden }.map { item in
                 if item.isSeparatorItem { return "---" }
                 var text = item.view.map { labels($0).joined(separator: " / ") } ?? item.title
                 if let badge = item.badge { text += " [\(badge.stringValue ?? "")]" }
@@ -168,25 +259,38 @@ final class MenuTests: XCTestCase {
             }
         }
 
-        let states: [(RemoteAnswer, Permissions, [String])] = [
-            (.checking, fine, ["(Iris / Checking…)", "Calendar", "Reminders", "Notes"]),
-            (.known(state(listeners: [(8788, .current)])), fine,
+        let off = RemoteServerStatus()
+        let failed = RemoteServerStatus(phase: .failed("/x/http-scope: not a JSON object"))
+        let states: [(RemoteAnswer, Permissions, RemoteServerStatus, [String])] = [
+            (.checking, fine, off, ["(Iris / Checking…)", "Calendar", "Reminders", "Notes"]),
+            (.known(state(listeners: [(8788, .current)])), fine, mine,
              ["(Iris / Remote access · port 8788)", "Calendar [Read & write]", "Reminders [Off]", "Notes [Read only]"]),
-            (.known(state(listeners: [])), fine,
+            (.known(state(listeners: [])), fine, off,
              ["(Iris / Remote access off)", "Calendar [Read & write]", "Reminders [Off]", "Notes [Read only]"]),
-            (.known(state(listeners: [(8788, .current)])), Permissions(calendar: .denied, reminders: .fullAccess, notes: "granted"),
+            (.known(state(listeners: [(8788, .current)])), Permissions(calendar: .denied, reminders: .fullAccess, notes: "granted"), mine,
              ["(Iris / Remote access · port 8788)", "Calendar [Needs access]", "Reminders [Off]", "Notes [Read only]"]),
-            (.unknown, fine, ["(Iris / Remote access unknown)", "Calendar", "Reminders", "Notes"]),
+            (.unknown, fine, off, ["(Iris / Remote access unknown)", "Calendar", "Reminders", "Notes"]),
+            (.known(state(listeners: [])), fine, failed,
+             ["(Iris / Remote access · couldn't start)", "Why It Couldn't Start…", "Calendar [Read & write]", "Reminders [Off]",
+              "Notes [Read only]"]),
+            (.known(state(listeners: [(8788, .current)])), fine, off,
+             ["(Iris / Remote access · port 8788 · run outside Iris)", "Calendar [Read & write]", "Reminders [Off]", "Notes [Read only]"]),
         ]
         let header = menu.items[0]
-        let rows = Array(menu.items[2...4])
-        for (remote, permissions, top) in states {
-            let model = menuModel(remote, permissions)
+        let rows = Array(menu.items[3...5])
+        let toggle = items.headerView.toggle
+        for (remote, permissions, server, top) in states {
+            let model = menuModel(remote, permissions, server)
             items.show(model)
-            XCTAssertEqual(described(menu), [top[0], "---"] + top.dropFirst() + ["---", "Settings >", "---", "Quit Iris ⌘Q"])
+            let under = top.count == 5 ? 2 : 1
+            XCTAssertEqual(described(menu), Array(top.prefix(under)) + ["---"] + top.dropFirst(under)
+                           + ["---", "Settings >", "---", "Quit Iris ⌘Q"])
+            XCTAssertEqual(toggle.state, model.switchOn ? .on : .off)
+            XCTAssertEqual(toggle.isEnabled, model.switchEnabled)
             // The same items, changed in place.
             XCTAssertTrue(menu.items[0] === header)
-            XCTAssertTrue(zip(menu.items[2...4], rows).allSatisfy { $0 === $1 })
+            XCTAssertTrue(menu.items[1] === items.failure)
+            XCTAssertTrue(zip(menu.items[3...5], rows).allSatisfy { $0 === $1 })
             for (item, row) in zip(rows, model.rows) {
                 XCTAssertTrue(item.target === actions)
                 XCTAssertEqual(item.action, #selector(MenuActions.chooseRow))
@@ -195,9 +299,26 @@ final class MenuTests: XCTestCase {
         }
         XCTAssertFalse(header.view?.frame.isEmpty ?? true)
 
+        // The switch: named for VoiceOver, and its action and the failure item's reach the target.
+        XCTAssertEqual(toggle.accessibilityLabel(), "Remote access")
+        XCTAssertTrue(toggle.isDescendant(of: items.headerView))
+        XCTAssertTrue(toggle.target === actions)
+        XCTAssertEqual(toggle.action, #selector(MenuActions.toggleRemoteAccess))
+        items.show(menuModel(.known(state(listeners: [])), fine, off))
+        toggle.state = .on
+        _ = (toggle.target as? NSObject)?.perform(toggle.action, with: toggle)
+        XCTAssertEqual(actions.switched, [.on])
+        // A click the model does not follow is put back at the next showing, though the model did not change.
+        items.show(menuModel(.known(state(listeners: [])), fine, off))
+        XCTAssertEqual(toggle.state, .off)
+        XCTAssertTrue(items.failure.target === actions)
+        XCTAssertEqual(items.failure.action, #selector(MenuActions.showRemoteFailure))
+        _ = (items.failure.target as? NSObject)?.perform(items.failure.action)
+        XCTAssertEqual(actions.failuresShown, 1)
+
         // The submenu enables its items as AppKit validates them, which a test without NSApplication cannot; the
         // version has no action, so it shows as information.
-        let settings = menu.items[6].submenu!
+        let settings = menu.items[7].submenu!
         XCTAssertTrue(settings.autoenablesItems)
         XCTAssertEqual(settings.items.map(\.title), ["Iris 1.0", "Check for Updates…", "Open at Login", "Allow Notes Access…"])
         // Offered only while Notes was never asked.
@@ -216,7 +337,7 @@ final class MenuTests: XCTestCase {
     @MainActor
     func testHeaderWidthBeforeOpening() {
         let actions = Actions()
-        let long = menuModel(.known(state(listeners: [(8765, .current), (8788, .otherFile)])), fine)
+        let long = menuModel(.known(state(listeners: [(8788, .current), (8765, .current), (8766, .current)])), fine, mine)
         for first in [long, menuModel(.known(state(listeners: [])), fine)] {
             let menu = NSMenu()
             let items = MenuItems(target: actions)
@@ -225,6 +346,11 @@ final class MenuTests: XCTestCase {
             _ = menu.size
             items.show(long)
             XCTAssertGreaterThanOrEqual(menu.size.width, items.headerView.fittingSize.width, first.status)
+            // The line ends before the switch begins.
+            items.headerView.frame.size.width = menu.size.width
+            items.headerView.layoutSubtreeIfNeeded()
+            let line = items.headerView.subviews.compactMap { $0 as? NSStackView }.first!.views.last!
+            XCTAssertLessThanOrEqual(line.convert(line.bounds, to: items.headerView).maxX, items.headerView.toggle.frame.minX, first.status)
         }
     }
 
