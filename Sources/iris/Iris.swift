@@ -14,7 +14,7 @@ struct Iris: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "iris",
         abstract: "Apple Calendar, Notes and Reminders for the agents you run. JSON on stdout, errors on stderr.",
-        discussion: "Opened as an app without arguments (Finder, open -a Iris, login), Iris shows a menu bar icon with the Calendar, Notes and Reminders permission state, and whether iris mcp --http is running and what it allows, instead.",
+        discussion: "Opened as an app without arguments (Finder, open -a Iris, login), Iris shows a menu bar icon instead, with whether iris mcp --http is running, what it allows in Calendar, Reminders and Notes, and any permission Iris lacks.",
         subcommands: [Status.self, Doctor.self, CalendarCommand.self, NotesCommand.self, RemindersCommand.self, MCP.self, RemoteCommand.self]
     )
 }

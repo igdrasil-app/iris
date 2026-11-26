@@ -20,8 +20,8 @@ let package = Package(
         // limit and how reminders read, filter and order only: who gets past the one, what the other lets a
         // caller see, how an alarm reads back, which availability a calendar takes, how a reply status or
         // address reads, whether an unanswered prompt ends the call, and which reminders a due range keeps
-        // and in what order could change silently, and no hand check would notice. So could the menu's
-        // remote access lines, in states nobody sets up by hand to look at.
+        // and in what order could change silently, and no hand check would notice. So could the menu bar's
+        // menu, in states and permissions nobody sets up by hand to look at.
         .testTarget(name: "irisTests", dependencies: ["iris"]),
     ]
 )

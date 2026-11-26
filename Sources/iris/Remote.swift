@@ -306,48 +306,6 @@ func remoteSummary(usable: Bool?, listeners: [(port: Int, state: ListenerState)]
     return sentences.joined(separator: " ")
 }
 
-struct RemoteMenuLine: Equatable {
-    let title: String
-    var indented = false
-}
-
-/// The menu bar's remote access section: a headline, and under it what each app allows, only while a server
-/// runs with this scope file; counts, never names.
-func remoteMenuLines(_ state: RemoteState) -> [RemoteMenuLine] {
-    let listeners = state.listeners
-    guard !listeners.isEmpty else { return [RemoteMenuLine(title: "Remote access: off")] }
-    let ours = listeners.filter { $0.state != .otherFile }
-    var headline = "Remote access: on, "
-    headline += listeners.count == 1 ? "" : "\(listeners.count) servers, "
-    headline += ports(listeners.map(\.listener.port))
-    if ours.isEmpty {
-        headline += " — started with other settings"
-    } else if state.usable == false {
-        headline += " — settings have a problem"
-    } else if ours.contains(where: { $0.state == .changed }) {
-        headline += " — restart to apply changes"
-    }
-    var lines = [RemoteMenuLine(title: headline)]
-    guard !ours.isEmpty else { return lines }
-    let apps = [("Calendar", state.calendar, "calendar"), ("Notes", state.notes, "folder"), ("Reminders", state.reminders, "list")]
-    for (app, access, noun) in apps {
-        guard let access else { continue }
-        let allows = switch (access.access, access.items) {
-        case ("none", _): "off"
-        case (let word, .all): "\(word), all \(noun)s"
-        case (let word, .named(let names)): "\(word), \(names.count) \(noun)\(names.count == 1 ? "" : "s")"
-        case (let word, .unknown): word
-        }
-        lines.append(RemoteMenuLine(title: "\(app): \(allows)", indented: true))
-    }
-    // The lines above are this scope file's; a server started with another file allows something else.
-    let others = listeners.filter { $0.state == .otherFile }.map(\.listener.port)
-    if !others.isEmpty {
-        lines.append(RemoteMenuLine(title: "Other settings on \(ports(others))", indented: true))
-    }
-    return lines
-}
-
 private func ports(_ numbers: [Int]) -> String {
     let words = numbers.map(String.init)
     guard words.count > 1 else { return "port \(words.joined())" }
