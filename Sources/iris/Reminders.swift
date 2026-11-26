@@ -70,8 +70,9 @@ struct ReminderList: AsyncParsableCommand {
             time says 14:00, timeZone is null, and at is 14:00 that day on this Mac, in its zone now; a Mac \
             in another zone gives another at.
             at is also null when the date and time kept do not name a moment, as 30 February does not. A \
-            clock time the zone skips when its clocks go forward, say 02:30 that night, does name one: \
-            at is then an hour later, 03:30, as the system reads it, while time still says 02:30.
+            clock time the zone skips when its clocks go forward does name one: the system reads it as the \
+            later time, so where clocks jump from 02:00 to 03:00 a time of 02:30 is read as 03:30 there. at \
+            is that moment in this Mac's zone, while time still says 02:30.
 
             --due-from and --due-to keep the reminders due in that range, both ends included. Without either, \
             every reminder is listed, with or without a due date; with either, one without a due date is left \
