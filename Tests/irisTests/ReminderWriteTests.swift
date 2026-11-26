@@ -118,6 +118,34 @@ final class ReminderWriteTests: XCTestCase {
         XCTAssertNoThrow(try AddReminder.parse(["--list", "unused", "--title", "Buy milk"]))
     }
 
+    // Measured on a Mac: a first save keeps the due as the start for a time, and 00:00 with no zone for a date.
+    func testTheStartIsWhatAFirstSaveKeeps() throws {
+        let timed = try dueComponents("2030-03-04T09:30:15", mac: mac)
+        XCTAssertEqual(startComponents(timed), timed)
+        let start = startComponents(try dueComponents("2030-03-04", mac: mac))
+        XCTAssertEqual([start.year, start.month, start.day, start.hour, start.minute, start.second], [2030, 3, 4, 0, 0, 0])
+        XCTAssertNil(start.timeZone)
+    }
+
+    func testTheDueOfAReminderWithAnAlarmOrThatRepeatsIsNotChanged() {
+        XCTAssertNil(dueChangeRefusal(hasAlarms: false, repeats: false))
+        XCTAssertTrue(dueChangeRefusal(hasAlarms: true, repeats: false)!.contains("alarm"))
+        XCTAssertTrue(dueChangeRefusal(hasAlarms: false, repeats: true)!.contains("repeats"))
+        XCTAssertTrue(dueChangeRefusal(hasAlarms: true, repeats: true)!.contains("alarm"))
+    }
+
+    func testUpdateNeedsAnOptionAndAValidOne() {
+        XCTAssertThrowsError(try UpdateReminder.parse(["some-id"]))
+        for title in ["", " \n\t "] {
+            XCTAssertThrowsError(try UpdateReminder.parse(["some-id", "--title", title]))
+        }
+        XCTAssertThrowsError(try UpdateReminder.parse(["some-id", "--due", "tomorrow"]))
+        XCTAssertThrowsError(try UpdateReminder.parse(["some-id", "--priority", "urgent"]))
+        for args in [["--notes", ""], ["--due", ""], ["--due", "2030-03-04"], ["--priority", "none"], ["--list", "x"]] {
+            XCTAssertNoThrow(try UpdateReminder.parse(["some-id"] + args), "\(args)")
+        }
+    }
+
     func testTitle() {
         XCTAssertTrue(isValidTitle("Buy milk"))
         XCTAssertTrue(isValidTitle(" x "))

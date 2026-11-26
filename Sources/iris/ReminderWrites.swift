@@ -68,6 +68,118 @@ struct AddReminder: AsyncParsableCommand {
     }
 }
 
+struct UpdateReminder: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "update",
+        abstract: "Change a reminder. Only the fields you name change. Prints it as `iris reminders list` does.",
+        discussion: """
+            Prints the reminder with the 12 keys of `iris reminders list`, read back after the save. Name at \
+            least one option. The id stays the same, also when the reminder moves to another list. A \
+            reminder in a read-only list cannot be changed.
+
+            --due takes the forms of `iris reminders add`; an empty string clears the due date. The start \
+            date Reminders keeps follows it: set to the due for a time, to 00:00 that day for a bare date, \
+            as Reminders sets it when a reminder is first saved, and cleared with the due date. Without \
+            --due the start date is left as it is, also one that differs from the due.
+
+            --due is refused, with nothing changed, whatever its value, the same one included:
+            - when the reminder has an alarm. An alarm set in Reminders would stay at its old time, and iris \
+            cannot move it: change the time in Reminders.
+            - when the reminder repeats. Its due date anchors every later occurrence, and iris does not \
+            change a series yet: change it in Reminders.
+            Its title, notes, priority and list can still be changed.
+
+            Alarms are never added, moved or removed, and completed stays as it is. Not offered: alarms, \
+            URL, location, repeating, start date, completed.
+            """
+    )
+
+    @Argument(help: "Reminder id, from `iris reminders list`.")
+    var id: String
+
+    @Option(help: "New title; not empty or only whitespace.")
+    var title: String?
+
+    @Option(help: "New notes. An empty string clears them.")
+    var notes: String?
+
+    @Option(help: "New due date: 2026-10-13 (date only), 2026-10-13T09:00 (this Mac's time), or ISO 8601 with an offset or Z, as `iris reminders add` takes it. An empty string clears it. Refused when the reminder has an alarm or repeats.")
+    var due: String?
+
+    @Option(help: "New priority, in the words `iris reminders list` prints.")
+    var priority: ReminderPriority?
+
+    @Option(help: "Move the reminder to this list: id or title, from `iris reminders lists`. Must name one list, and it must be writable.")
+    var list: String?
+
+    func validate() throws {
+        if title == nil, notes == nil, due == nil, priority == nil, list == nil {
+            throw ValidationError("name at least one of --title, --notes, --due, --priority, --list")
+        }
+        if let title, !isValidTitle(title) { throw ValidationError("--title must not be empty") }
+        _ = try newDue(mac: macCalendar())
+    }
+
+    func run() async throws {
+        let mac = macCalendar()
+        // nil both when --due is not given and when it is empty; `due != nil` below tells them apart.
+        let dueParts = try newDue(mac: mac)
+        let store = try await grantedReminderStore()
+        let reminder = try findReminder(id, in: store, allowed: nil)
+        guard let current = reminder.calendar, current.allowsContentModifications else {
+            throw IrisError("list \(reminder.calendar?.title ?? "") is read-only")
+        }
+        let target = try list.map { try writableList($0, in: store, allowed: nil) }
+        // The alarms themselves are read: only they say for certain whether there is one.
+        let hasAlarms = !(reminder.alarms ?? []).isEmpty
+        if due != nil, let refusal = dueChangeRefusal(hasAlarms: hasAlarms, repeats: reminder.hasRecurrenceRules) {
+            throw IrisError(refusal)
+        }
+
+        if let title { reminder.title = title }
+        if let notes { reminder.notes = notes.isEmpty ? nil : notes }
+        if let priority { reminder.priority = priority.value }
+        if let target, target.calendarIdentifier != current.calendarIdentifier { reminder.calendar = target }
+        if due != nil {
+            reminder.dueDateComponents = dueParts
+            reminder.startDateComponents = dueParts.map(startComponents)
+        }
+
+        do {
+            try store.save(reminder, commit: true)
+        } catch {
+            throw IrisError("save failed: \(error.localizedDescription)")
+        }
+        try emit(Reminder(reminder, mac: mac))
+    }
+
+    /// The due --due asks for; nil when it is not given or is empty, which clears the due date.
+    private func newDue(mac: Calendar) throws -> DateComponents? {
+        guard let due, !due.isEmpty else { return nil }
+        return try dueComponents(due, mac: mac)
+    }
+}
+
+/// Why the due date of a reminder cannot be changed here, or nil when it can.
+func dueChangeRefusal(hasAlarms: Bool, repeats: Bool) -> String? {
+    if hasAlarms {
+        return "this reminder has an alarm set in Reminders, which would stay at its old time if the due date "
+            + "changed, and iris cannot move it, so nothing was changed. Change the time in Reminders."
+    }
+    if repeats {
+        return "this reminder repeats, and iris does not change the due date of a repeating reminder, so nothing "
+            + "was changed. Change it in Reminders."
+    }
+    return nil
+}
+
+/// The start date Reminders itself sets when a reminder with this due is first saved: the due for a time,
+/// 00:00 with no zone on that day for a bare date.
+func startComponents(_ due: DateComponents) -> DateComponents {
+    guard due.hour == nil else { return due }
+    return DateComponents(year: due.year, month: due.month, day: due.day, hour: 0, minute: 0, second: 0)
+}
+
 struct DeleteReminder: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "delete",

@@ -247,6 +247,17 @@ let tools: [Tool] = [
         Parameter(name: "priority", kind: .string, description: "Default: none.", choices: ["none", "low", "medium", "high"]),
     ]),
 
+    Tool(name: "update_reminder",
+         description: "Change a reminder. Only the fields you name, at least one, change; the id stays. Returns it as reminders lists it. due is refused, with nothing changed, whatever its value, when the reminder has an alarm (iris cannot move it; the time is changed in Reminders) or repeats. Alarms and completed are never changed.",
+         command: ["reminders", "update"], scope: nil, parameters: [
+        Parameter(name: "id", kind: .positional, description: "Reminder id, from reminders.", required: true),
+        Parameter(name: "title", kind: .string, description: "New title, not empty."),
+        Parameter(name: "notes", kind: .string, description: "New notes. An empty string clears them."),
+        Parameter(name: "due", kind: .string, description: "New due date, in the forms of add_reminder. An empty string clears it. The start date Reminders keeps follows it."),
+        Parameter(name: "priority", kind: .string, description: "New priority.", choices: ["none", "low", "medium", "high"]),
+        Parameter(name: "list", kind: .string, description: "Move the reminder to this list: id or title, from reminder_lists. Must name one writable list."),
+    ]),
+
     Tool(name: "delete_reminder",
          description: "Delete a reminder. Returns {deleted, title, list, listId}. A repeating reminder is deleted whole.",
          command: ["reminders", "delete"], scope: nil, parameters: [
