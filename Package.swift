@@ -16,9 +16,10 @@ let package = Package(
                 .product(name: "Sparkle", package: "Sparkle"),
             ]
         ),
-        // The HTTP gate, the HTTP scope, alarm minutes, availability and attendee words only: who gets past the
-        // one, what the other lets a caller see, how an alarm reads back, which availability a calendar takes and
-        // how a reply status or address reads could change silently, and no hand check would notice.
+        // The HTTP gate, the HTTP scope, alarm minutes, availability, attendee words and the Reminders prompt
+        // limit only: who gets past the one, what the other lets a caller see, how an alarm reads back, which
+        // availability a calendar takes, how a reply status or address reads, and whether an unanswered prompt
+        // ends the call could change silently, and no hand check would notice.
         .testTarget(name: "irisTests", dependencies: ["iris"]),
     ]
 )
