@@ -422,6 +422,176 @@ final class ScopeTests: XCTestCase {
         }
     }
 
+    // The menu bar's ticks, with invented calendars; the same rules hold for lists and folders.
+    private let named = [Named(id: "c1", name: "Work"), Named(id: "c2", name: "Family"), Named(id: "c3", name: "Birthdays")]
+    private let lists = [Named(id: "l1", name: "Errands"), Named(id: "l2", name: "Groceries")]
+
+    func testTicks() {
+        let none = ScopeFile(calendars: [], folders: [])
+        func tick(_ tick: ScopeTick, _ file: ScopeFile) -> ScopeFile {
+            applying(tick, to: file, items: tick.kind == .lists ? lists : named)
+        }
+        // All on is "all"; off shares none.
+        XCTAssertEqual(tick(.all(.calendars, true), none), ScopeFile(calendars: nil, folders: []))
+        XCTAssertEqual(tick(.all(.calendars, false), ScopeFile(calendars: nil, folders: [], writes: true, sharedEvents: true)), none)
+        XCTAssertEqual(tick(.all(.lists, true), none), ScopeFile(calendars: [], folders: [], lists: nil))
+        XCTAssertEqual(tick(.all(.lists, false), ScopeFile(calendars: [], folders: [], lists: nil, reminderWrites: true)), none)
+        // From "all", unticking one leaves every other one shared, by id.
+        XCTAssertEqual(tick(.item(.calendars, "c2", false), ScopeFile(calendars: nil, folders: [], writes: true)),
+                       ScopeFile(calendars: ["c1", "c3"], folders: [], writes: true))
+        // From a list, one is added at the end or taken out.
+        XCTAssertEqual(tick(.item(.calendars, "c3", true), ScopeFile(calendars: ["c1"], folders: [])),
+                       ScopeFile(calendars: ["c1", "c3"], folders: []))
+        XCTAssertEqual(tick(.item(.calendars, "c1", false), ScopeFile(calendars: ["c1", "c3"], folders: [])),
+                       ScopeFile(calendars: ["c3"], folders: []))
+        // Names become ids, in their place; a name two calendars share names both, and the other stays.
+        let twins = named + [Named(id: "c4", name: "Work")]
+        XCTAssertEqual(applying(.item(.calendars, "c2", true), to: ScopeFile(calendars: ["Work"], folders: []), items: twins),
+                       ScopeFile(calendars: ["c1", "c4", "c2"], folders: []))
+        XCTAssertEqual(applying(.item(.calendars, "c4", false), to: ScopeFile(calendars: ["Work"], folders: []), items: twins),
+                       ScopeFile(calendars: ["c1"], folders: []))
+        // The last one: nothing shared, and with it no changes and no events with other people.
+        XCTAssertEqual(tick(.item(.calendars, "c1", false), ScopeFile(calendars: ["c1"], folders: [], writes: true, sharedEvents: true)), none)
+        XCTAssertEqual(tick(.item(.lists, "l1", false), ScopeFile(calendars: [], folders: [], lists: ["l1"], reminderWrites: true)), none)
+        // An entry that names nothing stays as written until it is removed itself; an id is never doubled.
+        XCTAssertEqual(tick(.item(.calendars, "c2", true), ScopeFile(calendars: ["Old", "c1", "Work"], folders: [])),
+                       ScopeFile(calendars: ["Old", "c1", "c2"], folders: []))
+        XCTAssertEqual(tick(.remove(.calendars, "Old"), ScopeFile(calendars: ["Old", "c1"], folders: [])),
+                       ScopeFile(calendars: ["c1"], folders: []))
+        XCTAssertEqual(tick(.remove(.calendars, "Old"), ScopeFile(calendars: ["Old"], folders: [], writes: true)), none)
+        // Changes, and events with other people, which need changes.
+        let one = ScopeFile(calendars: ["c1"], folders: [])
+        XCTAssertEqual(tick(.writes(true), one), ScopeFile(calendars: ["c1"], folders: [], writes: true))
+        XCTAssertEqual(tick(.sharedEvents(true), ScopeFile(calendars: ["c1"], folders: [], writes: true)),
+                       ScopeFile(calendars: ["c1"], folders: [], writes: true, sharedEvents: true))
+        XCTAssertEqual(tick(.writes(false), ScopeFile(calendars: ["c1"], folders: [], writes: true, sharedEvents: true)), one)
+        XCTAssertEqual(tick(.sharedEvents(false), ScopeFile(calendars: ["c1"], folders: [], writes: true, sharedEvents: true)),
+                       ScopeFile(calendars: ["c1"], folders: [], writes: true))
+        let someLists = ScopeFile(calendars: [], folders: [], lists: ["l2"])
+        XCTAssertEqual(tick(.reminderWrites(true), someLists), ScopeFile(calendars: [], folders: [], lists: ["l2"], reminderWrites: true))
+        XCTAssertEqual(tick(.reminderWrites(false), ScopeFile(calendars: [], folders: [], lists: ["l2"], reminderWrites: true)), someLists)
+        // What the rules do not allow changes nothing.
+        XCTAssertEqual(tick(.writes(true), none), none)
+        XCTAssertEqual(tick(.sharedEvents(true), one), one)
+        XCTAssertEqual(tick(.reminderWrites(true), none), none)
+        // A tick of one app leaves the others as written, also writes on with no calendars, which the file allows.
+        let mixed = ScopeFile(calendars: ["Work"], folders: nil, lists: ["Errands"], writes: true, reminderWrites: true)
+        XCTAssertEqual(applying(.item(.folders, "f1", false), to: mixed, items: [Named(id: "f1", name: "Recipes")]),
+                       ScopeFile(calendars: ["Work"], folders: [], lists: ["Errands"], writes: true, reminderWrites: true))
+        let writesAlone = ScopeFile(calendars: [], folders: [], writes: true, sharedEvents: true)
+        XCTAssertEqual(applying(.all(.folders, true), to: writesAlone, items: []),
+                       ScopeFile(calendars: [], folders: nil, writes: true, sharedEvents: true))
+        XCTAssertEqual(tick(.item(.lists, "l1", true), writesAlone),
+                       ScopeFile(calendars: [], folders: [], lists: ["l1"], writes: true, sharedEvents: true))
+    }
+
+    func testEncodedFileReadsBack() throws {
+        let files = [ScopeFile(calendars: [], folders: []), ScopeFile(calendars: nil, folders: nil, lists: nil),
+                     ScopeFile(calendars: ["c1", "x/y \"quoted\""], folders: ["f/1"], lists: ["l1"], writes: true,
+                               sharedEvents: true, reminderWrites: true)]
+        for file in files { XCTAssertEqual(try parseScopeFile(encodeScopeFile(file)), file) }
+        XCTAssertEqual(String(decoding: encodeScopeFile(ScopeFile(calendars: ["c1"], folders: nil, writes: true)), as: UTF8.self), """
+            {
+              "calendars" : [
+                "c1"
+              ],
+              "folders" : "all",
+              "lists" : [
+
+              ],
+              "writes" : true
+            }
+
+            """)
+    }
+
+    /// From several files, 200 random ticks each: every file in between reads back as itself, keeps the rules, and is
+    /// one a server would start with, as no tick ever names what does not exist.
+    func testTicksKeepTheRules() throws {
+        var random = SplitMix(seed: 161)
+        let listings: [String: [Named]] = ["calendar": named, "reminders": lists,
+                                           "notes": [Named(id: "f1", name: "Recipes"), Named(id: "f2", name: "Travel")]]
+        func listing(_ arguments: [String]) throws -> Data {
+            let nameKey = arguments[0] == "notes" ? "name" : "title"
+            return try JSONSerialization.data(withJSONObject: listings[arguments[0]]!.map { ["id": $0.id, nameKey: $0.name] })
+        }
+        let starts = [ScopeFile(calendars: [], folders: []), ScopeFile(calendars: nil, folders: nil, lists: nil),
+                      ScopeFile(calendars: ["Work", "c3"], folders: ["Recipes"], lists: ["Errands"], writes: true, reminderWrites: true),
+                      ScopeFile(calendars: nil, folders: [], lists: nil, writes: true, sharedEvents: true, reminderWrites: true)]
+        for start in starts {
+            var file = start
+            for _ in 0..<200 {
+                let kind = [ScopeKind.calendars, .lists, .folders][Int(random.next() % 3)]
+                let items = kind == .calendars ? listings["calendar"]! : kind == .lists ? listings["reminders"]! : listings["notes"]!
+                let on = random.next() % 2 == 0
+                let tick: ScopeTick = switch random.next() % 5 {
+                case 0: .all(kind, on)
+                case 1, 2: .item(kind, items[Int(random.next() % UInt64(items.count))].id, on)
+                case 3: [.writes(on), .sharedEvents(on)][Int(random.next() % 2)]
+                default: .reminderWrites(on)
+                }
+                file = applying(tick, to: file, items: items)
+                XCTAssertEqual(try parseScopeFile(encodeScopeFile(file)), file, "\(tick)")
+                XCTAssertNoThrow(try pinScope(file, "/x/scope", listing: listing), "\(tick)")
+            }
+        }
+    }
+
+    @MainActor
+    func testScopeFileOnDisk() throws {
+        let folder = NSTemporaryDirectory() + "iris-scope-" + UUID().uuidString
+        defer { try? FileManager.default.removeItem(atPath: folder) }
+        let path = folder + "/Iris/http-scope"
+        func inode() -> UInt64? { (try? FileManager.default.attributesOfItem(atPath: path)[.systemFileNumber] as? UInt64) ?? nil }
+        func mode(_ path: String) -> Int? { try? FileManager.default.attributesOfItem(atPath: path)[.posixPermissions] as? Int }
+
+        // None yet: the first write makes the folder, owner-only, and the file.
+        XCTAssertEqual(loadScopeFile(path), .missing)
+        try writeScopeFile(ScopeFile(calendars: ["c1"], folders: []), to: path)
+        XCTAssertEqual(mode(folder + "/Iris"), 0o700)
+        XCTAssertEqual(mode(path), 0o600)
+        XCTAssertEqual(loadScopeFile(path), .file(ScopeFile(calendars: ["c1"], folders: [])))
+        // Each write is a new file renamed into place, nothing left beside it; a reader sees a whole file every time.
+        let first = inode()
+        let reader = ReaderState()
+        let reads = DispatchGroup()
+        DispatchQueue.global().async(group: reads) {
+            while !reader.isStopped {
+                guard case .file = loadScopeFile(path) else { return reader.fail() }
+            }
+        }
+        for index in 0..<200 {
+            try writeScopeFile(ScopeFile(calendars: (0...index % 7).map { "c\($0)" }, folders: nil, lists: nil), to: path)
+        }
+        reader.stop()
+        reads.wait()
+        XCTAssertEqual(reader.failures, 0)
+        XCTAssertNotEqual(inode(), first)
+        XCTAssertEqual(mode(path), 0o600)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: folder + "/Iris"), ["http-scope"])
+        // A folder others can write in gets nothing.
+        try FileManager.default.createDirectory(atPath: folder + "/open", withIntermediateDirectories: true)
+        chmod(folder + "/open", 0o777)
+        XCTAssertThrowsError(try writeScopeFile(ScopeFile(calendars: [], folders: []), to: folder + "/open/http-scope"))
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: folder + "/open"), [])
+
+        // A file that is not a scope file is never written over by a tick; reset keeps it beside the new one.
+        let broken = Data("{\"calendars\": [\"c1\"".utf8)
+        try broken.write(to: URL(fileURLWithPath: path))
+        guard case .broken = loadScopeFile(path) else { return XCTFail("a broken file reads as broken") }
+        let changes = ScopeChanges(path: path) {}
+        XCTAssertThrowsError(try changes.apply(.all(.calendars, true), items: []))
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: path)), broken)
+        let copy = try resetScopeFile(path, now: Date(timeIntervalSince1970: 0))
+        XCTAssertTrue(copy.hasPrefix(path + ".broken-19"))
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: copy)), broken)
+        XCTAssertEqual(loadScopeFile(path), .file(ScopeFile(calendars: [], folders: [])))
+        XCTAssertEqual(mode(path), 0o600)
+        // A file the server would refuse for its mode is no scope file to write over either.
+        chmod(path, 0o644)
+        guard case .broken = loadScopeFile(path) else { return XCTFail("a file others can read reads as broken") }
+    }
+
     func testOnlyMineIsTheCallersWithSharedEvents() throws {
         let scope = HTTPScope(calendars: ["c1"], folders: nil, writes: true, sharedEvents: true)
         let update = try XCTUnwrap(tools.first { $0.name == "update_event" }).limited(to: scope)
@@ -438,4 +608,30 @@ final class ScopeTests: XCTestCase {
         XCTAssertTrue(try DeleteEvent.parse(Array(try delete.argv(["id": "e1", "onlyMine": true]).dropFirst(2))).onlyMine)
         XCTAssertThrowsError(try delete.argv(["id": "e1", "onlyMine": "false"]), "a string is not a boolean")
     }
+}
+
+/// A seeded generator, so a failing sequence of ticks can be run again.
+struct SplitMix: RandomNumberGenerator {
+    private var state: UInt64
+    init(seed: UInt64) { state = seed }
+
+    mutating func next() -> UInt64 {
+        state &+= 0x9E37_79B9_7F4A_7C15
+        var z = state
+        z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
+        z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
+        return z ^ (z >> 31)
+    }
+}
+
+/// A stop flag and a count shared with a reading thread.
+final class ReaderState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stopped = false
+    private var count = 0
+
+    var isStopped: Bool { lock.withLock { stopped } }
+    var failures: Int { lock.withLock { count } }
+    func stop() { lock.withLock { stopped = true } }
+    func fail() { lock.withLock { count += 1 } }
 }

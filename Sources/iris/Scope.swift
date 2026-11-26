@@ -25,12 +25,29 @@ enum ScopeKind {
 /// they may also change and delete events that have other people on them; and whether they may add,
 /// change, complete and delete reminders in the lists it names.
 struct ScopeFile: Equatable {
-    let calendars: [String]?
-    let folders: [String]?
+    var calendars: [String]?
+    var folders: [String]?
     var lists: [String]? = []
     var writes = false
     var sharedEvents = false
     var reminderWrites = false
+
+    subscript(kind: ScopeKind) -> [String]? {
+        get {
+            switch kind {
+            case .calendars: calendars
+            case .folders: folders
+            case .lists: lists
+            }
+        }
+        set {
+            switch kind {
+            case .calendars: calendars = newValue
+            case .folders: folders = newValue
+            case .lists: lists = newValue
+            }
+        }
+    }
 }
 
 /// The scope as pinned at start: ids per kind, nil where the file says "all".
@@ -99,6 +116,157 @@ func parseScopeFile(_ data: Data) throws -> ScopeFile {
                      writes: writes, sharedEvents: sharedEvents, reminderWrites: reminderWrites)
 }
 
+/// The file as the menu bar writes it: every key that holds items, "lists" too, and each flag only when true;
+/// keys sorted and one entry to a line, so a person can still read and edit it.
+func encodeScopeFile(_ file: ScopeFile) -> Data {
+    var keys: [String: Any] = [:]
+    for (key, kind) in [("calendars", ScopeKind.calendars), ("folders", .folders), ("lists", .lists)] {
+        keys[key] = file[kind].map { $0 as Any } ?? "all"
+    }
+    for (key, on) in [("writes", file.writes), ("sharedEvents", file.sharedEvents), ("reminderWrites", file.reminderWrites)] where on {
+        keys[key] = true
+    }
+    // Nothing here can fail to encode: strings, lists of strings and booleans.
+    let data = try! JSONSerialization.data(withJSONObject: keys, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
+    return data + Data("\n".utf8)
+}
+
+/// One click in a row's submenu in the menu bar.
+enum ScopeTick: Equatable {
+    case all(ScopeKind, Bool)           // All Calendars, All Lists or All Folders on or off
+    case item(ScopeKind, String, Bool)  // one calendar, list or folder, by id, on or off
+    case remove(ScopeKind, String)      // an entry of the file that names nothing now, as written
+    case writes(Bool)
+    case sharedEvents(Bool)
+    case reminderWrites(Bool)
+
+    var kind: ScopeKind {
+        switch self {
+        case .all(let kind, _), .item(let kind, _, _), .remove(let kind, _): kind
+        case .writes, .sharedEvents: .calendars
+        case .reminderWrites: .lists
+        }
+    }
+}
+
+/// The scope file after one tick, `items` being the kind's calendars, lists or folders as they are now.
+///
+/// All on is "all"; All off shares none. An item ticked while the file says "all" leaves every other item shared;
+/// otherwise it is added or taken out. A key an item tick changes is written by id: each entry that names items
+/// becomes their ids, and one that names nothing stays as written, until it is removed on its own.
+///
+/// The file's rules hold after every tick, and changes need something shared: a tick of Calendar that leaves no
+/// calendars turns writes and events with other people off, one of Reminders that leaves no lists turns reminder
+/// writes off. A tick the rules do not allow changes nothing; one app's tick leaves the others' keys as written.
+func applying(_ tick: ScopeTick, to file: ScopeFile, items: [Named]) -> ScopeFile {
+    var file = file
+    switch tick {
+    case .all(let kind, let on):
+        file[kind] = on ? nil : []
+    case .item(let kind, let id, let on):
+        var ids: [String] = []
+        for entry in file[kind] ?? items.map(\.id) {
+            let found = pick([entry], from: items, allowed: nil, id: \.id, name: \.name).found ?? []
+            for named in found.isEmpty ? [entry] : found.map(\.id) where !ids.contains(named) { ids.append(named) }
+        }
+        ids.removeAll { $0 == id }
+        if on { ids.append(id) }
+        file[kind] = ids
+    case .remove(let kind, let entry):
+        file[kind]?.removeAll { $0 == entry }
+    case .writes(let on):
+        file.writes = on
+    case .sharedEvents(let on):
+        file.sharedEvents = on
+    case .reminderWrites(let on):
+        file.reminderWrites = on
+    }
+    switch tick.kind {
+    case .calendars:
+        if file.calendars == [] { file.writes = false }
+        if !file.writes { file.sharedEvents = false }
+    case .lists:
+        if file.lists == [] { file.reminderWrites = false }
+    case .folders:
+        break
+    }
+    return file
+}
+
+/// The scope file at a path as the menu bar finds it.
+enum ScopeFileState: Equatable {
+    case missing
+    case file(ScopeFile)
+    case broken(String)  // there, but not a scope file a server would read: why, in the server's words
+}
+
+func loadScopeFile(_ path: String) -> ScopeFileState {
+    var info = stat()
+    if lstat(path, &info) != 0 && errno == ENOENT { return .missing }
+    do {
+        return .file(try readScopeFile(path))
+    } catch {
+        return .broken("\(error)")
+    }
+}
+
+/// Replaces the scope file with this one. A missing file is made, and its folder, open to this user only.
+func writeScopeFile(_ file: ScopeFile, to path: String) throws {
+    let data = encodeScopeFile(file)
+    guard data.count <= scopeFileLimit else { throw IrisError("the scope file would be too long for a server to read") }
+    try replacePrivateFile(path, data)
+}
+
+/// The most of a scope file a server reads.
+private let scopeFileLimit = 65536
+
+/// Replaces a scope file that cannot be read with one that shares nothing, after keeping the old one beside it
+/// as <name>.broken-<date and time>; that path is returned.
+func resetScopeFile(_ path: String, now: Date = Date()) throws -> String {
+    let target = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+    let format = DateFormatter()
+    format.locale = Locale(identifier: "en_US_POSIX")
+    format.dateFormat = "yyyyMMdd-HHmmss"
+    let copy = target + ".broken-" + format.string(from: now)
+    // A second name for the old file, so the path is never without a file.
+    guard link(target, copy) == 0 else {
+        throw IrisError("cannot keep a copy of \(target) as \(copy): \(String(cString: strerror(errno)))")
+    }
+    try writeScopeFile(ScopeFile(calendars: [], folders: []), to: target)
+    return copy
+}
+
+/// Writes the file whole beside its place, owner-only and without an access control list, then renames it over
+/// the old one, so a reader sees the old file or the new, never a part. Links are followed: the file they lead to
+/// is replaced. The folder must be this user's and writable by no one else, so no one can put another file in
+/// its place; one made here is open to this user only.
+private func replacePrivateFile(_ path: String, _ contents: Data) throws {
+    let target = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+    let directory = (target as NSString).deletingLastPathComponent
+    do {
+        try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true,
+                                                attributes: [.posixPermissions: 0o700])
+    } catch {
+        throw IrisError("cannot create \(directory): \(error.localizedDescription)")
+    }
+    let folder = open(directory, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+    guard folder >= 0 else { throw IrisError("cannot open \(directory): \(String(cString: strerror(errno)))") }
+    defer { close(folder) }
+    try checkFolder(folder, directory, "the folder", forbidden: 0o022, only: "writable by you only", fix: "chmod go-w")
+    let temporary = target + "." + UUID().uuidString + ".new"
+    let descriptor = open(temporary, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
+    guard descriptor >= 0 else { throw IrisError("cannot write \(target): \(String(cString: strerror(errno)))") }
+    let file = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+    var renamed = false
+    defer { if !renamed { unlink(temporary) } }
+    try makePrivate(descriptor, temporary)
+    try file.write(contentsOf: contents)
+    guard fsync(descriptor) == 0, rename(temporary, target) == 0 else {
+        throw IrisError("cannot write \(target): \(String(cString: strerror(errno)))")
+    }
+    renamed = true
+}
+
 /// Reads the scope file and pins its names to the ids they match now. Only a kind given as a list is
 /// looked up, by this binary's own `calendar calendars`, `notes folders` or `reminders lists`, so "all"
 /// never asks Notes. Lists "all" asks Reminders once all the same, so missing Reminders access stops the
@@ -126,7 +294,7 @@ func readScopeFile(_ path: String) throws -> ScopeFile {
     let directory = (path as NSString).deletingLastPathComponent
     let recipe = "create one, for example: mkdir -p \"\(directory)\" && "
         + "(umask 077; echo '\(scopeExample)' > \"\(path)\"); \(scopeShape)"
-    let data = try readPrivateFile(path, noun: "scope file", recipe: recipe, limit: 65536)
+    let data = try readPrivateFile(path, noun: "scope file", recipe: recipe, limit: scopeFileLimit)
     do {
         return try parseScopeFile(data)
     } catch {

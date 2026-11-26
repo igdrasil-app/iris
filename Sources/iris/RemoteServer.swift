@@ -119,6 +119,22 @@ final class RemoteServer {
         reconcile()
     }
 
+    /// Starts the switch's server again, so it reads the scope file as it is now: the one running or starting is
+    /// stopped and then started, and after a start that failed the next try is now. Nothing while the switch is
+    /// off, while another server runs, or while one is already stopping, as its next start reads the file then.
+    func restart() {
+        guard isOn, !quitting, leftover == nil else { return }
+        if let child {
+            guard !child.stopping else { return }
+            stop(child)
+            reconcile()
+        } else if case .failed = status.phase {
+            next?.cancel()
+            next = nil
+            reconcile()
+        }
+    }
+
     /// At quit: finishes stopping a leftover and stops the server, each within the grace period, then SIGKILL.
     /// The choice stays, and so does the record: a server not seen to exit is stopped at the next launch.
     func quit() {
@@ -384,6 +400,59 @@ final class RemoteServer {
                 self.reconcile()
             }
         }
+    }
+}
+
+/// The menu's ticks. Each is applied to the scope file as it is on disk at that moment and written at once, on the
+/// main thread, so ticks never overlap and none is lost. The switch's server is restarted once the ticks have
+/// stopped for `quiet` seconds: every tick puts the restart off again, and the restart comes after the last write,
+/// so the server it starts reads the last tick.
+@MainActor
+final class ScopeChanges {
+    let path: String
+    private let quiet: Double
+    private let restart: () -> Void
+    private var pending: DispatchWorkItem?
+
+    init(path: String, quiet: Double = 0.5, restart: @escaping () -> Void) {
+        self.path = path
+        self.quiet = quiet
+        self.restart = restart
+    }
+
+    /// The scope file after the tick. A missing file starts from one that shares nothing; a file that cannot be
+    /// read is never written over, and its problem is the error.
+    func apply(_ tick: ScopeTick, items: [Named]) throws -> ScopeFile {
+        let current: ScopeFile
+        switch loadScopeFile(path) {
+        case .missing: current = ScopeFile(calendars: [], folders: [])
+        case .file(let file): current = file
+        case .broken(let problem): throw IrisError(problem)
+        }
+        let changed = applying(tick, to: current, items: items)
+        guard changed != current else { return current }
+        try writeScopeFile(changed, to: path)
+        restartSoon()
+        return changed
+    }
+
+    /// Keeps the file that cannot be read beside it and shares nothing; the copy's path.
+    func reset() throws -> String {
+        let copy = try resetScopeFile(path)
+        restartSoon()
+        return copy
+    }
+
+    private func restartSoon() {
+        pending?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated {
+                self?.pending = nil
+                self?.restart()
+            }
+        }
+        pending = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + quiet, execute: work)
     }
 }
 

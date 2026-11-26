@@ -206,6 +206,72 @@ final class RemoteServerTests: XCTestCase {
         switched.turn(on: false)
     }
 
+    /// A restart stops the server and starts another; after a failed start it tries at once; with the switch off, or
+    /// another server running, it does nothing.
+    @MainActor
+    func testRestart() throws {
+        let serving = try script(#"echo '{"port": 1}'; exec sleep 600"#)
+        var phases: [RemoteServerPhase] = []
+        let switched = server(serving, seen: { phases.append($0.phase) })
+        switched.restart()
+        XCTAssertEqual(switched.starts, 0)
+        switched.turn(on: true)
+        wait(10) { switched.status.phase == .on(port: defaultHTTPPort) }
+        let first = try XCTUnwrap(switched.status.pid)
+        phases = []
+        switched.restart()
+        switched.restart()
+        XCTAssertEqual(switched.status.phase, .starting)
+        wait(20) { switched.status.phase == .on(port: defaultHTTPPort) }
+        XCTAssertFalse(running(first))
+        XCTAssertNotEqual(switched.status.pid, first)
+        XCTAssertEqual(switched.starts, 2)
+        // Starting while the first stops and while the second starts, then on.
+        let changes = phases.reduce(into: [RemoteServerPhase]()) { if $0.last != $1 { $0.append($1) } }
+        XCTAssertEqual(changes, [.starting, .on(port: defaultHTTPPort)])
+        switched.turn(on: false)
+        wait(10) { switched.status.pid == nil }
+
+        let failing = try script(#"echo "Error: no" >&2; exit 1"#)
+        let failed = server(failing)
+        failed.turn(on: true)
+        wait(5) { failed.status.phase != .starting }
+        XCTAssertEqual(failed.starts, 1)
+        failed.restart()
+        XCTAssertEqual(failed.starts, 2)
+        failed.turn(on: false)
+
+        let outside = server(serving, listeners: [Listener(pid: 1, port: 8788, scopeFile: "/x/scope", started: Date())])
+        outside.turn(on: true)
+        outside.restart()
+        XCTAssertEqual(outside.status.phase, .outside([8788]))
+        XCTAssertEqual(outside.starts, 0)
+        outside.turn(on: false)
+    }
+
+    /// Quick ticks: each is in the file at once, and one restart follows the last.
+    @MainActor
+    func testTicksRestartOnce() throws {
+        var restarts = 0
+        let changes = ScopeChanges(path: folder + "/state/scope", quiet: 0.3) { restarts += 1 }
+        let items = (1...5).map { Named(id: "c\($0)", name: "Calendar \($0)") }
+        var expected = ScopeFile(calendars: [], folders: [])
+        for index in 0..<20 {
+            let tick = ScopeTick.item(.calendars, "c\(index % 5 + 1)", index % 3 != 2)
+            expected = applying(tick, to: expected, items: items)
+            XCTAssertEqual(try changes.apply(tick, items: items), expected)
+            XCTAssertEqual(try readScopeFile(folder + "/state/scope"), expected)
+        }
+        XCTAssertEqual(restarts, 0)
+        wait(2) { restarts > 0 }
+        wait(0.5) { false }
+        XCTAssertEqual(restarts, 1)
+        // A tick that changes nothing writes nothing and restarts nothing.
+        XCTAssertEqual(try changes.apply(.sharedEvents(true), items: items), expected)
+        wait(0.6) { false }
+        XCTAssertEqual(restarts, 1)
+    }
+
     @MainActor
     func testAnotherServerRuns() throws {
         let serving = try script(#"echo '{"port": 1}'; exec sleep 600"#)
