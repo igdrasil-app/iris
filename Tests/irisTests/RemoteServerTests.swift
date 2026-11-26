@@ -45,6 +45,13 @@ final class RemoteServerTests: XCTestCase {
         pid.map { processStart($0) != nil } ?? false
     }
 
+    /// SIGKILL to a process only while it is still the one started then: never to a pid given to another since.
+    private func killStill(_ identity: ServerIdentity) {
+        if let now = processStart(identity.pid), identity.names(pid: identity.pid, started: now.started) {
+            kill(identity.pid, SIGKILL)
+        }
+    }
+
     @MainActor
     func testStartsStopsAndRemembers() throws {
         let serving = try script(#"sleep 0.3; echo '{"port": 1}'; echo "a request" >&2; exec sleep 600"#)
@@ -82,8 +89,19 @@ final class RemoteServerTests: XCTestCase {
         wait(10) { !running(pid) && switched.status.pid == nil }
         XCTAssertFalse(running(pid))
         XCTAssertFalse(defaults.bool(forKey: RemoteAccessKey.on))
-        XCTAssertNil(defaults.object(forKey: RemoteAccessKey.childPid))
         XCTAssertEqual(switched.starts, 1)
+        // The record outlives its server and is only ever replaced. Naming no process now, it is never taken for a
+        // leftover: the next launch stops nothing and starts its own.
+        let stale = try XCTUnwrap(switched.status.ours.last)
+        XCTAssertEqual(defaults.object(forKey: RemoteAccessKey.childPid) as? Int, Int(stale.pid))
+        let next = server(serving)
+        next.turn(on: true)
+        XCTAssertEqual(next.status.phase, .starting)
+        XCTAssertFalse(next.status.ours.contains(stale))
+        wait(10) { next.status.phase == .on(port: 8766) }
+        XCTAssertNotEqual(defaults.object(forKey: RemoteAccessKey.childPid) as? Int, Int(stale.pid))
+        next.turn(on: false)
+        wait(10) { next.status.pid == nil }
     }
 
     @MainActor
@@ -168,7 +186,7 @@ final class RemoteServerTests: XCTestCase {
         switched.start()
         wait(10) { switched.status.phase == .on(port: defaultHTTPPort) }
         let first = try XCTUnwrap(switched.status.pid)
-        kill(first, SIGKILL)
+        killStill(try XCTUnwrap(switched.status.ours.last))
         wait(5) { switched.status.pid == nil }
         XCTAssertEqual(switched.status.phase, .starting)
         wait(10) { switched.status.phase == .on(port: defaultHTTPPort) }
@@ -176,7 +194,7 @@ final class RemoteServerTests: XCTestCase {
         XCTAssertNotEqual(first, second)
         XCTAssertEqual(switched.status.ours.map(\.pid), [first, second])
         // The second crash in a row waits the next delay.
-        kill(second, SIGKILL)
+        killStill(try XCTUnwrap(switched.status.ours.last))
         wait(2) { switched.starts > 2 }
         XCTAssertEqual(switched.starts, 2)
         XCTAssertEqual(switched.status.phase, .starting)
@@ -242,7 +260,7 @@ final class RemoteServerTests: XCTestCase {
     @MainActor
     func testQuitFinishesStoppingALeftover() throws {
         let old = try orphanIgnoringTerm()
-        defer { kill(old.pid, SIGKILL) }
+        defer { if isLeftover(pid: old.pid, now: processStart(old.pid), record: old) { kill(old.pid, SIGKILL) } }
         record(old)
         let switched = server("/nonexistent", listeners: [listener(old)], timing: RemoteServerTiming(stopGrace: 1))
         switched.start()
@@ -253,14 +271,15 @@ final class RemoteServerTests: XCTestCase {
         switched.quit()
         XCTAssertNil(processStart(old.pid))
         XCTAssertLessThan(Date().timeIntervalSince(quit), 2.5)
-        XCTAssertNil(defaults.object(forKey: RemoteAccessKey.childPid))
+        // The record stays; it names no process now.
+        XCTAssertEqual(defaults.object(forKey: RemoteAccessKey.childPid) as? Int, Int(old.pid))
     }
 
     /// A recorded pid now with another start time is another process: it gets no signal, and Iris goes on.
     @MainActor
     func testNoSignalToAnotherProcess() throws {
         let other = try orphanIgnoringTerm()
-        defer { kill(other.pid, SIGKILL) }
+        defer { if isLeftover(pid: other.pid, now: processStart(other.pid), record: other) { kill(other.pid, SIGKILL) } }
         let stale = ServerIdentity(pid: other.pid, started: other.started - 60)
         record(stale)
         let serving = try script(#"echo '{"port": 1}'; exec sleep 600"#)

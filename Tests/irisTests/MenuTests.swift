@@ -102,6 +102,13 @@ final class MenuTests: XCTestCase {
                        ["Remote access · 2 servers · 1 run outside Iris"] + usual)
         XCTAssertEqual(shown(.known(state(listeners: [(8788, .changed), (8765, .current), (8766, .otherFile)])), nil, mine),
                        ["Remote access · 3 servers · 2 run outside Iris"] + usual)
+        // The others' settings warning stays beside the switch's own server.
+        XCTAssertEqual(shown(.known(state(listeners: [(8788, .current), (8765, .changed)])), nil, mine),
+                       ["Remote access · 2 servers · 1 run outside Iris · restart to apply changes"] + usual)
+        XCTAssertEqual(shown(.known(state(usable: false, listeners: [(8788, .current), (8765, .current)])), nil, mine),
+                       ["Remote access · 2 servers · 1 run outside Iris · settings have a problem"] + usual)
+        XCTAssertEqual(shown(.known(state(usable: false, listeners: [(8788, .current), (8765, .otherFile)])), nil, mine),
+                       ["Remote access · 2 servers · 1 run outside Iris"] + usual)
     }
 
     /// The header's line, the switch (on or off, then - when it cannot be used) and the reason behind the item

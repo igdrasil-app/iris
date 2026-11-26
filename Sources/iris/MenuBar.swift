@@ -367,7 +367,9 @@ func remoteStatusLine(_ remote: RemoteAnswer, _ server: RemoteServerStatus) -> S
     case .failed:
         return "Remote access · couldn't start"
     case .on(let port):
-        guard others.isEmpty else { return "Remote access · \(others.count + 1) servers · \(others.count) run outside Iris" }
+        guard others.isEmpty else {
+            return "Remote access · \(others.count + 1) servers · \(others.count) run outside Iris" + settingsWarning(remote, others.map(\.state))
+        }
         guard case .known(let state) = remote, let mine = state.listeners.first(where: { $0.listener.pid == server.pid }) else {
             return "Remote access · port \(port)"
         }

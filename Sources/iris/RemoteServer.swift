@@ -71,7 +71,7 @@ final class RemoteServer {
     }
     private(set) var starts = 0
     private var child: Child?
-    private var leftover: (identity: ServerIdentity, deadline: Date)?
+    private var leftover: (identity: ServerIdentity, deadline: DispatchTime)?
     private var next: DispatchWorkItem?
     private var crashes = 0
     private var quitting = false
@@ -113,26 +113,33 @@ final class RemoteServer {
     }
 
     /// At quit: finishes stopping a leftover and stops the server, each within the grace period, then SIGKILL.
-    /// The choice stays, and so does the record of a server not seen to exit, for the next launch to stop.
+    /// The choice stays, and so does the record: a server not seen to exit is stopped at the next launch.
     func quit() {
         quitting = true
         next?.cancel()
         if let leftover {
             let identity = leftover.identity
-            while stillLeftover(identity) && Date() < leftover.deadline { usleep(10_000) }
+            while stillLeftover(identity) && DispatchTime.now() < leftover.deadline { usleep(10_000) }
             if stillLeftover(identity) { kill(identity.pid, SIGKILL) }
-            let killed = Date().addingTimeInterval(1)
-            while stillLeftover(identity) && Date() < killed { usleep(10_000) }
-            if !stillLeftover(identity) { forget(identity) }
+            let killed = DispatchTime.now() + 1
+            while stillLeftover(identity) && DispatchTime.now() < killed { usleep(10_000) }
         }
         guard let child, child.process.isRunning else { return }
         child.process.terminate()
-        var deadline = Date().addingTimeInterval(timing.stopGrace)
-        while child.process.isRunning && Date() < deadline { usleep(10_000) }
-        if child.process.isRunning { kill(child.process.processIdentifier, SIGKILL) }
-        deadline = Date().addingTimeInterval(1)
-        while child.process.isRunning && Date() < deadline { usleep(10_000) }
-        if !child.process.isRunning, let identity = child.identity { forget(identity) }
+        let deadline = DispatchTime.now() + timing.stopGrace
+        while child.process.isRunning && DispatchTime.now() < deadline { usleep(10_000) }
+        send(SIGKILL, to: child)
+        let killed = DispatchTime.now() + 1
+        while child.process.isRunning && DispatchTime.now() < killed { usleep(10_000) }
+    }
+
+    /// Signals the child only while it is still that process: running, by Foundation's account, and with the
+    /// start time it had at launch, so not a pid reaped and given to another process in between.
+    private func send(_ signal: Int32, to child: Child) {
+        let pid = child.process.processIdentifier
+        guard child.process.isRunning, let identity = child.identity, let now = processStart(pid),
+              identity.names(pid: pid, started: now.started) else { return }
+        kill(pid, signal)
     }
 
     private func reconcile() {
@@ -176,16 +183,11 @@ final class RemoteServer {
     }
 
     /// Only by a server that has said it is ready: one that lost the port to another copy's never takes its record.
+    /// Never cleared, only replaced: a record whose server has gone names no process, since none other has its
+    /// start time, and clearing it could clear a record another copy of Iris has just written.
     private func remember(_ identity: ServerIdentity) {
         defaults.set(Int(identity.pid), forKey: RemoteAccessKey.childPid)
         defaults.set(identity.started, forKey: RemoteAccessKey.childStarted)
-    }
-
-    /// Clears the record only while it still names this server.
-    private func forget(_ identity: ServerIdentity) {
-        guard let record, identity.names(pid: record.pid, started: record.started) else { return }
-        defaults.removeObject(forKey: RemoteAccessKey.childPid)
-        defaults.removeObject(forKey: RemoteAccessKey.childStarted)
     }
 
     private func schedule(_ seconds: Double) {
@@ -235,6 +237,7 @@ final class RemoteServer {
         do {
             try process.run()
         } catch {
+            child.done.leave()
             for handle in [output.fileHandleForReading, output.fileHandleForWriting,
                            errors.fileHandleForReading, errors.fileHandleForWriting] {
                 try? handle.close()
@@ -282,7 +285,7 @@ final class RemoteServer {
 
     private func ready(_ child: Child) {
         guard child === self.child, !child.stopping else { return }
-        child.readyAt = Date()
+        child.readyAt = .now()
         if let identity = child.identity { remember(identity) }
         status.phase = .on(port: child.port)
     }
@@ -290,9 +293,8 @@ final class RemoteServer {
     private func stop(_ child: Child) {
         child.stopping = true
         child.process.terminate()
-        let pid = child.process.processIdentifier
-        DispatchQueue.main.asyncAfter(deadline: .now() + timing.stopGrace) {
-            if child.process.isRunning { kill(pid, SIGKILL) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + timing.stopGrace) { [weak self] in
+            MainActor.assumeIsolated { self?.send(SIGKILL, to: child) }
         }
     }
 
@@ -300,12 +302,11 @@ final class RemoteServer {
         guard child === self.child else { return }
         self.child = nil
         let process = child.process
-        if let identity = child.identity { forget(identity) }
         status.pid = nil
         if quitting || child.stopping {
             reconcile()
         } else if let readyAt = child.readyAt {
-            if Date().timeIntervalSince(readyAt) >= timing.stable { crashes = 0 }
+            if DispatchTime.now() >= readyAt + timing.stable { crashes = 0 }
             let delay = timing.restart[min(crashes, timing.restart.count - 1)]
             crashes += 1
             status.phase = .starting
@@ -331,18 +332,17 @@ final class RemoteServer {
             return
         }
         kill(identity.pid, SIGTERM)
-        leftover = (identity, Date().addingTimeInterval(timing.stopGrace))
+        leftover = (identity, .now() + timing.stopGrace)
         status = RemoteServerStatus(phase: isOn ? .starting : .off, pid: nil, ours: status.ours + [identity])
         func look() {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
                 MainActor.assumeIsolated {
                     guard let self, !self.quitting, let leftover = self.leftover else { return }
                     if self.stillLeftover(identity) {
-                        if Date() > leftover.deadline { kill(identity.pid, SIGKILL) }
+                        if DispatchTime.now() > leftover.deadline { kill(identity.pid, SIGKILL) }
                         look()
                         return
                     }
-                    self.forget(identity)
                     self.leftover = nil
                     self.reconcile()
                 }
@@ -359,7 +359,7 @@ private final class Child: @unchecked Sendable {
     let done = DispatchGroup()     // its exit, and the end of both of its outputs
     var identity: ServerIdentity?  // on the main thread only, as stopping and readyAt
     var stopping = false
-    var readyAt: Date?
+    var readyAt: DispatchTime?
     private let lock = NSLock()
     private var readyLine = false
     private var errorsBeforeReady = Data()
