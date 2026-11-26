@@ -228,11 +228,11 @@ final class RemoteCheck {
 /// show as information.
 @MainActor
 func placeRemoteSection(_ lines: [RemoteMenuLine], in menu: NSMenu, replacing old: [NSMenuItem]) -> [NSMenuItem] {
-    let found = old.first.map { menu.index(of: $0) } ?? -1
-    var index = found >= 0 ? found : menu.numberOfItems
+    let found = old.map { menu.index(of: $0) }.filter { $0 >= 0 }.min()
     for item in old where item.menu === menu {
         menu.removeItem(item)
     }
+    var index = found ?? menu.numberOfItems
     let items = [NSMenuItem.separator()] + lines.map { line in
         let item = NSMenuItem(title: line.title, action: nil, keyEquivalent: "")
         item.indentationLevel = line.indented ? 1 : 0

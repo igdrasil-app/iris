@@ -53,7 +53,8 @@ final class RemoteMenuTests: XCTestCase {
         XCTAssertEqual(titles(state(listeners: [(8765, .current), (8788, .current)])),
                        ["Remote access: on, 2 servers, ports 8765 and 8788"] + usual)
         XCTAssertEqual(titles(state(listeners: [(8765, .current), (8766, .changed), (8788, .otherFile)])),
-                       ["Remote access: on, 3 servers, ports 8765, 8766 and 8788 — restart to apply changes"] + usual)
+                       ["Remote access: on, 3 servers, ports 8765, 8766 and 8788 — restart to apply changes"] + usual
+                           + ["  Other settings on port 8788"])
         XCTAssertEqual(titles(state(listeners: [(8765, .otherFile), (8788, .otherFile)])),
                        ["Remote access: on, 2 servers, ports 8765 and 8788 — started with other settings"])
     }

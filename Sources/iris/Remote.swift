@@ -340,6 +340,11 @@ func remoteMenuLines(_ state: RemoteState) -> [RemoteMenuLine] {
         }
         lines.append(RemoteMenuLine(title: "\(app): \(allows)", indented: true))
     }
+    // The lines above are this scope file's; a server started with another file allows something else.
+    let others = listeners.filter { $0.state == .otherFile }.map(\.listener.port)
+    if !others.isEmpty {
+        lines.append(RemoteMenuLine(title: "Other settings on \(ports(others))", indented: true))
+    }
     return lines
 }
 
