@@ -24,11 +24,21 @@ struct ReminderLists: AsyncParsableCommand {
             """
     )
 
+    @Option(help: allowedHelp(.lists))
+    var allowedLists: String?
+
+    func validate() throws {
+        _ = try allowedIds(allowedLists, "--allowed-lists")
+    }
+
     func run() async throws {
+        let allowed = try allowedIds(allowedLists, "--allowed-lists")
+        // Nothing allowed: answered without asking Reminders.
+        if allowed?.isEmpty == true { return try emit([ReminderListInfo]()) }
         let store = try await grantedReminderStore()
         // The lists are EventKit objects read below, so their store is kept until the end.
         defer { withExtendedLifetime(store) {} }
-        let lists = store.calendars(for: .reminder)
+        let lists = store.calendars(for: .reminder).filter { allowed?.contains($0.calendarIdentifier) ?? true }
         let open = openCounts(listIds: try await fetchReminders(in: store, lists: lists, status: .open).map(\.listId))
         let infos = lists
             .sorted { calendarPrecedes(($0.title, $0.calendarIdentifier), ($1.title, $1.calendarIdentifier)) }
@@ -107,20 +117,28 @@ struct ReminderList: AsyncParsableCommand {
     @Option(help: "Only reminders due at or before this, same formats; a bare date includes that whole day. Default: no upper bound.")
     var dueTo: String?
 
+    @Option(help: allowedHelp(.lists))
+    var allowedLists: String?
+
     func validate() throws {
         _ = try dueRange()
+        _ = try allowedIds(allowedLists, "--allowed-lists")
     }
 
     func run() async throws {
         let (from, to) = try dueRange()
-        let store = try await grantedReminderStore()
-        let (found, missing) = pick(lists, from: store.calendars(for: .reminder), allowed: nil,
-                                    id: \.calendarIdentifier, name: \.title)
-        guard missing.isEmpty else {
-            throw IrisError("no reminder list named \(missing.joined(separator: ", ")); see `iris reminders lists`")
+        let allowed = try allowedIds(allowedLists, "--allowed-lists")
+        // Nothing allowed: answered without asking Reminders, by the same rule, so any list named is missing.
+        if allowed?.isEmpty == true {
+            _ = try resolveLists(lists, among: [], allowed: [])
+            return try emit([Reminder]())
         }
+        let store = try await grantedReminderStore()
+        let found = try resolveLists(lists, among: store.calendars(for: .reminder), allowed: allowed)
         let mac = macCalendar()
+        // fetchReminders answers an empty list of lists with none, never every list.
         let reminders = try await fetchReminders(in: store, lists: found, status: status, mac: mac)
+            .filter { allowed?.contains($0.listId) ?? true }
             .filter { dueInRange($0.due, from: from, to: to, mac: mac) }
             .sorted(by: reminderPrecedes)
         try emit(reminders)
@@ -374,6 +392,16 @@ func reminderAccess(within seconds: Double, _ request: @escaping @Sendable () as
                 + "asking to give Iris access to Reminders is waiting on this Mac's screen; repeat the call once it is answered")))
         }
     }
+}
+
+/// Match by id or title, among the allowed lists only; one outside them is missing, as one that does not
+/// exist. A name that matches nothing is an error. nil is every list, and only without a scope.
+func resolveLists(_ tokens: [String], among lists: [EKCalendar], allowed: Set<String>?) throws -> [EKCalendar]? {
+    let (found, missing) = pick(tokens, from: lists, allowed: allowed, id: \.calendarIdentifier, name: \.title)
+    guard missing.isEmpty else {
+        throw IrisError("no reminder list named \(missing.joined(separator: ", ")); see `iris reminders lists`")
+    }
+    return found
 }
 
 /// The reminders of the given lists with that status, copied out of EventKit while the store is alive;

@@ -4,17 +4,33 @@ import Network
 /// The tools offered over HTTP: the read tools, by name, and the calendar writes (`httpWriteToolNames`)
 /// when the scope file turns them on. Allowlists, so a tool added to iris later stays off HTTP until it is
 /// named in one.
-let httpToolNames = ["calendars", "events", "note_folders", "notes", "search_notes", "show_note"]
+let httpToolNames = ["calendars", "events", "note_folders", "notes", "search_notes", "show_note",
+                     "reminder_lists", "reminders"]
 
 let defaultHTTPPort = 8765
 let defaultTokenFile = "~/Library/Application Support/Iris/http-token"
 
-/// `respond` does not narrow the instructions; over HTTP these sentences do. They name no calendar or
-/// folder of the scope.
-private let scopeNote = " Only the calendars and note folders its owner chose are available here; any other "
-    + "does not exist for this endpoint."
-private let readOnlyNote = " This endpoint is read only: it offers \(httpToolNames.joined(separator: ", ")), "
-    + "and cannot create, change or delete anything." + scopeNote
+/// The tools a server with this scope offers, each limited to it. The reminder tools only when the scope
+/// names lists or says "all": a calendar or folder tool stays with none allowed and answers empty, but a
+/// scope file written before reminders came to HTTP has no lists, and offers what it did then.
+func httpOffering(_ scope: HTTPScope) throws -> [Tool] {
+    let names = httpToolNames + (scope.writes ? httpWriteToolNames : [])
+    return try tools
+        .filter { names.contains($0.name) && !($0.scope == .lists && scope.lists?.isEmpty == true) }
+        .map { try $0.limited(to: scope) }
+}
+
+/// `respond` does not narrow the instructions; over HTTP these sentences do. They name no calendar, folder
+/// or list of the scope.
+private func scopeNote(_ offering: [Tool]) -> String {
+    let kinds = offering.contains { $0.scope == .lists } ? "calendars, note folders and reminder lists" : "calendars and note folders"
+    return " Only the \(kinds) its owner chose are available here; any other does not exist for this endpoint."
+}
+
+private func readOnlyNote(_ offering: [Tool]) -> String {
+    " This endpoint is read only: it offers \(offering.map(\.name).joined(separator: ", ")), "
+        + "and cannot create, change or delete anything." + scopeNote(offering)
+}
 
 private func writableNote(_ offering: [Tool], sharedEvents: Bool) -> String {
     " This endpoint offers \(offering.map(\.name).joined(separator: ", ")). Calendar events can be created, "
@@ -24,7 +40,8 @@ private func writableNote(_ offering: [Tool], sharedEvents: Bool) -> String {
         + (sharedEvents ? "" : " Events with other people on them (attendees, or an organizer other than the "
             + "owner) cannot be changed or deleted here and must be changed on the Mac; nor can all future occurrences of a "
             + "recurring event be changed at once (update_event with span future): change one occurrence at a time.")
-        + " Notes are read only." + scopeNote
+        + (offering.contains { $0.scope == .lists } ? " Notes and reminders are read only." : " Notes are read only.")
+        + scopeNote(offering)
 }
 
 private let maxConnections = 16      // one more is closed as soon as it arrives
@@ -44,8 +61,7 @@ private let modernErrorStatus = [-32022: 400, -32020: 400, -32601: 404]
 func serveHTTP(port: Int, tokenFile: String, scopeFile: String, stateDir: String) throws {
     let token = try readToken((tokenFile as NSString).expandingTildeInPath)
     let scope = try readScope((scopeFile as NSString).expandingTildeInPath)
-    let names = httpToolNames + (scope.writes ? httpWriteToolNames : [])
-    let offering = try tools.filter { names.contains($0.name) }.map { try $0.limited(to: scope) }
+    let offering = try httpOffering(scope)
     let writes = scope.writes ? try WriteGuard(stateDir: stateDir) : nil
     // A client gone mid-reply is an error on that one write, not the end of the server.
     signal(SIGPIPE, SIG_IGN)
@@ -59,7 +75,7 @@ func serveHTTP(port: Int, tokenFile: String, scopeFile: String, stateDir: String
     }
 
     let server = HTTPServer(token: token, offering: offering, writes: writes,
-                            note: writes == nil ? readOnlyNote : writableNote(offering, sharedEvents: scope.sharedEvents))
+                            note: writes == nil ? readOnlyNote(offering) : writableNote(offering, sharedEvents: scope.sharedEvents))
     // Requests arrive as soon as the listener is up; a write waits until the count is read back. The turn
     // is always given back: a semaphore freed while taken stops the process.
     writes?.turn.wait()
@@ -79,10 +95,11 @@ func serveHTTP(port: Int, tokenFile: String, scopeFile: String, stateDir: String
     }
     writes?.seed()
     writes?.turn.signal()
-    // How many calendars and folders are in scope, never which.
+    // How many calendars, folders and lists are in scope, never which.
     let ready: [String: Any] = ["address": "127.0.0.1", "port": port, "tools": server.offering.map(\.name),
                                 "calendars": scope.calendars.map { $0.count as Any } ?? "all",
                                 "folders": scope.folders.map { $0.count as Any } ?? "all",
+                                "lists": scope.lists.map { $0.count as Any } ?? "all",
                                 "writes": scope.writes, "sharedEvents": scope.sharedEvents]
     if let line = try? JSONSerialization.data(withJSONObject: ready, options: [.sortedKeys]) {
         try? FileHandle.standardOutput.write(contentsOf: line + Data("\n".utf8))

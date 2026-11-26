@@ -39,13 +39,13 @@ struct MCP: ParsableCommand {
               { "schema_version": 1, "mcpServers": { "iris": {
                   "command": "iris", "args": ["mcp"] } } }
 
-            The reminder tools are offered over stdio only, not over HTTP.
+            Of the reminder tools, only reminder_lists and reminders are offered over HTTP, and only when the scope file names reminder lists (below); add_reminder, update_reminder, complete_reminder and delete_reminder are offered over stdio only.
 
             Over HTTP, for a host that cannot start a process on this Mac:
 
               iris mcp --http
 
-            serves the read tools (calendars, events, note_folders, notes, search_notes, show_note), and the calendar writes only if the scope file turns them on (below), at http://127.0.0.1:8765/mcp, with no sessions: a request gets one JSON reply and a notification an empty 202; a request with an Expect header is refused (417). At most 16 connections and 4 tool calls at a time, and 60 seconds for a request to arrive. It prints one JSON line on stdout once it listens, then one line per request on stderr: time, methods, tool, status, duration; never arguments, results or the token. It listens on 127.0.0.1 only. Iris never makes it reachable from another machine; a proxy of your own can, and then the calendars and notes in its scope are reachable from wherever that proxy is, behind one token.
+            serves the read tools (calendars, events, note_folders, notes, search_notes, show_note, and reminder_lists and reminders when the scope file names reminder lists), and the calendar writes only if the scope file turns them on (below), at http://127.0.0.1:8765/mcp, with no sessions: a request gets one JSON reply and a notification an empty 202; a request with an Expect header is refused (417). At most 16 connections and 4 tool calls at a time, and 60 seconds for a request to arrive. It prints one JSON line on stdout once it listens, then one line per request on stderr: time, methods, tool, status, duration; never arguments, results or the token. It listens on 127.0.0.1 only. Iris never makes it reachable from another machine; a proxy of your own can, and then the calendars, notes and reminders in its scope are reachable from wherever that proxy is, behind one token.
 
             Every request needs the header Authorization: Bearer <token>. The token is read once at start from --token-file, by default ~/Library/Application Support/Iris/http-token: a file of yours that only you can read (mode 600), holding at least 32 characters. Iris never creates it; this does:
 
@@ -53,12 +53,18 @@ struct MCP: ParsableCommand {
               (umask 077; openssl rand -base64 32 \\
                 > ~/Library/Application\\ Support/Iris/http-token)
 
-            Callers see only the calendars and note folders named in the scope file, read once at start from --scope-file, by default ~/Library/Application Support/Iris/http-scope. Without one the server does not start. Any other calendar or folder does not exist for them: naming it, or the id of a note no allowed folder shows, gets the same error as a name or id that matches nothing. A note is in scope when an allowed folder shows it, smart folders included; its folder, folderId and account are null when the folder it is kept in is not allowed, and a folder's parent is null when that is not allowed. The file is JSON, a file of yours that only you can read (mode 600); Iris never creates it; this does:
+            Callers see only the calendars, note folders and reminder lists named in the scope file, read once at start from --scope-file, by default ~/Library/Application Support/Iris/http-scope. Without one the server does not start. Any other calendar, folder or list does not exist for them: naming it, or the id of a note no allowed folder shows, gets the same error as a name or id that matches nothing. A note is in scope when an allowed folder shows it, smart folders included; its folder, folderId and account are null when the folder it is kept in is not allowed, and a folder's parent is null when that is not allowed. The file is JSON, a file of yours that only you can read (mode 600); Iris never creates it; this does:
 
               (umask 077; echo '{"calendars": ["Work"], "folders": "all"}' \\
                 > ~/Library/Application\\ Support/Iris/http-scope)
 
-            Both keys must be there. Each holds a list of names or ids, from iris calendar calendars and iris notes folders, or "all"; [] allows none. A name that several calendars or folders share includes each; one that matches nothing stops the start. Names are matched to ids at start, so restart the server after changing the file. A calendar or folder renamed later stays in scope, one deleted later drops out, and one created later is not in scope, even under an allowed name; "all" is every one, those created later included.
+            The keys calendars and folders must be there; lists, for reminder lists, is optional. Each holds a list of names or ids, from iris calendar calendars, iris notes folders and iris reminders lists, or "all"; [] allows none. A name that several calendars, folders or lists share includes each; one that matches nothing stops the start. Names are matched to ids at start, so restart the server after changing the file. A calendar, folder or list renamed later stays in scope, one deleted later drops out, and one created later is not in scope, even under an allowed name; "all" is every one, those created later included.
+
+            Without lists, or with [], no reminder tool is offered and Reminders is not asked at start. With names or "all", reminder_lists and reminders are offered, read only, and the server does not start without Reminders access:
+
+              (umask 077; echo '{"calendars": ["Work"], "folders": "all",
+                "lists": ["Errands"]}' \\
+                > ~/Library/Application\\ Support/Iris/http-scope)
 
             Writes are off unless the scope file also says "writes": true (false or no key: off; any other value stops the start):
 
@@ -66,7 +72,7 @@ struct MCP: ParsableCommand {
                 '{"calendars": ["Work"], "folders": "all", "writes": true}' \\
                 > ~/Library/Application\\ Support/Iris/http-scope)
 
-            Then add_event, update_event and delete_event are offered too, in the scope's calendars only: an event is created in, changed in, moved to or deleted from an allowed calendar, and any other answers as one that does not exist, with nothing changed. Notes stay read only. Whoever holds the token can then change those events, so the guards below are there for a mistaken or misled assistant:
+            Then add_event, update_event and delete_event are offered too, in the scope's calendars only: an event is created in, changed in, moved to or deleted from an allowed calendar, and any other answers as one that does not exist, with nothing changed. Notes and reminders stay read only. Whoever holds the token can then change those events, so the guards below are there for a mistaken or misled assistant:
 
             update_event and delete_event then refuse, with nothing changed, an event that has anyone on it but you: an attendee, or an organizer who is not you. Changing or deleting such an event can notify them or cancel their meeting, which cannot be taken back. A change to all future occurrences of a repeating event (span future) is refused too, since the people on later occurrences cannot be checked; one occurrence at a time still works. Each call carries --only-mine, and the tools do not offer onlyMine. To let callers change and delete those events too, the scope file also says "sharedEvents": true (false or no key: refused; any other value, or true without "writes": true, stops the start):
 
@@ -97,7 +103,7 @@ struct MCP: ParsableCommand {
     @Option(help: "With --http: the file that holds the token. Default: ~/Library/Application Support/Iris/http-token.")
     var tokenFile: String?
 
-    @Option(help: "With --http: the file that names the calendars and note folders callers may read, and whether they may change events. Default: ~/Library/Application Support/Iris/http-scope.")
+    @Option(help: "With --http: the file that names the calendars, note folders and reminder lists callers may read, and whether they may change events. Default: ~/Library/Application Support/Iris/http-scope.")
     var scopeFile: String?
 
     @Option(help: "With --http and writes on: the folder for http-writes.log and http-write-times. Default: ~/Library/Application Support/Iris.")

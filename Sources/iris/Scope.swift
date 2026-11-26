@@ -1,25 +1,32 @@
 import ArgumentParser
 import Foundation
 
-// What a caller of `iris mcp --http` may see: the calendars and note folders the owner names in the
-// scope file. The server pins them to ids at start and passes them to every tool call as
-// --allowed-calendars or --allowed-folders; the commands treat everything else as not existing.
+// What a caller of `iris mcp --http` may see: the calendars, note folders and reminder lists the owner
+// names in the scope file. The server pins them to ids at start and passes them to every tool call as
+// --allowed-calendars, --allowed-folders or --allowed-lists; the commands treat everything else as not existing.
 
 let defaultScopeFile = "~/Library/Application Support/Iris/http-scope"
 
 /// The option a tool's command takes to be limited to the scope.
 enum ScopeKind {
-    case calendars, folders
+    case calendars, folders, lists
 
-    var option: String { self == .calendars ? "--allowed-calendars" : "--allowed-folders" }
+    var option: String {
+        switch self {
+        case .calendars: "--allowed-calendars"
+        case .folders: "--allowed-folders"
+        case .lists: "--allowed-lists"
+        }
+    }
 }
 
-/// The scope file as written: names or ids per kind, nil where it says "all"; whether callers may
-/// create, change and delete events in the calendars it names; and whether they may also change and
-/// delete events that have other people on them.
+/// The scope file as written: names or ids per kind, nil where it says "all", and no lists where it has
+/// no lists key; whether callers may create, change and delete events in the calendars it names; and
+/// whether they may also change and delete events that have other people on them.
 struct ScopeFile: Equatable {
     let calendars: [String]?
     let folders: [String]?
+    var lists: [String]? = []
     var writes = false
     var sharedEvents = false
 }
@@ -28,24 +35,33 @@ struct ScopeFile: Equatable {
 struct HTTPScope {
     let calendars: Set<String>?
     let folders: Set<String>?
+    var lists: Set<String>? = []
     var writes = false
     var sharedEvents = false
 
-    func ids(_ kind: ScopeKind) -> Set<String>? { kind == .calendars ? calendars : folders }
+    func ids(_ kind: ScopeKind) -> Set<String>? {
+        switch kind {
+        case .calendars: calendars
+        case .folders: folders
+        case .lists: lists
+        }
+    }
 }
 
 let scopeExample = #"{"calendars": ["Work"], "folders": "all"}"#
 private let scopeShape = #"each key holds a list of names or ids, [] for none, or "all" for every one; "#
+    + #"an optional "lists" key names reminder lists the same way, none without it; "#
     + #"an optional "writes": true lets callers change events in those calendars, and with it an optional "#
     + #""sharedEvents": true lets them change and delete events that have other people on them"#
 
-/// Two keys, calendars and folders, each "all" or a list of strings, and the optional writes and
-/// sharedEvents, each true or false, sharedEvents true only with writes true; anything else is an error.
+/// Two keys, calendars and folders, each "all" or a list of strings; the optional lists, the same, and
+/// none when it is not there; and the optional writes and sharedEvents, each true or false, sharedEvents
+/// true only with writes true. Anything else is an error.
 func parseScopeFile(_ data: Data) throws -> ScopeFile {
     guard let object = try? JSONSerialization.jsonObject(with: data), let keys = object as? [String: Any] else {
         throw IrisError("not a JSON object")
     }
-    if let extra = keys.keys.sorted().first(where: { !["calendars", "folders", "writes", "sharedEvents"].contains($0) }) {
+    if let extra = keys.keys.sorted().first(where: { !["calendars", "folders", "lists", "writes", "sharedEvents"].contains($0) }) {
         throw IrisError("unknown key \(extra)")
     }
     // JSON true and 1 both arrive as NSNumber, so the type is checked before the value.
@@ -69,12 +85,16 @@ func parseScopeFile(_ data: Data) throws -> ScopeFile {
         }
         return names
     }
-    return ScopeFile(calendars: try entries("calendars"), folders: try entries("folders"), writes: writes,
-                     sharedEvents: sharedEvents)
+    // A file written before reminders came to HTTP has no lists key, and offers what it did then.
+    let lists = keys["lists"] == nil ? [] : try entries("lists")
+    return ScopeFile(calendars: try entries("calendars"), folders: try entries("folders"), lists: lists,
+                     writes: writes, sharedEvents: sharedEvents)
 }
 
 /// Reads the scope file and pins its names to the ids they match now. Only a kind given as a list is
-/// looked up, by this binary's own `calendar calendars` or `notes folders`, so "all" never asks Notes.
+/// looked up, by this binary's own `calendar calendars`, `notes folders` or `reminders lists`, so "all"
+/// never asks Notes. Lists "all" asks Reminders once all the same, so missing Reminders access stops the
+/// start rather than every call; no lists, or [], never asks Reminders.
 func readScope(_ path: String) throws -> HTTPScope {
     let directory = (path as NSString).deletingLastPathComponent
     let recipe = "create one, for example: mkdir -p \"\(directory)\" && "
@@ -86,10 +106,17 @@ func readScope(_ path: String) throws -> HTTPScope {
     } catch {
         throw IrisError("\(path): \(error); a scope file looks like \(scopeExample): \(scopeShape)")
     }
+    let lists: Set<String>?
+    if let names = file.lists {
+        lists = try pin(names, listing: ["reminders", "lists"], nameKey: "title", noun: "reminder list", path)
+    } else {
+        _ = try runIris(["reminders", "lists"])
+        lists = nil
+    }
     return HTTPScope(
         calendars: try file.calendars.map { try pin($0, listing: ["calendar", "calendars"], nameKey: "title", noun: "calendar", path) },
         folders: try file.folders.map { try pin($0, listing: ["notes", "folders"], nameKey: "name", noun: "folder", path) },
-        writes: file.writes, sharedEvents: file.sharedEvents)
+        lists: lists, writes: file.writes, sharedEvents: file.sharedEvents)
 }
 
 struct Named {
@@ -133,7 +160,11 @@ private func runIris(_ arguments: [String]) throws -> Data {
     try process.run()
     let command = "iris \(arguments.joined(separator: " "))"
     guard let finished = collect(process, output, errors, exited: exited, within: scopeDeadline) else {
-        let app = arguments.first == "calendar" ? "Calendar" : "Notes"
+        let app = switch arguments.first {
+        case "calendar": "Calendar"
+        case "reminders": "Reminders"
+        default: "Notes"
+        }
         throw IrisError("\(command) did not finish within \(scopeDeadline) seconds and was stopped, so the scope file "
             + "could not be pinned and the server did not start. If a permission dialog for \(app) is open on this "
             + "Mac, answer it; if \(app) is not responding, open it; then start again.")
@@ -156,14 +187,16 @@ func pick<Item>(_ tokens: [String], from items: [Item], allowed: Set<String>?,
     var found: [Item] = []
     var missing: [String] = []
     for token in tokens {
-        let hits = visible.filter { $0[keyPath: id] == token || $0[keyPath: name] == token }
+        // An id names that one item, also when another item has it as its name.
+        let byId = visible.filter { $0[keyPath: id] == token }
+        let hits = byId.isEmpty ? visible.filter { $0[keyPath: name] == token } : byId
         if hits.isEmpty { missing.append(token) } else { found += hits }
     }
     return (found, missing)
 }
 
-/// The value of --allowed-calendars or --allowed-folders: a JSON array of ids; nil when the option is absent.
-/// Ids only, never names: a calendar or folder made later under an allowed name stays out.
+/// The value of --allowed-calendars, --allowed-folders or --allowed-lists: a JSON array of ids; nil when the
+/// option is absent. Ids only, never names: a calendar, folder or list made later under an allowed name stays out.
 func allowedIds(_ value: String?, _ option: String) throws -> Set<String>? {
     guard let value else { return nil }
     guard let list = try? JSONSerialization.jsonObject(with: Data(value.utf8)) as? [Any],
@@ -174,9 +207,11 @@ func allowedIds(_ value: String?, _ option: String) throws -> Set<String>? {
 }
 
 func allowedHelp(_ kind: ScopeKind) -> ArgumentHelp {
-    let (things, listing) = kind == .calendars
-        ? ("calendars and their events", "iris calendar calendars")
-        : ("folders and the notes they show", "iris notes folders")
+    let (things, listing) = switch kind {
+    case .calendars: ("calendars and their events", "iris calendar calendars")
+    case .folders: ("folders and the notes they show", "iris notes folders")
+    case .lists: ("lists and their reminders", "iris reminders lists")
+    }
     return ArgumentHelp("A JSON array of ids from `\(listing)`, as `iris mcp --http` passes them: only these \(things) exist for this command, anything else gets the error for one that does not exist, and a name matches only among these. [] allows none. Default: no limit.",
                         valueName: "ids")
 }

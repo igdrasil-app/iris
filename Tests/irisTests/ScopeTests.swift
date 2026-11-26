@@ -1,3 +1,4 @@
+import EventKit
 import XCTest
 @testable import iris
 
@@ -55,6 +56,73 @@ final class ScopeTests: XCTestCase {
         for (name, text) in refused { XCTAssertThrowsError(try parse(text), name) }
     }
 
+    func testScopeFileLists() throws {
+        // No lists key is no lists, as a file written before reminders came to HTTP meant.
+        XCTAssertEqual(try parse(#"{"calendars": "all", "folders": "all"}"#).lists, [])
+        XCTAssertEqual(try parse(#"{"calendars": "all", "folders": "all", "lists": []}"#).lists, [])
+        XCTAssertNil(try parse(#"{"calendars": [], "folders": [], "lists": "all"}"#).lists)
+        XCTAssertEqual(try parse(#"{"calendars": [], "folders": [], "lists": ["Errands", "id-1"], "writes": true}"#),
+                       ScopeFile(calendars: [], folders: [], lists: ["Errands", "id-1"], writes: true))
+        let refused = [
+            "null": #"{"calendars": [], "folders": [], "lists": null}"#,
+            "a bare string": #"{"calendars": [], "folders": [], "lists": "Errands"}"#,
+            "ALL": #"{"calendars": [], "folders": [], "lists": "ALL"}"#,
+            "a number in the list": #"{"calendars": [], "folders": [], "lists": ["Errands", 1]}"#,
+            "an object": #"{"calendars": [], "folders": [], "lists": {}}"#,
+            "Lists": #"{"calendars": [], "folders": [], "Lists": []}"#,
+            "lists alone": #"{"lists": "all"}"#,
+        ]
+        for (name, text) in refused { XCTAssertThrowsError(try parse(text), name) }
+    }
+
+    private let reminderWrites = ["add_reminder", "update_reminder", "complete_reminder", "delete_reminder"]
+
+    func testHTTPOffersNoReminderWrite() throws {
+        for lists: Set<String>? in [nil, [], ["l1"]] {
+            for (writes, sharedEvents) in [(false, false), (true, false), (true, true)] {
+                let scope = HTTPScope(calendars: nil, folders: nil, lists: lists, writes: writes, sharedEvents: sharedEvents)
+                let names = try httpOffering(scope).map(\.name)
+                XCTAssertTrue(Set(names).isDisjoint(with: reminderWrites), "\(names)")
+                // No lists offers what a server offered before reminders came to HTTP.
+                let reads = lists == [] ? [] : ["reminder_lists", "reminders"]
+                XCTAssertEqual(Set(names), Set(httpToolNames.filter { !$0.hasPrefix("reminder") } + reads
+                                               + (writes ? httpWriteToolNames : [])))
+            }
+        }
+        // Their commands take no scope option, so they could not be limited even if named.
+        for name in reminderWrites {
+            let tool = try XCTUnwrap(tools.first { $0.name == name })
+            XCTAssertFalse(httpToolNames.contains(name) || httpWriteToolNames.contains(name), name)
+            XCTAssertThrowsError(try tool.limited(to: HTTPScope(calendars: nil, folders: nil, lists: nil)), name)
+        }
+    }
+
+    func testEmptyListScopeIsNone() async throws {
+        let lists = [Named(id: "l1", name: "Errands"), Named(id: "l2", name: "Home")]
+        // No list named: every allowed list, which is none, never nil (every list).
+        for allowed: Set<String> in [[], ["gone"]] {
+            XCTAssertEqual(pick([], from: lists, allowed: allowed, id: \.id, name: \.name).found?.count, 0)
+        }
+        XCTAssertEqual(try resolveLists([], among: [], allowed: [])?.count, 0)
+        XCTAssertThrowsError(try resolveLists(["Errands"], among: [], allowed: [])) { error in
+            XCTAssertEqual("\(error)", "no reminder list named Errands; see `iris reminders lists`")
+        }
+        // An empty list of lists never reaches EventKit, which would read it as every list.
+        let none = try await fetchReminders(in: EKEventStore(), lists: [], status: .all)
+        XCTAssertTrue(none.isEmpty)
+        // The scope reaches the command as [], whatever the caller sends.
+        let smuggled = #"--allowed-lists=["outside"]"#
+        let reminders = try XCTUnwrap(tools.first { $0.name == "reminders" })
+        for ids: Set<String> in [[], ["l1"]] {
+            let argv = try reminders.limited(to: HTTPScope(calendars: nil, folders: nil, lists: ids))
+                .argv(["lists": [smuggled], "dueFrom": "2026-10-13"])
+            XCTAssertEqual(argv.filter { $0.hasPrefix("--allowed-lists") }.count, 1)
+            let parsed = try ReminderList.parse(Array(argv.dropFirst(2)))
+            XCTAssertEqual(try allowedIds(parsed.allowedLists, "--allowed-lists"), ids)
+            XCTAssertEqual(parsed.lists, [smuggled])
+        }
+    }
+
     private let folders = [
         ShownFolder(id: "f1", name: "Work", noteIds: ["n1", "n2"]),
         ShownFolder(id: "f2", name: "Home", noteIds: ["n3"]),
@@ -106,6 +174,13 @@ final class ScopeTests: XCTestCase {
         XCTAssertEqual(picked.found?.map(\.id), ["c3", "c2"])
         XCTAssertEqual(picked.missing, [])
         XCTAssertNil(pick([], from: items, allowed: nil, id: \.id, name: \.name).found)
+    }
+
+    func testPickTakesAnIdBeforeAName() {
+        let items = [Named(id: "c1", name: "Work"), Named(id: "c2", name: "c1")]
+        XCTAssertEqual(pick(["c1"], from: items, allowed: nil, id: \.id, name: \.name).found?.map(\.id), ["c1"])
+        // The name still reaches the other when the id is out of scope.
+        XCTAssertEqual(pick(["c1"], from: items, allowed: ["c2"], id: \.id, name: \.name).found?.map(\.id), ["c2"])
     }
 
     func testAllowedIds() throws {
