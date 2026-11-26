@@ -39,6 +39,8 @@ struct MCP: ParsableCommand {
               { "schema_version": 1, "mcpServers": { "iris": {
                   "command": "iris", "args": ["mcp"] } } }
 
+            reminder_lists is offered over stdio only, not over HTTP.
+
             Over HTTP, for a host that cannot start a process on this Mac:
 
               iris mcp --http

@@ -1,6 +1,7 @@
 import ArgumentParser
 import EventKit
 import Foundation
+import os
 
 struct RemindersCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
@@ -65,16 +66,16 @@ func grantedReminderStore() async throws -> EKEventStore {
 /// The answer to `request`, which asks for access. An unanswered prompt keeps the request waiting for as long
 /// as it is on screen, so after `seconds` this gives up with an error and leaves the request behind.
 func reminderAccess(within seconds: Double, _ request: @escaping @Sendable () async throws -> Bool) async throws -> Bool {
-    let answered = NSLock()
-    var done = false
+    let answered = OSAllocatedUnfairLock(initialState: false)
     return try await withCheckedThrowingContinuation { continuation in
         // Whichever comes first, the answer or the time limit, resumes; the other is ignored.
-        func finish(_ result: Result<Bool, Error>) {
-            answered.lock()
-            defer { answered.unlock() }
-            guard !done else { return }
-            done = true
-            continuation.resume(with: result)
+        @Sendable func finish(_ result: Result<Bool, Error>) {
+            let first = answered.withLock { done in
+                guard !done else { return false }
+                done = true
+                return true
+            }
+            if first { continuation.resume(with: result) }
         }
         Task {
             do { finish(.success(try await request())) } catch { finish(.failure(error)) }
