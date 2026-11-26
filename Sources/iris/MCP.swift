@@ -7,7 +7,7 @@ struct MCP: ParsableCommand {
         abstract: "Serve the calendar, notes and reminders commands as MCP tools over stdio, or the read tools (and, if turned on, the calendar writes) over HTTP.",
         // Lines stay under 80 columns: help wraps at 80 when piped, and a wrapped command no longer pastes.
         discussion: """
-            Hosts start this, not people. Tools: calendars, events, add_event, update_event, delete_event, note_folders, notes, search_notes, show_note, reminder_lists, reminders, with the fields of the commands. A call still running after 60 seconds is stopped and returns an error, so the server keeps answering. Each host adds iris with its own line; Claude Code, Codex and Grok CLI:
+            Hosts start this, not people. Tools: calendars, events, add_event, update_event, delete_event, note_folders, notes, search_notes, show_note, reminder_lists, reminders, add_reminder, delete_reminder, with the fields of the commands. A call still running after 60 seconds is stopped and returns an error, so the server keeps answering. Each host adds iris with its own line; Claude Code, Codex and Grok CLI:
 
               claude mcp add --scope user iris -- iris mcp
               codex mcp add iris -- iris mcp
@@ -39,7 +39,7 @@ struct MCP: ParsableCommand {
               { "schema_version": 1, "mcpServers": { "iris": {
                   "command": "iris", "args": ["mcp"] } } }
 
-            reminder_lists and reminders are offered over stdio only, not over HTTP.
+            The reminder tools are offered over stdio only, not over HTTP.
 
             Over HTTP, for a host that cannot start a process on this Mac:
 
@@ -142,7 +142,8 @@ private let instructions = """
     apps' windows, AppleScript or screen control; use those only when none of these tools covers the task. \
     Notes are read only: search_notes or notes finds a note and its id; show_note gives its text unless \
     the note is password protected. \
-    Apple Reminders can be read, where reminder_lists and reminders are offered, but not changed yet; \
+    Apple Reminders can be read, added and deleted, where reminder_lists, reminders, add_reminder and \
+    delete_reminder are offered, but not changed or completed yet; \
     a reminder's due date and time are as kept in the reminder, and its at is the moment in the Mac's zone. \
     Dates in: 2026-10-13, 2026-10-13T09:00 (local time), or ISO 8601 with an offset or Z; \
     a bare date given as an end (to, end, until) includes that whole day. Dates out: ISO 8601 in the Mac's zone. \
