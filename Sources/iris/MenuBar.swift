@@ -314,9 +314,9 @@ func menuModel(_ remote: RemoteAnswer, _ permissions: Permissions, _ server: Rem
     default: .open(.reminders)
     }
     let state: RemoteState? = if case .known(let state) = remote { state } else { nil }
-    var outside = server.phase == .off && !otherServers(remote, server).isEmpty
-    if case .outside = server.phase { outside = true }
-    let failure: String? = if case .failed(let reason) = server.phase { reason } else { nil }
+    // With no server of its own running, any other running is what the menu shows, a failure to start included.
+    let outside = server.pid == nil && !otherServers(remote, server).isEmpty
+    let failure: String? = if case .failed(let reason) = server.phase, !outside { reason } else { nil }
     return MenuModel(status: remoteStatusLine(remote, server), rows: [
         row("Calendar", state?.calendar, problem: calendarFix),
         row("Reminders", state?.reminders, problem: remindersFix),
@@ -325,15 +325,25 @@ func menuModel(_ remote: RemoteAnswer, _ permissions: Permissions, _ server: Rem
        switchOn: server.phase != .off || outside, switchEnabled: !outside, failure: failure)
 }
 
-/// The ports of the servers running that the switch did not start: as the last check found them, else as the
-/// switch's own look before it would have started one.
-private func otherServers(_ remote: RemoteAnswer, _ server: RemoteServerStatus) -> [Int] {
+/// The servers running that the switch did not start, with what they use of the scope file: as the last check
+/// found them, else, with nothing known of the file, as the switch's own look before it would have started one.
+private func otherServers(_ remote: RemoteAnswer, _ server: RemoteServerStatus) -> [(port: Int, state: ListenerState?)] {
     if case .known(let state) = remote {
-        let others = state.listeners.filter { !server.ours.contains($0.listener.pid) }.map(\.listener.port)
+        let others = state.listeners.filter { !server.started($0.listener) }.map { ($0.listener.port, Optional($0.state)) }
         if !others.isEmpty { return others }
     }
-    if case .outside(let ports) = server.phase { return ports }
+    if case .outside(let ports) = server.phase { return ports.map { ($0, nil) } }
     return []
+}
+
+/// What these servers' settings need, from the last check: nothing, a restart for a changed scope file, or a
+/// scope file that would now stop a start, which outweighs a change. Only servers on this scope file count.
+private func settingsWarning(_ remote: RemoteAnswer, _ states: [ListenerState?]) -> String {
+    guard case .known(let state) = remote else { return "" }
+    let onThisFile = states.compactMap { $0 }.filter { $0 != .otherFile }
+    if onThisFile.isEmpty { return "" }
+    if state.usable == false { return " · settings have a problem" }
+    return onThisFile.contains(.changed) ? " · restart to apply changes" : ""
 }
 
 private func accessWords(_ access: AppAccess) -> String {
@@ -347,6 +357,10 @@ private func accessWords(_ access: AppAccess) -> String {
 /// One short line: on or off, the port or how many servers, and the one thing most worth knowing.
 func remoteStatusLine(_ remote: RemoteAnswer, _ server: RemoteServerStatus) -> String {
     let others = otherServers(remote, server)
+    if server.pid == nil && !others.isEmpty {
+        return "Remote access · " + (others.count == 1 ? "port \(others[0].port)" : "\(others.count) servers")
+            + " · run outside Iris" + settingsWarning(remote, others.map(\.state))
+    }
     switch server.phase {
     case .starting:
         return "Remote access · starting…"
@@ -354,20 +368,11 @@ func remoteStatusLine(_ remote: RemoteAnswer, _ server: RemoteServerStatus) -> S
         return "Remote access · couldn't start"
     case .on(let port):
         guard others.isEmpty else { return "Remote access · \(others.count + 1) servers · \(others.count) run outside Iris" }
-        var line = "Remote access · port \(port)"
-        if case .known(let state) = remote, let mine = state.listeners.first(where: { $0.listener.pid == server.pid }) {
-            if state.usable == false {
-                // Outweighs a change: a restart would not start.
-                line += " · settings have a problem"
-            } else if mine.state == .changed {
-                line += " · restart to apply changes"
-            }
+        guard case .known(let state) = remote, let mine = state.listeners.first(where: { $0.listener.pid == server.pid }) else {
+            return "Remote access · port \(port)"
         }
-        return line
+        return "Remote access · port \(port)" + settingsWarning(remote, [mine.state])
     case .off, .outside:
-        if !others.isEmpty {
-            return "Remote access · " + (others.count == 1 ? "port \(others[0])" : "\(others.count) servers") + " · run outside Iris"
-        }
         switch remote {
         case .checking: return "Checking…"
         case .unknown: return "Remote access unknown"

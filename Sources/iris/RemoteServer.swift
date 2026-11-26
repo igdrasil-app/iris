@@ -31,10 +31,24 @@ enum RemoteServerPhase: Equatable {
     case outside([Int])   // the choice is on, but servers Iris did not start run on these ports, so it starts none
 }
 
+/// A process by pid and start time: a pid alone may be given to another process once this one has gone.
+struct ServerIdentity: Equatable {
+    let pid: pid_t
+    let started: Double
+
+    func names(pid other: pid_t, started time: Double) -> Bool {
+        other == pid && abs(time - started) < 0.001
+    }
+}
+
 struct RemoteServerStatus: Equatable {
     var phase = RemoteServerPhase.off
-    var pid: pid_t?               // the server running now
-    var ours: Set<pid_t> = []     // every server this Iris started or stopped as left from an earlier run
+    var pid: pid_t?                     // the server running now
+    var ours: [ServerIdentity] = []     // every server this Iris started or stopped as left from an earlier run
+
+    func started(_ listener: Listener) -> Bool {
+        ours.contains { $0.names(pid: listener.pid, started: listener.started.timeIntervalSince1970) }
+    }
 }
 
 /// Starts, watches and stops the one server of the switch. Before each start it looks at the servers running:
@@ -57,7 +71,7 @@ final class RemoteServer {
     }
     private(set) var starts = 0
     private var child: Child?
-    private var leftover: pid_t?
+    private var leftover: (identity: ServerIdentity, deadline: Date)?
     private var next: DispatchWorkItem?
     private var crashes = 0
     private var quitting = false
@@ -78,7 +92,12 @@ final class RemoteServer {
     }
 
     var isOn: Bool { defaults.bool(forKey: RemoteAccessKey.on) }
-    var port: Int { defaults.object(forKey: RemoteAccessKey.port) as? Int ?? defaultHTTPPort }
+
+    /// The port set in defaults, or the server's default when none is set or it is no port.
+    var port: Int {
+        let port = defaults.object(forKey: RemoteAccessKey.port) as? Int ?? defaultHTTPPort
+        return (1...65535).contains(port) ? port : defaultHTTPPort
+    }
 
     /// At launch: starts the server if the choice is on, after stopping one left from an earlier run.
     func start() {
@@ -93,17 +112,27 @@ final class RemoteServer {
         reconcile()
     }
 
-    /// At quit: stops the server and waits for it, SIGKILL after the grace period. The choice stays.
+    /// At quit: finishes stopping a leftover and stops the server, each within the grace period, then SIGKILL.
+    /// The choice stays, and so does the record of a server not seen to exit, for the next launch to stop.
     func quit() {
         quitting = true
         next?.cancel()
+        if let leftover {
+            let identity = leftover.identity
+            while stillLeftover(identity) && Date() < leftover.deadline { usleep(10_000) }
+            if stillLeftover(identity) { kill(identity.pid, SIGKILL) }
+            let killed = Date().addingTimeInterval(1)
+            while stillLeftover(identity) && Date() < killed { usleep(10_000) }
+            if !stillLeftover(identity) { forget(identity) }
+        }
         guard let child, child.process.isRunning else { return }
-        let pid = child.process.processIdentifier
         child.process.terminate()
-        let deadline = Date().addingTimeInterval(timing.stopGrace)
+        var deadline = Date().addingTimeInterval(timing.stopGrace)
         while child.process.isRunning && Date() < deadline { usleep(10_000) }
-        if child.process.isRunning { kill(pid, SIGKILL) }
-        forget(pid)
+        if child.process.isRunning { kill(child.process.processIdentifier, SIGKILL) }
+        deadline = Date().addingTimeInterval(1)
+        while child.process.isRunning && Date() < deadline { usleep(10_000) }
+        if !child.process.isRunning, let identity = child.identity { forget(identity) }
     }
 
     private func reconcile() {
@@ -121,8 +150,8 @@ final class RemoteServer {
             return
         }
         // Left from an earlier run: stopped whatever the choice, since that run is over.
-        if let old = running.first(where: { isLeftover($0, parent: processStart($0.pid)?.parent, record: record) }) {
-            stopLeftover(old)
+        if let record, running.contains(where: { isLeftover(pid: $0.pid, now: processStart($0.pid), record: record) }) {
+            stopLeftover(record)
             return
         }
         guard isOn else {
@@ -140,14 +169,21 @@ final class RemoteServer {
         launch()
     }
 
-    private var record: (pid: Int, started: Double)? {
+    private var record: ServerIdentity? {
         guard let pid = defaults.object(forKey: RemoteAccessKey.childPid) as? Int,
               let started = defaults.object(forKey: RemoteAccessKey.childStarted) as? Double else { return nil }
-        return (pid, started)
+        return ServerIdentity(pid: pid_t(clamping: pid), started: started)
     }
 
-    private func forget(_ pid: pid_t) {
-        guard record?.pid == Int(pid) else { return }
+    /// Only by a server that has said it is ready: one that lost the port to another copy's never takes its record.
+    private func remember(_ identity: ServerIdentity) {
+        defaults.set(Int(identity.pid), forKey: RemoteAccessKey.childPid)
+        defaults.set(identity.started, forKey: RemoteAccessKey.childStarted)
+    }
+
+    /// Clears the record only while it still names this server.
+    private func forget(_ identity: ServerIdentity) {
+        guard let record, identity.names(pid: record.pid, started: record.started) else { return }
         defaults.removeObject(forKey: RemoteAccessKey.childPid)
         defaults.removeObject(forKey: RemoteAccessKey.childStarted)
     }
@@ -171,11 +207,9 @@ final class RemoteServer {
 
     private func launch() {
         let port = self.port
-        let logFile: FileHandle
         do {
             try createIfMissing(expanded(tokenFile ?? defaultTokenFile), Data((newToken() + "\n").utf8))
             try createIfMissing(expanded(scopeFile ?? defaultScopeFile), Data((sharesNothing + "\n").utf8))
-            logFile = try openLog(log)
         } catch {
             fail("\(error)")
             return
@@ -196,22 +230,23 @@ final class RemoteServer {
         process.standardError = errors
         let child = Child(process: process, port: port)
         child.done.enter()
-        process.terminationHandler = { _ in child.done.leave() }
+        // Not the child itself: the process keeps its handler after a launch that failed.
+        process.terminationHandler = { [done = child.done] _ in done.leave() }
         do {
             try process.run()
         } catch {
-            child.done.leave()
+            for handle in [output.fileHandleForReading, output.fileHandleForWriting,
+                           errors.fileHandleForReading, errors.fileHandleForWriting] {
+                try? handle.close()
+            }
             fail("cannot start \(executable): \(error.localizedDescription)")
             return
         }
         starts += 1
         let pid = process.processIdentifier
-        if let started = processStart(pid)?.started {
-            defaults.set(Int(pid), forKey: RemoteAccessKey.childPid)
-            defaults.set(started, forKey: RemoteAccessKey.childStarted)
-        }
+        child.identity = processStart(pid).map { ServerIdentity(pid: pid, started: $0.started) }
         self.child = child
-        status = RemoteServerStatus(phase: .starting, pid: pid, ours: status.ours.union([pid]))
+        status = RemoteServerStatus(phase: .starting, pid: pid, ours: status.ours + (child.identity.map { [$0] } ?? []))
 
         DispatchQueue.global().async(group: child.done) { [weak self] in
             let handle = output.fileHandleForReading
@@ -228,17 +263,19 @@ final class RemoteServer {
                 }
             }
         }
-        DispatchQueue.global().async(group: child.done) {
+        DispatchQueue.global().async(group: child.done) { [log] in
+            // Opened here, off the main thread. Without it the server runs all the same, its request log lost.
+            let logFile = try? openLog(log)
+            defer { try? logFile?.close() }
             let handle = errors.fileHandleForReading
             while true {
                 let chunk = handle.availableData
                 if chunk.isEmpty { break }
-                try? logFile.write(contentsOf: chunk)
+                try? logFile?.write(contentsOf: chunk)
                 child.keepIfEarly(chunk)
             }
         }
         child.done.notify(queue: .main) { [weak self] in
-            try? logFile.close()
             MainActor.assumeIsolated { self?.exited(child) }
         }
     }
@@ -246,6 +283,7 @@ final class RemoteServer {
     private func ready(_ child: Child) {
         guard child === self.child, !child.stopping else { return }
         child.readyAt = Date()
+        if let identity = child.identity { remember(identity) }
         status.phase = .on(port: child.port)
     }
 
@@ -262,7 +300,7 @@ final class RemoteServer {
         guard child === self.child else { return }
         self.child = nil
         let process = child.process
-        forget(process.processIdentifier)
+        if let identity = child.identity { forget(identity) }
         status.pid = nil
         if quitting || child.stopping {
             reconcile()
@@ -278,24 +316,33 @@ final class RemoteServer {
         }
     }
 
+    /// Whether the recorded leftover is still that process, left by its run; checked right before each signal,
+    /// so none reaches a process that was given its pid since.
+    private func stillLeftover(_ identity: ServerIdentity) -> Bool {
+        isLeftover(pid: identity.pid, now: processStart(identity.pid), record: identity)
+    }
+
     /// SIGTERM, SIGKILL after the grace period; looked at every tenth of a second until it is gone.
-    private func stopLeftover(_ listener: Listener) {
-        let pid = listener.pid
-        leftover = pid
-        status = RemoteServerStatus(phase: isOn ? .starting : .off, pid: nil, ours: status.ours.union([pid]))
-        kill(pid, SIGTERM)
-        let started = listener.started.timeIntervalSince1970
-        let deadline = Date().addingTimeInterval(timing.stopGrace)
+    private func stopLeftover(_ identity: ServerIdentity) {
+        // Gone, or no longer that process, since the listing: nothing to stop. A record naming a gone process
+        // can name no other, as start times differ.
+        guard stillLeftover(identity) else {
+            reconcile()
+            return
+        }
+        kill(identity.pid, SIGTERM)
+        leftover = (identity, Date().addingTimeInterval(timing.stopGrace))
+        status = RemoteServerStatus(phase: isOn ? .starting : .off, pid: nil, ours: status.ours + [identity])
         func look() {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
                 MainActor.assumeIsolated {
-                    guard let self else { return }
-                    if let now = processStart(pid), abs(now.started - started) < 0.001 {
-                        if Date() > deadline { kill(pid, SIGKILL) }
+                    guard let self, !self.quitting, let leftover = self.leftover else { return }
+                    if self.stillLeftover(identity) {
+                        if Date() > leftover.deadline { kill(identity.pid, SIGKILL) }
                         look()
                         return
                     }
-                    self.forget(pid)
+                    self.forget(identity)
                     self.leftover = nil
                     self.reconcile()
                 }
@@ -310,7 +357,8 @@ private final class Child: @unchecked Sendable {
     let process: Process
     let port: Int
     let done = DispatchGroup()     // its exit, and the end of both of its outputs
-    var stopping = false           // on the main thread only, as readyAt
+    var identity: ServerIdentity?  // on the main thread only, as stopping and readyAt
+    var stopping = false
     var readyAt: Date?
     private let lock = NSLock()
     private var readyLine = false
@@ -336,12 +384,12 @@ private final class Child: @unchecked Sendable {
     }
 }
 
-/// A listener is one this Iris started in an earlier run when it is the server last recorded, by pid and start
-/// time, and that run is over: its parent is launchd. Another copy of Iris shares the defaults, and its server's
-/// parent is that copy, so it is never taken for a leftover.
-func isLeftover(_ listener: Listener, parent: pid_t?, record: (pid: Int, started: Double)?) -> Bool {
-    guard let record, Int(listener.pid) == record.pid, parent == 1 else { return false }
-    return abs(listener.started.timeIntervalSince1970 - record.started) < 0.001
+/// A process is the server this Iris recorded in an earlier run, and that run is over, when its start time is
+/// the record's and its parent is launchd. Another copy of Iris shares the defaults, and its server's parent is
+/// that copy, so it is never taken for a leftover. Never pid 1 or below.
+func isLeftover(pid: pid_t, now: (started: Double, parent: pid_t)?, record: ServerIdentity?) -> Bool {
+    guard pid > 1, let now, let record, now.parent == 1 else { return false }
+    return record.names(pid: pid, started: now.started)
 }
 
 /// Why a server that exited before its ready line could not start: its error message without ArgumentParser's
@@ -372,7 +420,9 @@ func newToken() -> String {
 }
 
 /// Makes the file, owner-only, with these bytes, unless something is at the path already, which is never
-/// replaced. Written whole beside it first and then linked into place, so the path never shows a part.
+/// replaced. Its folder must be open to this user only, as checked before anything is made in it: then no one
+/// else can reach the file while it is written. Written whole beside it first and then linked into place, so
+/// the path never shows a part.
 func createIfMissing(_ path: String, _ contents: Data) throws {
     var info = stat()
     if lstat(path, &info) == 0 { return }
@@ -383,6 +433,10 @@ func createIfMissing(_ path: String, _ contents: Data) throws {
     } catch {
         throw IrisError("cannot create \(directory): \(error.localizedDescription)")
     }
+    let folder = open(directory, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+    guard folder >= 0 else { throw IrisError("cannot open \(directory): \(String(cString: strerror(errno)))") }
+    defer { close(folder) }
+    try checkFolder(folder, directory, "the folder", forbidden: 0o077, only: "open to you only", fix: "chmod go-rwx")
     let temporary = path + "." + UUID().uuidString + ".new"
     let descriptor = open(temporary, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
     guard descriptor >= 0 else { throw IrisError("cannot create \(path): \(String(cString: strerror(errno)))") }
@@ -395,13 +449,19 @@ func createIfMissing(_ path: String, _ contents: Data) throws {
     }
 }
 
-/// The log, appended to and never cut; created owner-only with its folder when missing.
+/// The log, appended to and never cut; created owner-only with its folder when missing. Only a regular file:
+/// non-blocking, so a FIFO in its place cannot hold the open.
 private func openLog(_ path: String) throws -> FileHandle {
     let directory = (path as NSString).deletingLastPathComponent
     try? FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
-    let descriptor = open(path, O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC, 0o600)
+    let descriptor = open(path, O_WRONLY | O_APPEND | O_CREAT | O_NONBLOCK | O_CLOEXEC, 0o600)
     guard descriptor >= 0 else { throw IrisError("cannot write the log \(path): \(String(cString: strerror(errno)))") }
-    return FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+    let file = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+    var info = stat()
+    guard fstat(descriptor, &info) == 0, info.st_mode & S_IFMT == S_IFREG else {
+        throw IrisError("the log \(path) is not a regular file")
+    }
+    return file
 }
 
 private func expanded(_ path: String) -> String {

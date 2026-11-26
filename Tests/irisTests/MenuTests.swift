@@ -16,12 +16,16 @@ final class MenuTests: XCTestCase {
                     reminders: reminders, eventsWithOtherPeople: false, writesCounted: nil, tools: nil, tokenPath: "/t",
                     tokenExists: true, tokenProblem: nil,
                     listeners: listeners.enumerated().map { index, listener in
-                        (Listener(pid: pid_t(100 + index), port: listener.0, scopeFile: scope, started: Date()), listener.1)
+                        (Listener(pid: pid_t(100 + index), port: listener.0, scopeFile: scope, started: started(100 + index)), listener.1)
                     })
     }
 
+    /// The listeners `state` makes are pids 100, 101 and on, each started at its own second.
+    private func started(_ pid: Int) -> Date { Date(timeIntervalSince1970: Double(1000 + pid)) }
+    private func id(_ pid: pid_t) -> ServerIdentity { ServerIdentity(pid: pid, started: Double(1000 + Int(pid))) }
+
     /// The switch's server, as pid 100, the first listener `state` makes.
-    private let mine = RemoteServerStatus(phase: .on(port: 8788), pid: 100, ours: [100])
+    private var mine: RemoteServerStatus { RemoteServerStatus(phase: .on(port: 8788), pid: 100, ours: [id(100)]) }
 
     /// The model as text: the header's line, then each row as title, the text at the right, ! for a problem.
     private func shown(_ remote: RemoteAnswer, _ permissions: Permissions? = nil, _ server: RemoteServerStatus = RemoteServerStatus()) -> [String] {
@@ -64,17 +68,29 @@ final class MenuTests: XCTestCase {
         // The last check has not seen the server yet, or not since it started again: the port is the switch's.
         XCTAssertEqual(shown(.known(state(listeners: [])), nil, mine), ["Remote access · port 8788"] + usual)
         XCTAssertEqual(shown(.checking, nil, mine), ["Remote access · port 8788"] + blank)
-        let again = RemoteServerStatus(phase: .on(port: 8788), pid: 101, ours: [100, 101])
+        let again = RemoteServerStatus(phase: .on(port: 8788), pid: 101, ours: [id(100), id(101)])
         XCTAssertEqual(shown(.known(state(listeners: [(8788, .changed)])), nil, again), ["Remote access · port 8788"] + usual)
     }
 
     func testOutside() {
         XCTAssertEqual(shown(.known(state(listeners: [(8788, .current)]))), ["Remote access · port 8788 · run outside Iris"] + usual)
-        XCTAssertEqual(shown(.known(state(listeners: [(8788, .changed)]))), ["Remote access · port 8788 · run outside Iris"] + usual)
-        // A server on another file: what this file allows is not what it allows.
+        // What its settings need is still said, as for the switch's own server.
+        XCTAssertEqual(shown(.known(state(listeners: [(8788, .changed)]))),
+                       ["Remote access · port 8788 · run outside Iris · restart to apply changes"] + usual)
+        XCTAssertEqual(shown(.known(state(usable: false, listeners: [(8788, .changed)]))),
+                       ["Remote access · port 8788 · run outside Iris · settings have a problem"] + usual)
+        XCTAssertEqual(shown(.known(state(usable: false, calendar: nil, notes: nil, reminders: nil, listeners: [(8788, .unknown)]))),
+                       ["Remote access · port 8788 · run outside Iris · settings have a problem"] + blank)
+        // A server on another file: what this file allows is not what it allows, and its problems are not its.
         XCTAssertEqual(shown(.known(state(listeners: [(8770, .otherFile)]))), ["Remote access · port 8770 · run outside Iris"] + blank)
+        XCTAssertEqual(shown(.known(state(usable: false, listeners: [(8770, .otherFile)]))),
+                       ["Remote access · port 8770 · run outside Iris"] + blank)
         XCTAssertEqual(shown(.known(state(listeners: [(8765, .otherFile), (8788, .current)]))),
                        ["Remote access · 2 servers · run outside Iris"] + usual)
+        XCTAssertEqual(shown(.known(state(listeners: [(8765, .otherFile), (8788, .changed)]))),
+                       ["Remote access · 2 servers · run outside Iris · restart to apply changes"] + usual)
+        XCTAssertEqual(shown(.known(state(usable: false, listeners: [(8765, .current), (8788, .changed)]))),
+                       ["Remote access · 2 servers · run outside Iris · settings have a problem"] + usual)
         // The switch found them before the check did.
         let found = RemoteServerStatus(phase: .outside([8788]))
         XCTAssertEqual(shown(.checking, nil, found), ["Remote access · port 8788 · run outside Iris"] + blank)
@@ -102,19 +118,28 @@ final class MenuTests: XCTestCase {
         XCTAssertEqual(header(.unknown, RemoteServerStatus()), ["Remote access unknown", "off", "-"])
         XCTAssertEqual(header(none, RemoteServerStatus()), ["Remote access off", "off", "-"])
         for remote in [RemoteAnswer.checking, none] {
-            XCTAssertEqual(header(remote, RemoteServerStatus(phase: .starting, pid: 100, ours: [100])), ["Remote access · starting…", "on", "-"])
+            XCTAssertEqual(header(remote, RemoteServerStatus(phase: .starting, pid: 100, ours: [id(100)])), ["Remote access · starting…", "on", "-"])
             XCTAssertEqual(header(remote, RemoteServerStatus(phase: .failed(reason))), ["Remote access · couldn't start", "on", reason])
-            XCTAssertEqual(header(remote, RemoteServerStatus(phase: .on(port: 8765), pid: 100, ours: [100])), ["Remote access · port 8765", "on", "-"])
+            XCTAssertEqual(header(remote, RemoteServerStatus(phase: .on(port: 8765), pid: 100, ours: [id(100)])), ["Remote access · port 8765", "on", "-"])
         }
         // Not started by this Iris: on, and it cannot be turned off here, whether the choice is off or on.
         XCTAssertEqual(header(foreign, RemoteServerStatus()), ["Remote access · port 8788 · run outside Iris", "on -", "-"])
         XCTAssertEqual(header(foreign, RemoteServerStatus(phase: .outside([8788]))), ["Remote access · port 8788 · run outside Iris", "on -", "-"])
         // While left from an earlier run and being stopped, it is not someone else's.
-        XCTAssertEqual(header(foreign, RemoteServerStatus(phase: .starting, ours: [100])), ["Remote access · starting…", "on", "-"])
-        XCTAssertEqual(header(foreign, RemoteServerStatus(phase: .off, ours: [100])), ["Remote access off", "off", "-"])
+        XCTAssertEqual(header(foreign, RemoteServerStatus(phase: .starting, ours: [id(100)])), ["Remote access · starting…", "on", "-"])
+        XCTAssertEqual(header(foreign, RemoteServerStatus(phase: .off, ours: [id(100)])), ["Remote access off", "off", "-"])
+        // With none of its own running (could not start, waiting to start again), another server is what shows.
+        XCTAssertEqual(header(foreign, RemoteServerStatus(phase: .failed(reason))), ["Remote access · port 8788 · run outside Iris", "on -", "-"])
+        XCTAssertEqual(header(foreign, RemoteServerStatus(phase: .starting, ours: [id(105)])),
+                       ["Remote access · port 8788 · run outside Iris", "on -", "-"])
+        XCTAssertEqual(header(foreign, RemoteServerStatus(phase: .on(port: 8765), pid: 105, ours: [id(105)])),
+                       ["Remote access · 2 servers · 1 run outside Iris", "on", "-"])
+        // A pid the switch once had, now another process's: that server is someone else's.
+        XCTAssertEqual(header(foreign, RemoteServerStatus(phase: .off, ours: [ServerIdentity(pid: 100, started: 5)])),
+                       ["Remote access · port 8788 · run outside Iris", "on -", "-"])
         // Beside the switch's own server, the switch turns that one off.
         XCTAssertEqual(header(.known(state(listeners: [(8765, .current), (8788, .current)])),
-                              RemoteServerStatus(phase: .on(port: 8765), pid: 100, ours: [100])),
+                              RemoteServerStatus(phase: .on(port: 8765), pid: 100, ours: [id(100)])),
                        ["Remote access · 2 servers · 1 run outside Iris", "on", "-"])
     }
 
