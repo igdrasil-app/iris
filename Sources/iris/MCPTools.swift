@@ -1,6 +1,6 @@
 import Foundation
 
-// Each tool is one calendar or notes command. The table below is the only place a tool's parameters
+// Each tool is one calendar, notes or reminders command. The table below is the only place a tool's parameters
 // live: it produces the JSON schema the host reads and the command line the call runs, so
 // a new command option needs a new row here to reach MCP.
 
@@ -223,4 +223,8 @@ let tools: [Tool] = [
         // --html stays CLI-only: HTML bodies embed images as data URIs and run to tens of megabytes.
         Parameter(name: "id", kind: .positional, description: "Note id, from notes.", required: true),
     ]),
+
+    Tool(name: "reminder_lists",
+         description: "List Apple Reminders lists: id, title, writable, source, open (how many reminders in the list are not completed). Reminders themselves cannot be read or changed yet.",
+         command: ["reminders", "lists"], scope: nil, parameters: []),
 ]

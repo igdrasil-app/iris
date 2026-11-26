@@ -97,6 +97,9 @@ final class MenuBar: NSObject, NSMenuDelegate {
         default:
             break
         }
+        // Shown only, never asked for here: `iris reminders lists` asks.
+        menu.addItem(withTitle: "Reminders: \(describe(EKEventStore.authorizationStatus(for: .reminder)))",
+                     action: nil, keyEquivalent: "")
 
         menu.addItem(.separator())
         menu.addItem(withTitle: "Iris \(version ?? "unknown")", action: nil, keyEquivalent: "")

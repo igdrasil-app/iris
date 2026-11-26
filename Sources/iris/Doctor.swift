@@ -11,7 +11,8 @@ struct Doctor: AsyncParsableCommand {
             within a few seconds; that is never an error. update holds the upgrade command and \
             is present only when latest is newer than version. notes is whether Iris may control \
             Notes: granted, denied, not determined, or unknown, as when Notes is not running. \
-            notesFix says how to allow it and is present only when notes is denied.
+            notesFix says how to allow it and is present only when notes is denied. \
+            reminders is the Reminders permission, in the words calendars uses.
             """
     )
 
@@ -31,6 +32,7 @@ struct Doctor: AsyncParsableCommand {
                             calendars: describe(EKEventStore.authorizationStatus(for: .event)),
                             notes: notes,
                             notesFix: notes == "denied" ? notesAutomationFix : nil,
+                            reminders: describe(EKEventStore.authorizationStatus(for: .reminder)),
                             responsible: responsibleDescription(),
                             latest: latest,
                             update: update))
@@ -62,11 +64,12 @@ struct DoctorInfo: Encodable {
     let calendars: String
     let notes: String
     let notesFix: String?
+    let reminders: String
     let responsible: String
     let latest: String?
     let update: String?
 
-    enum CodingKeys: CodingKey { case version, path, bundle, calendars, notes, notesFix, responsible, latest, update }
+    enum CodingKeys: CodingKey { case version, path, bundle, calendars, notes, notesFix, reminders, responsible, latest, update }
 
     // An unknown fact prints as null so the reader sees the check ran; notesFix and update are only there when there is one.
     func encode(to encoder: Encoder) throws {
@@ -77,6 +80,7 @@ struct DoctorInfo: Encodable {
         try fields.encode(calendars, forKey: .calendars)
         try fields.encode(notes, forKey: .notes)
         try fields.encodeIfPresent(notesFix, forKey: .notesFix)
+        try fields.encode(reminders, forKey: .reminders)
         try fields.encode(responsible, forKey: .responsible)
         try fields.encode(latest, forKey: .latest)
         try fields.encodeIfPresent(update, forKey: .update)

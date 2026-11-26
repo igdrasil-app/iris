@@ -1,9 +1,9 @@
 # iris
 
-Apple Calendar and Notes for the agents you already run: Claude Code, Cursor, Codex, OpenClaw.
+Apple Calendar, Notes and Reminders for the agents you already run: Claude Code, Cursor, Codex, OpenClaw.
 One signed app that holds the permissions, a CLI and an MCP server.
 
-Calendar: read and write. Notes: read.
+Calendar: read and write. Notes: read. Reminders: the lists only, for now; reminders themselves cannot be read or changed yet.
 
 ## Why
 
@@ -18,15 +18,15 @@ Then open Iris once with the `open` line brew prints (`open /Applications/Iris.a
 
 Always tap-qualified: Homebrew's own `iris` is an unrelated app that a bare `brew upgrade --cask iris` would install instead; a plain `brew upgrade` is fine. `iris doctor` says which version is installed and prints the upgrade command when a newer release exists.
 
-Open Iris.app for a menu bar icon: the bot head, with a dot while Iris lacks full Calendar access or Notes access is denied. Its menu shows the Calendar and Notes permission state; for Calendar it asks for access or opens Privacy Settings, for Notes it asks (Allow Notes Access…, while Notes is open) or opens Automation Settings. It also shows the version, and can open Iris at login. `brew upgrade` quits the menu bar and reopens the new version; running `iris mcp` servers are left alone.
+Open Iris.app for a menu bar icon: the bot head, with a dot while Iris lacks full Calendar access or Notes access is denied. Its menu shows the Calendar, Notes and Reminders permission state; for Calendar it asks for access or opens Privacy Settings, for Notes it asks (Allow Notes Access…, while Notes is open) or opens Automation Settings. It also shows the version, and can open Iris at login. `brew upgrade` quits the menu bar and reopens the new version; running `iris mcp` servers are left alone.
 
 While it runs, the menu bar app updates Iris itself: it checks once a day, offers a new version, and has Check for Updates… next to the version. The update replaces Iris.app in place with the same signature, so the Calendar grant, `/opt/homebrew/bin/iris` and running `iris mcp` servers carry on, and the next `iris` starts without a Gatekeeper dialog. A plain `brew upgrade` skips Iris once the app is current; the tap-qualified upgrade reinstalls it, because brew still records the version it installed.
 
 ## Use
 
     iris --help
-    iris status                                                     # Calendar and Notes permission state, never prompts
-    iris doctor                                                     # version, path, Calendar and Notes permission state, newer release if any
+    iris status                                                     # Calendar, Notes and Reminders permission state, never prompts
+    iris doctor                                                     # version, path, permission state, newer release if any
     iris calendar calendars                                         # id, title, writable, source
     iris calendar events                                            # next 7 days, every calendar
     iris calendar events --from 2026-10-13 --to 2026-10-20 --calendar Work
@@ -38,6 +38,7 @@ While it runs, the menu bar app updates Iris itself: it checks once a day, offer
     iris notes list --folder Work --since 2026-10-01 --limit 10    # newest modified first, 50 by default
     iris notes search "dentist invoice" --limit 5                   # every word in title or text; snippet of the text
     iris notes show <id>                                            # one note with its text; --html adds the HTML body
+    iris reminders lists                                            # id, title, writable, source, open (not completed)
     iris mcp                                                        # MCP server over stdio; hosts start it, see below
     iris mcp --http                                                 # over HTTP on 127.0.0.1:8765, behind a token: reads, writes if turned on
 
@@ -45,7 +46,7 @@ Dates in are `2026-10-13`, `2026-10-13T09:00` (local time) or ISO 8601 with an o
 
 ## Hosts
 
-`iris mcp` serves the calendar and notes commands as MCP tools over stdio: `calendars`, `events`, `add_event`, `update_event`, `delete_event`, `note_folders`, `notes`, `search_notes`, `show_note`, with the fields of the commands. A call still running after 60 seconds is stopped and returns an error, so the server keeps answering. Any host that starts local MCP servers can use it. Claude Code, Codex and Grok CLI:
+`iris mcp` serves the calendar, notes and reminders commands as MCP tools over stdio: `calendars`, `events`, `add_event`, `update_event`, `delete_event`, `note_folders`, `notes`, `search_notes`, `show_note`, `reminder_lists`, with the fields of the commands. A call still running after 60 seconds is stopped and returns an error, so the server keeps answering. Any host that starts local MCP servers can use it. Claude Code, Codex and Grok CLI:
 
     claude mcp add --scope user iris -- iris mcp
     codex mcp add iris -- iris mcp
@@ -108,7 +109,7 @@ Assistants that run in a vendor's cloud, such as Grok Bot, the Meta Muse app and
 
     make app                     # universal swift build, bundle as build/Iris.app, codesign; needs a Developer ID certificate
     build/Iris.app/Contents/MacOS/iris status
-    swift test                   # the HTTP gate (token, Origin, path, method, body framing), scope (who sees what), write guards, events with other people on them, alarm minutes, availability, attendees
+    swift test                   # the HTTP gate (token, Origin, path, method, body framing), scope (who sees what), write guards, events with other people on them, alarm minutes, availability, attendees, the Reminders prompt time limit
     ./release.sh                 # the version in Info.plist: notarize, tar, GitHub release, bump the cask and the Sparkle appcast
                                  # bump CFBundleVersion with the version; Sparkle compares only that, and release.sh refuses a repeat
                                  # over SSH or from an agent, where the keychain cannot prompt: NOTARY_KEY=<p8> NOTARY_KEY_ID=<id> NOTARY_ISSUER=<uuid> SPARKLE_KEY=<file> ./release.sh
