@@ -116,6 +116,7 @@ final class ScopeTests: XCTestCase {
     }
 
     func testEveryOfferedToolIsAReadOrGuarded() throws {
+        XCTAssertTrue(isHTTPWrite("future_write"), "a name that is not a read is guarded")
         let reminderWrites = ["add_reminder", "update_reminder", "complete_reminder", "delete_reminder"]
         XCTAssertEqual(httpReminderWriteToolNames, reminderWrites)
         for name in httpWriteToolNames + reminderWrites {

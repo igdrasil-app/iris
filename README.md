@@ -105,7 +105,7 @@ Without `lists`, or with `[]`, no reminder tool is offered and Reminders is not 
     (umask 077; echo '{"calendars": ["Work"], "folders": "all", "lists": ["Errands"]}' \
       > ~/Library/Application\ Support/Iris/http-scope)
 
-Writes are off unless the scope file also says `"writes": true`:
+Calendar writes are off unless the scope file also says `"writes": true`:
 
     (umask 077; echo \
       '{"calendars": ["Work"], "folders": "all", "writes": true}' \

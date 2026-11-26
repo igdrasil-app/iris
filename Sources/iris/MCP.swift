@@ -66,7 +66,7 @@ struct MCP: ParsableCommand {
                 "lists": ["Errands"]}' \\
                 > ~/Library/Application\\ Support/Iris/http-scope)
 
-            Writes are off unless the scope file also says "writes": true (false or no key: off; any other value stops the start):
+            Calendar writes are off unless the scope file also says "writes": true (false or no key: off; any other value stops the start):
 
               (umask 077; echo \\
                 '{"calendars": ["Work"], "folders": "all", "writes": true}' \\
