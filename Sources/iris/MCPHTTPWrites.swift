@@ -272,7 +272,7 @@ private func replaceFile(_ path: String, with data: Data) throws {
 
 /// Mode 600 and an empty access control list: mode alone is not owner-only when an ACL, set or inherited,
 /// grants others access.
-private func makePrivate(_ descriptor: Int32, _ path: String) throws {
+func makePrivate(_ descriptor: Int32, _ path: String) throws {
     guard let empty = acl_init(0) else { throw failure(path) }
     defer { acl_free(UnsafeMutableRawPointer(empty)) }
     guard acl_set_fd_np(descriptor, empty, ACL_TYPE_EXTENDED) == 0, fchmod(descriptor, 0o600) == 0 else {
