@@ -122,6 +122,40 @@ struct ActivitySplitter {
     }
 }
 
+/// The app's time for activity: a `Date` that moves with a clock that only goes forward, so setting the Mac's clock
+/// back does not make old activity new. Reports are stamped with it as they arrive; the time in a line is not used.
+func activityNow() -> Date {
+    let elapsed = activityEpoch.instant.duration(to: ContinuousClock.now).components
+    return activityEpoch.date.addingTimeInterval(Double(elapsed.seconds) + Double(elapsed.attoseconds) / 1e18)
+}
+
+private let activityEpoch = (date: Date(), instant: ContinuousClock.now)
+
+/// Activity gathered off the main thread, taken by it one snapshot at a time.
+final class ActivityInbox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var activity = RemoteActivity()
+    private var waiting = false
+
+    /// Records the reports, stamped now; true when the main thread has no snapshot coming and should take one.
+    func add(_ reports: [ActivityReport]) -> Bool {
+        guard !reports.isEmpty else { return false }
+        let now = activityNow()
+        return lock.withLock {
+            reports.forEach { activity.record(ActivityReport(time: now, name: $0.name)) }
+            defer { waiting = true }
+            return !waiting
+        }
+    }
+
+    func take() -> RemoteActivity {
+        lock.withLock {
+            waiting = false
+            return activity
+        }
+    }
+}
+
 /// Who has been active, from the activity lines in the order they came. There is no session: a request without a
 /// name is taken to be from the last name seen, while that name has been active within the last 5 minutes, else from
 /// an unnamed assistant. Names are kept for 10 minutes after their last request, the time the menu shows them for.
@@ -142,6 +176,7 @@ struct RemoteActivity: Equatable {
 
     mutating func record(_ report: ActivityReport) {
         let time = report.time
+        named.removeAll { time.timeIntervalSince($0.last) >= Self.recent }
         lastUsed = max(lastUsed ?? time, time)
         if let name = report.name {
             current = name
@@ -152,7 +187,6 @@ struct RemoteActivity: Equatable {
         } else {
             unnamed = max(unnamed ?? time, time)
         }
-        named.removeAll { time.timeIntervalSince($0.last) >= Self.recent }
         if let since = unnamed, time.timeIntervalSince(since) >= Self.recent { unnamed = nil }
     }
 

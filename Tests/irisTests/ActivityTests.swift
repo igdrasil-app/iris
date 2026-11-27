@@ -144,6 +144,12 @@ final class ActivityTests: XCTestCase {
         var many = RemoteActivity()
         for index in 0..<40 { many.record(ActivityReport(time: at(Double(index)), name: "n\(index)")) }
         XCTAssertEqual(many.named.map(\.name), (24..<40).map { "n\($0)" })
+        // Names gone quiet make room before a new one comes, so one active a moment ago is never pushed out.
+        var full = RemoteActivity()
+        for index in 0..<16 { full.record(ActivityReport(time: at(Double(index)), name: "n\(index)")) }
+        full.record(ActivityReport(time: at(590), name: "n0"))
+        full.record(ActivityReport(time: at(616), name: "new"))
+        XCTAssertEqual(full.named.map(\.name), ["n0", "new"])
     }
 
     func testStatus() {

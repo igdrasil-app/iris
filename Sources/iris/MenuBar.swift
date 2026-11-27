@@ -77,7 +77,10 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate, MenuAction
         // Quit Iris, and logging out, end in terminate, which posts this; a server left by any other end is
         // stopped at the next launch.
         NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: nil) { [weak self] _ in
-            MainActor.assumeIsolated { self?.server.quit() }
+            MainActor.assumeIsolated {
+                self?.clearMark()
+                self?.server.quit()
+            }
         }
     }
 
@@ -96,7 +99,7 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate, MenuAction
     }
 
     private func model() -> MenuModel {
-        menuModel(remote, permissions, server.status, activity: server.activity, now: Date(), fits: headerLineFits)
+        menuModel(remote, permissions, server.status, activity: server.activity, now: activityNow(), fits: headerLineFits)
     }
 
     private func showMenu() {
@@ -117,7 +120,7 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate, MenuAction
     /// A request was made: the header says who, and the icon shows its mark until the requests have stopped for a
     /// few seconds. The image changes only when the mark comes and when it goes.
     private func serverActive() {
-        let now = Date()
+        let now = activityNow()
         let wasShown = mark.shown(at: now)
         mark.record(at: now)
         if !wasShown { showStatus() }
@@ -127,16 +130,24 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate, MenuAction
     }
 
     private func scheduleMarkCheck() {
-        let timer = Timer(fireAt: mark.until ?? Date(), interval: 0, target: self, selector: #selector(checkMark),
-                          userInfo: nil, repeats: false)
+        let timer = Timer(timeInterval: max((mark.until ?? activityNow()).timeIntervalSince(activityNow()), 0), target: self,
+                          selector: #selector(checkMark), userInfo: nil, repeats: false)
         RunLoop.main.add(timer, forMode: .common)
         markTimer = timer
+    }
+
+    /// At Off and at quit the mark goes at once.
+    private func clearMark() {
+        markTimer?.invalidate()
+        markTimer = nil
+        mark = ActivityMark()
+        showStatus()
     }
 
     // A request since the timer was set moved the end: wait until then.
     @objc private func checkMark() {
         markTimer = nil
-        if mark.shown(at: Date()) { return scheduleMarkCheck() }
+        if mark.shown(at: activityNow()) { return scheduleMarkCheck() }
         showStatus()
     }
 
@@ -173,7 +184,8 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate, MenuAction
     }
 
     private func showStatus() {
-        item.button?.image = botGlyph(badge: status != .fullAccess || notes == "denied", active: mark.shown(at: Date()))
+        item.button?.image = botGlyph(badge: status != .fullAccess || notes == "denied", active: mark.shown(at: activityNow()),
+                                      height: NSStatusBar.system.thickness)
         item.button?.toolTip = "Iris: Calendar \(describe(status)), Notes \(notes)"
     }
 
@@ -319,6 +331,7 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate, MenuAction
 
     func toggleRemoteAccess(_ sender: MenuSwitch) {
         server.turn(on: sender.state == .on)
+        if sender.state != .on { clearMark() }
         showMenu()
     }
 
@@ -1136,35 +1149,42 @@ private func menuTitleInset() -> CGFloat {
     return ((menu.size.width - title) / 2).rounded()
 }
 
-/// Drawn in the 24-point grid of Assets/mascot.svg and scaled to the menu bar's 18, the bot 3 units higher than in
-/// the mascot so a dot fits under it; always there, so it does not move when the dot comes and goes.
-/// A template image is alpha only, so the eyes and the gap around the problem dot are cut out. `active` shows a dot
-/// under the head, as the Dock does under a running app; the dot for a problem stays at the top right.
-func botGlyph(badge: Bool, active: Bool = false) -> NSImage {
-    let image = NSImage(size: NSSize(width: 18, height: 18), flipped: true) { _ in
+/// Drawn in the 24-point grid of Assets/mascot.svg and scaled to the menu bar's 18, centred in an image `height` tall:
+/// the menu bar's thickness, so the margin under the head has room for the activity dot and the head sits where an
+/// 18-point image would put it. A template image is alpha only, so the eyes and the gap around the problem dot are cut
+/// out. `active` shows a small dot under the head, as the Dock does under a running app; the head never moves for it.
+func botGlyph(badge: Bool, active: Bool = false, height: CGFloat = 18) -> NSImage {
+    let image = NSImage(size: NSSize(width: 18, height: height), flipped: true) { _ in
         guard let context = NSGraphicsContext.current else { return false }
-        let scale = NSAffineTransform()
-        scale.scale(by: 0.75)
-        scale.concat()
+        let top = (height - 18) / 2
         NSColor.black.set()
+        if active {
+            let headBottom = top + 21.05 * 0.75  // the head's lower edge, its stroke included
+            let size: CGFloat = 2
+            let gap = min((height - headBottom - size) / 2, 1.5)
+            let y = ((headBottom + gap) * 2).rounded() / 2
+            NSBezierPath(ovalIn: NSRect(x: 9 - size / 2, y: y, width: size, height: size)).fill()
+        }
+        let place = NSAffineTransform()
+        place.translateX(by: 0, yBy: top)
+        place.scale(by: 0.75)
+        place.concat()
 
-        let lift: CGFloat = 3
         let antenna = NSBezierPath()
-        antenna.move(to: NSPoint(x: 12, y: 8 - lift))
-        antenna.line(to: NSPoint(x: 12, y: 4 - lift))
-        antenna.line(to: NSPoint(x: 8, y: 4 - lift))
+        antenna.move(to: NSPoint(x: 12, y: 8))
+        antenna.line(to: NSPoint(x: 12, y: 4))
+        antenna.line(to: NSPoint(x: 8, y: 4))
         stroke(antenna)
-        let head = NSBezierPath(roundedRect: NSRect(x: 4, y: 8 - lift, width: 16, height: 12), xRadius: 2, yRadius: 2)
+        let head = NSBezierPath(roundedRect: NSRect(x: 4, y: 8, width: 16, height: 12), xRadius: 2, yRadius: 2)
         head.fill()
         stroke(head)
-        if active { NSBezierPath(ovalIn: NSRect(x: 10, y: 19.75, width: 4, height: 4)).fill() }
 
         context.compositingOperation = .destinationOut
         let eye = NSBezierPath()
-        eye.move(to: NSPoint(x: 9, y: 13 - lift))
-        eye.line(to: NSPoint(x: 9, y: 15 - lift))
+        eye.move(to: NSPoint(x: 9, y: 13))
+        eye.line(to: NSPoint(x: 9, y: 15))
         stroke(eye)
-        NSBezierPath(ovalIn: NSRect(x: 13.95, y: 12.95 - lift, width: 2.1, height: 2.1)).fill()
+        NSBezierPath(ovalIn: NSRect(x: 13.95, y: 12.95, width: 2.1, height: 2.1)).fill()
 
         if badge {
             NSBezierPath(ovalIn: NSRect(x: 16, y: 0, width: 8, height: 8)).fill()

@@ -438,27 +438,33 @@ final class MenuTests: XCTestCase {
         XCTAssertLessThanOrEqual(menu.size.width, headerMenuWidth)
     }
 
-    /// The activity dot sits under the head, apart from it, and the head does not move when it shows.
+    /// In an image as tall as the menu bar, the head is where the 18-point image puts it, centred; the activity dot
+    /// shows only below the head, with blank rows between, and inside the image.
     @MainActor
     func testActivityDot() throws {
-        func alpha(_ image: NSImage) throws -> [[UInt8]] {
-            let rep = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 36, pixelsHigh: 36, bitsPerSample: 8,
+        // Alpha at 2x, the image drawn at `y` points from the top of a canvas `height` points tall.
+        func alpha(_ image: NSImage, height: CGFloat, y: CGFloat = 0) throws -> [[UInt8]] {
+            let pixels = Int(height * 2)
+            let rep = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 36, pixelsHigh: pixels, bitsPerSample: 8,
                                                      samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
                                                      colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
-            rep.size = image.size
+            rep.size = NSSize(width: 18, height: height)
             NSGraphicsContext.saveGraphicsState()
             NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
-            image.draw(in: NSRect(origin: .zero, size: image.size))
+            image.draw(in: NSRect(x: 0, y: height - y - image.size.height, width: image.size.width, height: image.size.height))
             NSGraphicsContext.restoreGraphicsState()
-            return (0..<36).map { y in (0..<36).map { x in UInt8(rep.colorAt(x: x, y: y)!.alphaComponent * 255) } }
+            return (0..<pixels).map { row in (0..<36).map { x in UInt8(rep.colorAt(x: x, y: row)!.alphaComponent * 255) } }
         }
-        for badge in [false, true] {
-            let rest = try alpha(botGlyph(badge: badge)), active = try alpha(botGlyph(badge: badge, active: true))
-            let differing = (0..<36).filter { rest[$0] != active[$0] }
-            XCTAssertFalse(differing.isEmpty)
-            // Only rows below the head change, and a clear row lies between the head and the dot.
-            let headBottom = try XCTUnwrap((0..<36).last { rest[$0].contains { $0 > 0 } })
-            XCTAssertGreaterThan(differing.min()!, headBottom + 1)
+        for height: CGFloat in [22, 24] {
+            for badge in [false, true] {
+                let rest = try alpha(botGlyph(badge: badge, height: height), height: height)
+                XCTAssertEqual(rest, try alpha(botGlyph(badge: badge), height: height, y: (height - 18) / 2), "\(height)")
+                let active = try alpha(botGlyph(badge: badge, active: true, height: height), height: height)
+                let differing = rest.indices.filter { rest[$0] != active[$0] }
+                let headBottom = try XCTUnwrap(rest.indices.last { rest[$0].contains { $0 > 0 } })
+                XCTAssertGreaterThan(try XCTUnwrap(differing.min()), headBottom + 1, "\(height)")
+                XCTAssertLessThan(try XCTUnwrap(differing.max()), rest.count - 1, "\(height)")
+            }
         }
     }
 

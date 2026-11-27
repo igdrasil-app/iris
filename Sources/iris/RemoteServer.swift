@@ -74,8 +74,9 @@ final class RemoteServer {
 
     /// Who has used the switch's server since it was turned on, across its restarts; in memory only.
     private(set) var activity = RemoteActivity()
-    // Renewed at each Off: lines a server started before it sent, still queued, are dropped after the next On.
-    private var activityGeneration = UUID()
+    // Where the servers' reader keeps activity until the main thread takes it. Replaced at each Off: a snapshot
+    // from an older one, still queued, is dropped after the next On.
+    private var inbox = ActivityInbox()
     private(set) var status = RemoteServerStatus() {
         didSet { if status != oldValue { changed(status) } }
     }
@@ -122,7 +123,7 @@ final class RemoteServer {
         defaults.set(on, forKey: RemoteAccessKey.on)
         if !on {
             activity = RemoteActivity()
-            activityGeneration = UUID()
+            inbox = ActivityInbox()
         }
         next?.cancel()
         next = nil
@@ -246,7 +247,7 @@ final class RemoteServer {
 
     private func launch() {
         let port = self.port
-        let generation = activityGeneration
+        let inbox = self.inbox
         do {
             try createIfMissing(expanded(tokenFile ?? defaultTokenFile), Data((newToken() + "\n").utf8))
             try createIfMissing(expanded(scopeFile ?? defaultScopeFile), Data((sharesNothing + "\n").utf8))
@@ -319,9 +320,11 @@ final class RemoteServer {
                     try? logFile?.write(contentsOf: log)
                     child.keepIfEarly(log)
                 }
-                let reports = lines.compactMap(parseActivityLine)
-                if !reports.isEmpty {
-                    DispatchQueue.main.async { MainActor.assumeIsolated { self?.record(reports, generation: generation) } }
+                // Kept here, so a flood of requests leaves at most one snapshot waiting for the main thread.
+                if inbox.add(lines.compactMap(parseActivityLine)) {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        MainActor.assumeIsolated { self?.record(inbox) }
+                    }
                 }
             }
             let rest = splitter.finish()
@@ -337,9 +340,10 @@ final class RemoteServer {
 
     /// Lines from a server still answering after the switch was turned off are not kept, nor those queued before
     /// it was turned off and on again.
-    private func record(_ reports: [ActivityReport], generation: UUID) {
-        guard isOn, generation == activityGeneration else { return }
-        reports.forEach { activity.record($0) }
+    private func record(_ from: ActivityInbox) {
+        let snapshot = from.take()
+        guard isOn, from === inbox else { return }
+        activity = snapshot
         active()
     }
 
