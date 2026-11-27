@@ -278,7 +278,7 @@ let tools: [Tool] = [
     ]),
 
     Tool(name: "delete_reminder",
-         description: "Delete a reminder. Returns {deleted, title, list, listId}. A repeating reminder is deleted whole; where that is not allowed it is refused, with nothing deleted.",
+         description: "Delete a reminder. Returns {deleted, title, list, listId}. A repeating reminder is deleted whole; where that is not allowed it is refused, with nothing deleted, unless its series has ended and its last occurrence is completed.",
          command: ["reminders", "delete"], scope: .lists, parameters: [
         Parameter(name: "id", kind: .positional, description: "Reminder id, from reminders.", required: true),
         notRepeatingParameter,
