@@ -82,6 +82,10 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate, MenuAction
                 self?.server.quit()
             }
         }
+        // The icon is as tall as the menu bar, which changes when a display with a notch comes or goes.
+        NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.showStatus() }
+        }
     }
 
     private func refresh() {

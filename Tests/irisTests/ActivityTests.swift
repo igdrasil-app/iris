@@ -236,4 +236,22 @@ final class ActivityTests: XCTestCase {
         mark.record(at: at(19))
         XCTAssertEqual(mark.until, at(23))
     }
+
+    /// Reports gather until the main thread takes them: only the first of a batch asks for a take, a snapshot does
+    /// not change afterwards, and every report is stamped when it arrives, whatever time its line gave.
+    func testInboxGathersAndRestamps() throws {
+        let inbox = ActivityInbox()
+        let before = activityNow()
+        XCTAssertFalse(inbox.add([]))
+        XCTAssertTrue(inbox.add([ActivityReport(time: .distantPast, name: "Hark")]))
+        XCTAssertFalse(inbox.add([ActivityReport(time: .distantFuture, name: "Claude")]))
+        let snapshot = inbox.take()
+        XCTAssertEqual(snapshot.named.map(\.name), ["Hark", "Claude"])
+        let last = try XCTUnwrap(snapshot.lastUsed)
+        XCTAssertGreaterThanOrEqual(last, before)
+        XCTAssertLessThanOrEqual(last, activityNow())
+        XCTAssertTrue(inbox.add([ActivityReport(time: .distantPast, name: "Cursor")]))
+        XCTAssertEqual(snapshot.named.map(\.name), ["Hark", "Claude"])
+        XCTAssertEqual(inbox.take().named.map(\.name), ["Hark", "Claude", "Cursor"])
+    }
 }
