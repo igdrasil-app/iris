@@ -438,6 +438,30 @@ final class MenuTests: XCTestCase {
         XCTAssertLessThanOrEqual(menu.size.width, headerMenuWidth)
     }
 
+    /// The activity dot sits under the head, apart from it, and the head does not move when it shows.
+    @MainActor
+    func testActivityDot() throws {
+        func alpha(_ image: NSImage) throws -> [[UInt8]] {
+            let rep = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 36, pixelsHigh: 36, bitsPerSample: 8,
+                                                     samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                                     colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+            rep.size = image.size
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+            image.draw(in: NSRect(origin: .zero, size: image.size))
+            NSGraphicsContext.restoreGraphicsState()
+            return (0..<36).map { y in (0..<36).map { x in UInt8(rep.colorAt(x: x, y: y)!.alphaComponent * 255) } }
+        }
+        for badge in [false, true] {
+            let rest = try alpha(botGlyph(badge: badge)), active = try alpha(botGlyph(badge: badge, active: true))
+            let differing = (0..<36).filter { rest[$0] != active[$0] }
+            XCTAssertFalse(differing.isEmpty)
+            // Only rows below the head change, and a clear row lies between the head and the dot.
+            let headBottom = try XCTUnwrap((0..<36).last { rest[$0].contains { $0 > 0 } })
+            XCTAssertGreaterThan(differing.min()!, headBottom + 1)
+        }
+    }
+
     /// The work runs off the main thread, one at a time, and its answer lands on the main thread while the run
     /// loop is in the mode an open menu tracks in.
     @MainActor

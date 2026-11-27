@@ -1136,9 +1136,10 @@ private func menuTitleInset() -> CGFloat {
     return ((menu.size.width - title) / 2).rounded()
 }
 
-/// Drawn in the 24-point grid of Assets/mascot.svg and scaled to the menu bar's 18.
-/// A template image is alpha only, so the eyes and the gap around the dot are cut out. `active` lights the antenna's
-/// tip, a shape and not a colour, since a template image has none; the dot for a problem stays at the other corner.
+/// Drawn in the 24-point grid of Assets/mascot.svg and scaled to the menu bar's 18, the bot 3 units higher than in
+/// the mascot so a dot fits under it; always there, so it does not move when the dot comes and goes.
+/// A template image is alpha only, so the eyes and the gap around the problem dot are cut out. `active` shows a dot
+/// under the head, as the Dock does under a running app; the dot for a problem stays at the top right.
 func botGlyph(badge: Bool, active: Bool = false) -> NSImage {
     let image = NSImage(size: NSSize(width: 18, height: 18), flipped: true) { _ in
         guard let context = NSGraphicsContext.current else { return false }
@@ -1147,22 +1148,23 @@ func botGlyph(badge: Bool, active: Bool = false) -> NSImage {
         scale.concat()
         NSColor.black.set()
 
+        let lift: CGFloat = 3
         let antenna = NSBezierPath()
-        antenna.move(to: NSPoint(x: 12, y: 8))
-        antenna.line(to: NSPoint(x: 12, y: 4))
-        antenna.line(to: NSPoint(x: 8, y: 4))
+        antenna.move(to: NSPoint(x: 12, y: 8 - lift))
+        antenna.line(to: NSPoint(x: 12, y: 4 - lift))
+        antenna.line(to: NSPoint(x: 8, y: 4 - lift))
         stroke(antenna)
-        if active { NSBezierPath(ovalIn: NSRect(x: 5.25, y: 1.25, width: 5.5, height: 5.5)).fill() }
-        let head = NSBezierPath(roundedRect: NSRect(x: 4, y: 8, width: 16, height: 12), xRadius: 2, yRadius: 2)
+        let head = NSBezierPath(roundedRect: NSRect(x: 4, y: 8 - lift, width: 16, height: 12), xRadius: 2, yRadius: 2)
         head.fill()
         stroke(head)
+        if active { NSBezierPath(ovalIn: NSRect(x: 10, y: 19.75, width: 4, height: 4)).fill() }
 
         context.compositingOperation = .destinationOut
         let eye = NSBezierPath()
-        eye.move(to: NSPoint(x: 9, y: 13))
-        eye.line(to: NSPoint(x: 9, y: 15))
+        eye.move(to: NSPoint(x: 9, y: 13 - lift))
+        eye.line(to: NSPoint(x: 9, y: 15 - lift))
         stroke(eye)
-        NSBezierPath(ovalIn: NSRect(x: 13.95, y: 12.95, width: 2.1, height: 2.1)).fill()
+        NSBezierPath(ovalIn: NSRect(x: 13.95, y: 12.95 - lift, width: 2.1, height: 2.1)).fill()
 
         if badge {
             NSBezierPath(ovalIn: NSRect(x: 16, y: 0, width: 8, height: 8)).fill()

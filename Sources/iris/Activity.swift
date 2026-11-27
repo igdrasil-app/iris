@@ -188,7 +188,8 @@ func activityStatus(_ activity: RemoteActivity, now: Date, fits: (String) -> Boo
         return name + " · " + when
     }
     let joined = who.dropLast().joined(separator: ", ") + " and " + who.last!
-    let line = joined.prefix(1).uppercased() + joined.dropFirst() + " · " + when
+    // Each label as the client wrote it; the unnamed assistant always comes last, so never starts the line.
+    let line = joined + " · " + when
     return fits(joined + widest) ? line : "\(who.count) assistants · " + when
 }
 

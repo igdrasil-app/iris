@@ -142,6 +142,36 @@ final class RemoteServerTests: XCTestCase {
         XCTAssertNil(switched.activity.lastUsed)
     }
 
+    /// A line the old server sent before Off, still waiting for the main thread, is not kept after On.
+    @MainActor
+    func testActivityQueuedBeforeOffIsDropped() throws {
+        let marker = folder + "/reported"
+        let serving = try script(#"""
+            echo '{"port": 1}'
+            [ -e "\#(marker)" ] && exec sleep 600
+            touch "\#(marker)"
+            sleep 0.3
+            printf '@activity %s Hark\n' "$(date +%Y-%m-%dT%H:%M:%S%z)" >&2
+            exec sleep 600
+            """#)
+        var actives = 0
+        let switched = RemoteServer(executable: serving, log: folder + "/logs/http.log", defaults: defaults,
+                                    tokenFile: folder + "/state/token", scopeFile: folder + "/state/scope",
+                                    stateDir: folder + "/state", listeners: { [] }, active: { actives += 1 }) { _ in }
+        switched.turn(on: true)
+        wait(10) { switched.status.phase == .on(port: defaultHTTPPort) }
+        // The main thread held while the line is read and queued for it.
+        Thread.sleep(forTimeInterval: 1.5)
+        switched.turn(on: false)
+        switched.turn(on: true)
+        wait(10) { switched.status.phase == .on(port: defaultHTTPPort) && FileManager.default.fileExists(atPath: marker) }
+        wait(1) { false }
+        XCTAssertEqual(actives, 0)
+        XCTAssertNil(switched.activity.lastUsed)
+        switched.turn(on: false)
+        wait(10) { switched.status.pid == nil }
+    }
+
     @MainActor
     func testFilesAreNeverReplaced() throws {
         try FileManager.default.createDirectory(atPath: folder + "/state", withIntermediateDirectories: true,

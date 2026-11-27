@@ -176,6 +176,10 @@ final class ActivityTests: XCTestCase {
         XCTAssertEqual(status([(0, nil)], now: 120), "An assistant · active 2 min ago")
         XCTAssertEqual(status([(0, "Hark"), (400, nil)], now: 400), "Hark and an assistant · active just now")
         XCTAssertEqual(status([(0, nil), (400, "Hark")], now: 400), "Hark and an assistant · active just now")
+        // Each name as the client wrote it.
+        XCTAssertEqual(status([(0, "iTerm"), (1, "Hark")], now: 1), "iTerm and Hark · active just now")
+        XCTAssertEqual(status([(0, "hark"), (400, nil)], now: 400), "hark and an assistant · active just now")
+        XCTAssertEqual(status([(0, "iTerm")], now: 0), "iTerm · active just now")
         // One long name that does not fit is shortened, never counted.
         let long = String(repeating: "W", count: 32)
         let shortened = status([(0, long)], now: 0)

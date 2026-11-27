@@ -74,6 +74,8 @@ final class RemoteServer {
 
     /// Who has used the switch's server since it was turned on, across its restarts; in memory only.
     private(set) var activity = RemoteActivity()
+    // Renewed at each Off: lines a server started before it sent, still queued, are dropped after the next On.
+    private var activityGeneration = UUID()
     private(set) var status = RemoteServerStatus() {
         didSet { if status != oldValue { changed(status) } }
     }
@@ -118,7 +120,10 @@ final class RemoteServer {
 
     func turn(on: Bool) {
         defaults.set(on, forKey: RemoteAccessKey.on)
-        if !on { activity = RemoteActivity() }
+        if !on {
+            activity = RemoteActivity()
+            activityGeneration = UUID()
+        }
         next?.cancel()
         next = nil
         crashes = 0
@@ -241,6 +246,7 @@ final class RemoteServer {
 
     private func launch() {
         let port = self.port
+        let generation = activityGeneration
         do {
             try createIfMissing(expanded(tokenFile ?? defaultTokenFile), Data((newToken() + "\n").utf8))
             try createIfMissing(expanded(scopeFile ?? defaultScopeFile), Data((sharesNothing + "\n").utf8))
@@ -315,7 +321,7 @@ final class RemoteServer {
                 }
                 let reports = lines.compactMap(parseActivityLine)
                 if !reports.isEmpty {
-                    DispatchQueue.main.async { MainActor.assumeIsolated { self?.record(reports) } }
+                    DispatchQueue.main.async { MainActor.assumeIsolated { self?.record(reports, generation: generation) } }
                 }
             }
             let rest = splitter.finish()
@@ -329,9 +335,10 @@ final class RemoteServer {
         }
     }
 
-    /// Lines from a server still answering after the switch was turned off are not kept.
-    private func record(_ reports: [ActivityReport]) {
-        guard isOn else { return }
+    /// Lines from a server still answering after the switch was turned off are not kept, nor those queued before
+    /// it was turned off and on again.
+    private func record(_ reports: [ActivityReport], generation: UUID) {
+        guard isOn, generation == activityGeneration else { return }
         reports.forEach { activity.record($0) }
         active()
     }
