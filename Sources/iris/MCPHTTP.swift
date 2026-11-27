@@ -50,7 +50,8 @@ private func writableNote(_ offering: [Tool], _ scope: HTTPScope) -> String {
             + (scope.writes ? "within the same limit, calendar and reminder writes counted together"
                 : "at most \(writesPerHour) write calls an hour")
             + "; deleting a repeating reminder, which would delete every occurrence, is not available here: delete it "
-            + "on the Mac, or complete its occurrences one at a time."
+            + "on the Mac, or complete its occurrences one at a time. A series that has ended, its last occurrence "
+            + "completed, has nothing left to lose and can be deleted."
     }
     let readOnly = if !scope.writes {
         "Calendar events and notes are"

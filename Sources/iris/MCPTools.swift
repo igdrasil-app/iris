@@ -144,7 +144,7 @@ let onlyMineParameter = Parameter(
 /// Over HTTP this parameter is dropped and --not-repeating always pinned in its place (`Tool.limited(to:)`).
 let notRepeatingParameter = Parameter(
     name: "notRepeating", kind: .flag,
-    description: "Refuse, with nothing deleted, a reminder that repeats, since deleting it deletes every occurrence. Default: off.",
+    description: "Refuse, with nothing deleted, a reminder that repeats, since deleting it deletes every occurrence; a series that has ended, its last occurrence completed, is deleted. Default: off.",
     flag: "not-repeating")
 
 private let sharedNote = " An event with other people on it can be refused, with nothing changed, where changing such events is not allowed."
@@ -278,7 +278,7 @@ let tools: [Tool] = [
     ]),
 
     Tool(name: "delete_reminder",
-         description: "Delete a reminder. Returns {deleted, title, list, listId}. A repeating reminder is deleted whole; where that is not allowed it is refused, with nothing deleted.",
+         description: "Delete a reminder. Returns {deleted, title, list, listId}. A repeating reminder is deleted whole; where that is not allowed it is refused, with nothing deleted, unless its series has ended and its last occurrence is completed.",
          command: ["reminders", "delete"], scope: .lists, parameters: [
         Parameter(name: "id", kind: .positional, description: "Reminder id, from reminders.", required: true),
         notRepeatingParameter,

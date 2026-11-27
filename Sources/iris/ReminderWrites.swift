@@ -435,9 +435,11 @@ struct DeleteReminder: AsyncParsableCommand {
         discussion: """
             A repeating reminder is deleted whole, with every later occurrence; Reminders has no way to \
             delete one occurrence. With --not-repeating, as `iris mcp --http` always passes it, a repeating \
-            reminder is refused instead, with nothing deleted; so is a series that has ended, completed but \
-            still repeating. A completed occurrence is a reminder of its own that does not repeat, and is \
-            deleted. Deleting an id a second time is an error, as is any id that is not a reminder's.
+            reminder is refused instead, with nothing deleted, unless its series has ended: it repeats with an \
+            end (--until or --count) and is completed, which Reminders marks it only once its last occurrence \
+            is completed; nothing is left to lose, and it is deleted. A completed occurrence is a reminder of \
+            its own that does not repeat, and is deleted. Deleting an id a second time is an error, as is any \
+            id that is not a reminder's.
             """
     )
 
@@ -447,7 +449,7 @@ struct DeleteReminder: AsyncParsableCommand {
     @Option(help: allowedHelp(.lists))
     var allowedLists: String?
 
-    @Flag(help: "Refuse, with nothing deleted, a reminder that repeats, since deleting it deletes every occurrence. `iris mcp --http` always passes it. Default: off.")
+    @Flag(help: "Refuse, with nothing deleted, a reminder that repeats, since deleting it deletes every occurrence; a series that has ended, its last occurrence completed, is deleted. `iris mcp --http` always passes it. Default: off.")
     var notRepeating = false
 
     func validate() throws {
@@ -458,10 +460,11 @@ struct DeleteReminder: AsyncParsableCommand {
         let allowed = try allowedIds(allowedLists, "--allowed-lists")
         let store = try await grantedReminderStore()
         let reminder = try findReminder(id, in: store, allowed: allowed)
-        if notRepeating && reminder.hasRecurrenceRules {
+        if notRepeating && reminder.hasRecurrenceRules && !isFinishedSeries(reminder) {
             throw IrisError("this reminder repeats, and deleting it would delete every occurrence, so nothing was "
-                + "deleted. With not-repeating on, a repeating reminder is not deleted: delete it in Reminders on the "
-                + "Mac, or complete its occurrences one at a time.")
+                + "deleted. With not-repeating on, a repeating reminder is deleted only once its series has ended "
+                + "and its last occurrence is completed: delete it in Reminders on the Mac, or complete its "
+                + "occurrences one at a time.")
         }
         let list = reminder.calendar
         guard list?.allowsContentModifications == true else {
@@ -476,6 +479,14 @@ struct DeleteReminder: AsyncParsableCommand {
         }
         try emit(result)
     }
+}
+
+/// A series with nothing left to lose: every rule has an end, and the reminder is completed. Completing an
+/// occurrence moves a repeating reminder to its next one and keeps it open, so it stays completed only once its
+/// last occurrence is done.
+func isFinishedSeries(_ reminder: EKReminder) -> Bool {
+    guard reminder.isCompleted, let rules = reminder.recurrenceRules, !rules.isEmpty else { return false }
+    return rules.allSatisfy { $0.recurrenceEnd != nil }
 }
 
 struct DeletedReminder: Encodable {
