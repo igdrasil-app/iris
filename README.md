@@ -51,6 +51,7 @@ Iris reads your calendars, notes and reminders on this Mac and never uploads the
     iris reminders lists                                            # id, title, writable, source, open (not completed)
     iris reminders list --list Errands --due-to 2026-10-20          # open by default; --status completed or all
     iris reminders add --list Errands --title "Buy milk" --due 2026-10-14   # a bare date is date only; no alarm is set
+    iris reminders add --list Errands --title Call --due 2026-10-14T09:00 --alarm 10 --alarm 0   # minutes before; needs a time; without one it does not notify
     iris reminders add --list Errands --title Bins --due 2026-10-14 --repeat weekly --until 2026-12-31   # repeats; needs --due
     iris reminders update <id> --due 2026-10-15 --notes ""          # only what you name changes; "" clears
     iris reminders complete <id>                                    # --undo opens it again; a repeat once more changes nothing

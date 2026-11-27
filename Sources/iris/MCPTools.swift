@@ -235,7 +235,7 @@ let tools: [Tool] = [
          command: ["reminders", "lists"], scope: .lists, parameters: []),
 
     Tool(name: "reminders",
-         description: "List Apple Reminders, open ones by default: id, title, list, listId, notes, due, priority (none, high, medium, low), completed, completedAt, created, modified, recurring; every key always there, null when empty. due is null or {date, time, timeZone, at}: date and time as kept in the reminder; time, timeZone and at null for a date-only due; timeZone null for a floating time, whose at is that clock time on this Mac. Dated reminders first by day (date only before timed), then by at; then undated, newest created first. Subtasks, tags, flags and sections are not visible; a subtask reads as an ordinary reminder.",
+         description: "List Apple Reminders, open ones by default: id, title, list, listId, notes, due, priority (none, high, medium, low), completed, completedAt, created, modified, recurring, alarms; every key always there, null when empty. due is null or {date, time, timeZone, at}: date and time as kept in the reminder; time, timeZone and at null for a date-only due; timeZone null for a floating time, whose at is that clock time on this Mac. alarms: [] or one entry per timed alarm, whole minutes before due.at; negative is after it; an alarm at a set time is left out when at is null. Dated reminders first by day (date only before timed), then by at; then undated, newest created first. Subtasks, tags, flags and sections are not visible; a subtask reads as an ordinary reminder.",
          command: ["reminders", "list"], scope: .lists, parameters: [
         Parameter(name: "lists", kind: .strings, description: "List ids or titles, from reminder_lists. A name that matches nothing is an error. Default: every list.", flag: "list"),
         Parameter(name: "status", kind: .string, description: "open (not completed), completed or all. Default: open.", choices: ["open", "completed", "all"]),
@@ -244,7 +244,7 @@ let tools: [Tool] = [
     ]),
 
     Tool(name: "add_reminder",
-         description: "Create a reminder. Returns it as reminders lists it. No alarm is set. With repeat it repeats, recurring true, and is completed one occurrence at a time: its first occurrence is due itself, also off the days of on, and counts toward count; monthly from the 29th to 31st and yearly from 29 February fall on the last day of a shorter month; with count 1, or until on the due day, completing that one occurrence completes the reminder.",
+         description: "Create a reminder. Returns it as reminders lists it. A reminder with a time but no alarm does not notify: alarms [0] notifies at the due time. With repeat it repeats, recurring true, and is completed one occurrence at a time: its first occurrence is due itself, also off the days of on, and counts toward count; monthly from the 29th to 31st and yearly from 29 February fall on the last day of a shorter month; with count 1, or until on the due day, completing that one occurrence completes the reminder.",
          command: ["reminders", "add"], scope: .lists, parameters: [
         Parameter(name: "list", kind: .string, description: "List id or title, from reminder_lists. Must name one writable list.", required: true),
         Parameter(name: "title", kind: .string, description: "Title, not empty.", required: true),
@@ -256,6 +256,7 @@ let tools: [Tool] = [
         Parameter(name: "on", kind: .string, description: "With repeat weekly: comma-separated days from su,mo,tu,we,th,fr,sa. Default: the weekday of due."),
         Parameter(name: "until", kind: .string, description: "With repeat: no occurrence is due after this (a date, a date and time, or ISO 8601 with an offset or Z; a bare date includes that whole day; a date-only occurrence counts as due at the start of its day). Not before due. Not with count. Default: no end."),
         Parameter(name: "count", kind: .integer, description: "With repeat: stop after this many occurrences, the first included. Not with until. Default: no limit."),
+        Parameter(name: "alarms", kind: .integers, description: "Minutes before the due time, one entry per alarm; 0 is at the due time. Needs a due with a time; not with repeat. Default: no alarms, and no notification.", flag: "alarm"),
     ]),
 
     Tool(name: "update_reminder",

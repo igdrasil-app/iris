@@ -264,7 +264,7 @@ final class ReminderWriteTests: XCTestCase {
     private func reminder(_ id: String, due: String?) -> Reminder {
         Reminder(id: id, title: "t", list: "l", listId: "L", notes: nil,
                  due: due.flatMap { reminderDue(try? dueComponents($0, mac: mac), mac: mac) }, priority: "none",
-                 completed: true, completedAt: nil, created: nil, modified: nil, recurring: false)
+                 completed: true, completedAt: nil, created: nil, modified: nil, recurring: false, alarms: [])
     }
 
     func testTheOccurrenceCompletedIsTheOneNewCompletedReminder() {
@@ -298,13 +298,13 @@ final class ReminderWriteTests: XCTestCase {
         }
         let plain = try keys(CompletedReminder(reminder: reminder("a", due: nil), completedOccurrence: nil))
         XCTAssertEqual(Set(plain.keys), ["id", "title", "list", "listId", "notes", "due", "priority", "completed",
-                                         "completedAt", "created", "modified", "recurring", "completedOccurrence"])
+                                         "completedAt", "created", "modified", "recurring", "alarms", "completedOccurrence"])
         XCTAssertTrue(plain["completedOccurrence"] is NSNull)
         let done = try keys(CompletedReminder(reminder: reminder("a", due: nil), completedOccurrence: reminder("b", due: nil)))
         let nested = try XCTUnwrap(done["completedOccurrence"] as? [String: Any])
         XCTAssertEqual(nested["id"] as? String, "b")
         XCTAssertEqual(Set(nested.keys), Set(plain.keys).subtracting(["completedOccurrence"]))
-        XCTAssertEqual(done.count, 13)
+        XCTAssertEqual(done.count, 14)
     }
 
     func testTitle() {

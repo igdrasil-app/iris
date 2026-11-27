@@ -396,11 +396,21 @@ func emailAddress(_ url: URL?) -> String? {
 func alarmMinutes(_ alarms: [EKAlarm], start: Date) -> [Int] {
     alarms
         .filter { $0.proximity == .none }
-        .compactMap { alarm in
-            let secondsBefore = alarm.absoluteDate.map { start.timeIntervalSince($0) } ?? -alarm.relativeOffset
-            return Int(exactly: (secondsBefore / 60).rounded())
-        }
+        .compactMap { minutesBefore($0, start: start) }
         .sorted(by: >)
+}
+
+/// One alarm in whole minutes before `start`, seconds rounded to the nearest minute; nil when its time is not
+/// a number, or when it is at a set time and there is no `start` to count from.
+func minutesBefore(_ alarm: EKAlarm, start: Date?) -> Int? {
+    let secondsBefore: Double
+    if let absoluteDate = alarm.absoluteDate {
+        guard let start else { return nil }
+        secondsBefore = start.timeIntervalSince(absoluteDate)
+    } else {
+        secondsBefore = -alarm.relativeOffset
+    }
+    return Int(exactly: (secondsBefore / 60).rounded())
 }
 
 struct IrisError: Error, CustomStringConvertible {

@@ -65,7 +65,12 @@ struct ReminderList: AsyncParsableCommand {
             list: the list's title. listId: its id, from `iris reminders lists`. notes: null when there are \
             none. due: below. priority: none, high, medium or low (Reminders keeps 0 to 9: 0 is none, 1 to 4 \
             high, 5 medium, 6 to 9 low). completed: true or false. completedAt, created, modified: ISO 8601 in \
-            this Mac's zone, or null. recurring: the reminder repeats.
+            this Mac's zone, or null. recurring: the reminder repeats. alarms: always there; one entry per \
+            timed alarm, in whole minutes before due.at as `iris reminders add --alarm` takes them, in the \
+            order Reminders keeps them; negative is after it. An alarm at a set time is counted from due.at, \
+            and seconds round to the nearest minute; when due.at is null (no due, date only, or a date that \
+            is no moment) such an alarm cannot be counted and is left out. An alarm on arriving at or leaving \
+            a place is left out too, so [] is no timed alarm that can be counted.
 
             due is null when the reminder has no due date. Otherwise it is {date, time, timeZone, at}, always \
             those four keys. date (YYYY-MM-DD) and time (HH:MM, or HH:MM:SS when the seconds are not zero) are \
@@ -99,7 +104,7 @@ struct ReminderList: AsyncParsableCommand {
 
             Not visible here: subtasks, tags, flags and sections. A subtask reads as an ordinary reminder. A \
             completed occurrence of a repeating reminder reads as a separate completed reminder with recurring \
-            false. Alarms, URL, location, start date and how a reminder repeats are not shown. `iris reminders \
+            false. URL, location, start date and how a reminder repeats are not shown. `iris reminders \
             add`, `update`, `complete` and `delete` add, change, complete and delete one.
             """
     )
@@ -170,9 +175,10 @@ struct Reminder: Encodable {
     let created: Date?
     let modified: Date?
     let recurring: Bool
+    let alarms: [Int]
 
     enum CodingKeys: CodingKey {
-        case id, title, list, listId, notes, due, priority, completed, completedAt, created, modified, recurring
+        case id, title, list, listId, notes, due, priority, completed, completedAt, created, modified, recurring, alarms
     }
 
     // Written out so a missing value reads null instead of dropping the key.
@@ -190,19 +196,31 @@ struct Reminder: Encodable {
         try container.encode(created.map(reminderISO), forKey: .created)
         try container.encode(modified.map(reminderISO), forKey: .modified)
         try container.encode(recurring, forKey: .recurring)
+        try container.encode(alarms, forKey: .alarms)
     }
 }
 
 extension Reminder {
     init(_ reminder: EKReminder, mac: Calendar) {
+        let due = reminderDue(reminder.dueDateComponents, mac: mac)
         self.init(id: reminder.calendarItemIdentifier, title: reminder.title ?? "",
                   list: reminder.calendar?.title ?? "", listId: reminder.calendar?.calendarIdentifier ?? "",
                   notes: reminder.notes.flatMap { $0.isEmpty ? nil : $0 },
-                  due: reminderDue(reminder.dueDateComponents, mac: mac), priority: priorityWord(reminder.priority),
+                  due: due, priority: priorityWord(reminder.priority),
                   completed: reminder.isCompleted, completedAt: reminder.completionDate,
                   created: reminder.creationDate, modified: reminder.lastModifiedDate,
-                  recurring: reminder.hasRecurrenceRules)
+                  recurring: reminder.hasRecurrenceRules,
+                  alarms: reminderAlarmMinutes(reminder.alarms ?? [], due: due?.at))
     }
+}
+
+/// A reminder's timed alarms in whole minutes before its due moment, in the order Reminders keeps them. An
+/// alarm at a set time needs that moment to count from, so without one (no due, date only, or a date that is
+/// no moment) it is left out; so is an alarm on arriving at or leaving a place.
+func reminderAlarmMinutes(_ alarms: [EKAlarm], due: Date?) -> [Int] {
+    alarms
+        .filter { $0.structuredLocation == nil && $0.proximity == .none }
+        .compactMap { minutesBefore($0, start: due) }
 }
 
 /// When a reminder is due. date and time are as kept in the reminder; at is the moment, nil for date only.
