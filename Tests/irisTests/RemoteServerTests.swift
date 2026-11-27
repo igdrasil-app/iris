@@ -109,6 +109,39 @@ final class RemoteServerTests: XCTestCase {
         wait(10) { next.status.pid == nil }
     }
 
+    /// The server's activity lines, asked for by the environment, are kept in memory and never logged; the request log
+    /// gets every other byte. Activity outlives a restart and is cleared when the switch is turned off.
+    @MainActor
+    func testActivity() throws {
+        let serving = try script(#"""
+            echo '{"port": 1}'
+            [ "$IRIS_REPORT_ACTIVITY" = 1 ] || exec sleep 600
+            now=$(date +%Y-%m-%dT%H:%M:%S%z)
+            printf '@activity %s Hark\n2026-11-26T10:00:00+01:00 POST initialize - 200 0.001s\n@activ' "$now" >&2
+            sleep 0.2
+            printf 'ity %s\n' "$now" >&2
+            exec sleep 600
+            """#)
+        var actives = 0
+        let switched = RemoteServer(executable: serving, log: folder + "/logs/http.log", defaults: defaults,
+                                    tokenFile: folder + "/state/token", scopeFile: folder + "/state/scope",
+                                    stateDir: folder + "/state", listeners: { [] }, active: { actives += 1 }) { _ in }
+        switched.turn(on: true)
+        wait(10) { actives >= 2 }
+        XCTAssertEqual(actives, 2)
+        XCTAssertEqual(switched.activity.named.map(\.name), ["Hark"])
+        XCTAssertNil(switched.activity.unnamed)  // Hark's, by the 5-minute rule
+        XCTAssertEqual(try String(contentsOfFile: folder + "/logs/http.log"), "2026-11-26T10:00:00+01:00 POST initialize - 200 0.001s\n")
+        let first = switched.status.pid
+        switched.restart()
+        wait(20) { switched.status.phase == .on(port: defaultHTTPPort) && switched.status.pid != first }
+        XCTAssertEqual(switched.activity.named.map(\.name), ["Hark"])
+        switched.turn(on: false)
+        XCTAssertNil(switched.activity.lastUsed)
+        wait(10) { switched.status.pid == nil }
+        XCTAssertNil(switched.activity.lastUsed)
+    }
+
     @MainActor
     func testFilesAreNeverReplaced() throws {
         try FileManager.default.createDirectory(atPath: folder + "/state", withIntermediateDirectories: true,

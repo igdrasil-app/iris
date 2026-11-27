@@ -70,7 +70,10 @@ final class RemoteServer {
     private let lookup: (pid_t) -> (started: Double, parent: pid_t)?
     private let timing: RemoteServerTiming
     private let changed: (RemoteServerStatus) -> Void
+    private let active: () -> Void
 
+    /// Who has used the switch's server since it was turned on, across its restarts; in memory only.
+    private(set) var activity = RemoteActivity()
     private(set) var status = RemoteServerStatus() {
         didSet { if status != oldValue { changed(status) } }
     }
@@ -85,7 +88,8 @@ final class RemoteServer {
     init(executable: String, log: String = defaultHTTPLog, defaults: UserDefaults, tokenFile: String? = nil,
          scopeFile: String? = nil, stateDir: String? = nil, listeners: @escaping () throws -> [Listener] = runningListeners,
          lookup: @escaping (pid_t) -> (started: Double, parent: pid_t)? = processStart,
-         timing: RemoteServerTiming = RemoteServerTiming(), changed: @escaping (RemoteServerStatus) -> Void) {
+         timing: RemoteServerTiming = RemoteServerTiming(), active: @escaping () -> Void = {},
+         changed: @escaping (RemoteServerStatus) -> Void) {
         self.executable = executable
         self.log = (log as NSString).expandingTildeInPath
         self.defaults = defaults
@@ -96,6 +100,7 @@ final class RemoteServer {
         self.lookup = lookup
         self.timing = timing
         self.changed = changed
+        self.active = active
     }
 
     var isOn: Bool { defaults.bool(forKey: RemoteAccessKey.on) }
@@ -113,6 +118,7 @@ final class RemoteServer {
 
     func turn(on: Bool) {
         defaults.set(on, forKey: RemoteAccessKey.on)
+        if !on { activity = RemoteActivity() }
         next?.cancel()
         next = nil
         crashes = 0
@@ -250,6 +256,7 @@ final class RemoteServer {
         process.currentDirectoryURL = URL(fileURLWithPath: "/")
         var environment = ProcessInfo.processInfo.environment
         environment["IRIS_MENU_BAR"] = nil
+        environment[reportActivityVariable] = "1"
         process.environment = environment
         process.standardInput = FileHandle.nullDevice
         let output = Pipe()
@@ -292,21 +299,41 @@ final class RemoteServer {
                 }
             }
         }
-        DispatchQueue.global().async(group: child.done) { [log] in
+        DispatchQueue.global().async(group: child.done) { [log, weak self] in
             // Opened here, off the main thread. Without it the server runs all the same, its request log lost.
             let logFile = try? openLog(log)
             defer { try? logFile?.close() }
             let handle = errors.fileHandleForReading
+            var splitter = ActivitySplitter()
             while true {
                 let chunk = handle.availableData
                 if chunk.isEmpty { break }
-                try? logFile?.write(contentsOf: chunk)
-                child.keepIfEarly(chunk)
+                let (log, lines) = splitter.split(chunk)
+                if !log.isEmpty {
+                    try? logFile?.write(contentsOf: log)
+                    child.keepIfEarly(log)
+                }
+                let reports = lines.compactMap(parseActivityLine)
+                if !reports.isEmpty {
+                    DispatchQueue.main.async { MainActor.assumeIsolated { self?.record(reports) } }
+                }
+            }
+            let rest = splitter.finish()
+            if !rest.isEmpty {
+                try? logFile?.write(contentsOf: rest)
+                child.keepIfEarly(rest)
             }
         }
         child.done.notify(queue: .main) { [weak self] in
             MainActor.assumeIsolated { self?.exited(child) }
         }
+    }
+
+    /// Lines from a server still answering after the switch was turned off are not kept.
+    private func record(_ reports: [ActivityReport]) {
+        guard isOn else { return }
+        reports.forEach { activity.record($0) }
+        active()
     }
 
     /// Its pid and start time, looked up while it is this process's child; nil when the lookup fails.

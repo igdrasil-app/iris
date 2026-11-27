@@ -99,7 +99,8 @@ func serveHTTP(port: Int, tokenFile: String, scopeFile: String, stateDir: String
     }
 
     let server = HTTPServer(token: token, offering: offering, writes: writes,
-                            note: writes == nil ? readOnlyNote(offering) : writableNote(offering, scope))
+                            note: writes == nil ? readOnlyNote(offering) : writableNote(offering, scope),
+                            reportsActivity: ProcessInfo.processInfo.environment[reportActivityVariable] == "1")
     // Requests arrive as soon as the listener is up; a write waits until the count is read back. The turn
     // is always given back: a semaphore freed while taken stops the process.
     writes?.turn.wait()
@@ -189,15 +190,17 @@ private final class HTTPServer {
     let offering: [Tool]
     let writes: WriteGuard?              // nil when writes are off
     let note: String                     // appended to the instructions
+    let reportsActivity: Bool            // started by the menu app, which reads the activity lines
     private let queue = DispatchQueue(label: "iris.http")
     private var open = 0                 // connections, counted on `queue`
     private let slots = DispatchSemaphore(value: maxToolCalls)
 
-    init(token: String, offering: [Tool], writes: WriteGuard?, note: String) {
+    init(token: String, offering: [Tool], writes: WriteGuard?, note: String, reportsActivity: Bool) {
         self.token = token
         self.offering = offering
         self.writes = writes
         self.note = note
+        self.reportsActivity = reportsActivity
     }
 
     /// Listening on 127.0.0.1 and nothing else, or an error that names the port. If the listener dies later,
@@ -341,6 +344,10 @@ private final class HTTPServer {
         let modern = (params["_meta"] as? [String: Any])?[versionKey] != nil
         if let problem = headerProblem(head, method, params, modern: modern) {
             return failure(400, id: id, modern ? -32020 : -32600, problem)
+        }
+        // A request made with the token, as it arrives; the name the client gives is for the menu only, never the log.
+        if reportsActivity, let method {
+            writeError(activityLine(ActivityReport(time: Date(), name: clientLabel(method: method, params: params))))
         }
         // respond reads the same text the same way, so this is the tool it will call.
         guard method == "tools/call", let writes, let name = params["name"] as? String,

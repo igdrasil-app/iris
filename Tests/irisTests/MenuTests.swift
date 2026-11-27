@@ -51,7 +51,7 @@ final class MenuTests: XCTestCase {
     }
 
     func testOneServer() {
-        XCTAssertEqual(shown(.known(state(listeners: [(8788, .current)])), nil, mine), ["Remote access on"] + usual)
+        XCTAssertEqual(shown(.known(state(listeners: [(8788, .current)])), nil, mine), ["On · no activity yet"] + usual)
         XCTAssertEqual(shown(.known(state(listeners: [(8788, .changed)])), nil, mine),
                        ["Remote access on · restart to apply changes"] + usual)
         // A name that matches nothing: the access stands.
@@ -64,12 +64,12 @@ final class MenuTests: XCTestCase {
                        ["Remote access on · settings have a problem"] + blank)
         // Not checked, since checking would ask for a permission: no problem known.
         XCTAssertEqual(shown(.known(state(usable: nil, calendar: AppAccess(access: "read", items: .unknown), listeners: [(8788, .current)])), nil, mine),
-                       ["Remote access on", "Calendar: Read Only", "Reminders: Off", "Notes: Read Only"])
+                       ["On · no activity yet", "Calendar: Read Only", "Reminders: Off", "Notes: Read Only"])
         // The last check has not seen the server yet, or not since it started again: the switch's server is on.
-        XCTAssertEqual(shown(.known(state(listeners: [])), nil, mine), ["Remote access on"] + usual)
-        XCTAssertEqual(shown(.checking, nil, mine), ["Remote access on"] + blank)
+        XCTAssertEqual(shown(.known(state(listeners: [])), nil, mine), ["On · no activity yet"] + usual)
+        XCTAssertEqual(shown(.checking, nil, mine), ["On · no activity yet"] + blank)
         let again = RemoteServerStatus(phase: .on(port: 8788), pid: 101, ours: [id(100), id(101)])
-        XCTAssertEqual(shown(.known(state(listeners: [(8788, .changed)])), nil, again), ["Remote access on"] + usual)
+        XCTAssertEqual(shown(.known(state(listeners: [(8788, .changed)])), nil, again), ["On · no activity yet"] + usual)
     }
 
     func testOutside() {
@@ -138,7 +138,7 @@ final class MenuTests: XCTestCase {
         for remote in [RemoteAnswer.checking, none] {
             XCTAssertEqual(header(remote, RemoteServerStatus(phase: .starting, pid: 100, ours: [id(100)])), ["Starting…", "on", "-"])
             XCTAssertEqual(header(remote, RemoteServerStatus(phase: .failed(reason))), ["Couldn't start", "on", reason])
-            XCTAssertEqual(header(remote, RemoteServerStatus(phase: .on(port: 8765), pid: 100, ours: [id(100)])), ["Remote access on", "on", "-"])
+            XCTAssertEqual(header(remote, RemoteServerStatus(phase: .on(port: 8765), pid: 100, ours: [id(100)])), ["On · no activity yet", "on", "-"])
         }
         // Not started by this Iris: on, and it cannot be turned off here, whether the choice is off or on.
         XCTAssertEqual(header(foreign, RemoteServerStatus()), ["On · run outside Iris", "on -", "-"])
@@ -213,7 +213,7 @@ final class MenuTests: XCTestCase {
         }
         // Each app's problem shows on its own row only.
         let none = Permissions(calendar: .denied, reminders: .denied, notes: "denied")
-        XCTAssertEqual(shown(on, none, mine), ["Remote access on", "Calendar: Needs Access !", "Reminders: Needs Access !",
+        XCTAssertEqual(shown(on, none, mine), ["On · no activity yet", "Calendar: Needs Access !", "Reminders: Needs Access !",
                                                "Notes: Needs Access !"])
     }
 
@@ -267,11 +267,11 @@ final class MenuTests: XCTestCase {
         let states: [(RemoteAnswer, Permissions, RemoteServerStatus, [String])] = [
             (.checking, fine, off, ["(Iris / Checking…)", "Calendar >", "Reminders >", "Notes >"]),
             (.known(state(listeners: [(8788, .current)])), fine, mine,
-             ["(Iris / Remote access on)", "Calendar [Read & Write] >", "Reminders [Off] >", "Notes [Read Only] >"]),
+             ["(Iris / On · no activity yet)", "Calendar [Read & Write] >", "Reminders [Off] >", "Notes [Read Only] >"]),
             (.known(state(listeners: [])), fine, off,
              ["(Iris / Remote access off)", "Calendar [Read & Write] >", "Reminders [Off] >", "Notes [Read Only] >"]),
             (.known(state(listeners: [(8788, .current)])), Permissions(calendar: .denied, reminders: .fullAccess, notes: "granted"), mine,
-             ["(Iris / Remote access on)", "Calendar [Needs Access]", "Reminders [Off] >", "Notes [Read Only] >"]),
+             ["(Iris / On · no activity yet)", "Calendar [Needs Access]", "Reminders [Off] >", "Notes [Read Only] >"]),
             (.unknown, fine, off, ["(Iris / Remote access unknown)", "Calendar >", "Reminders >", "Notes >"]),
             (.known(state(listeners: [])), fine, failed,
              ["(Iris / Couldn't start)", "Why It Couldn't Start…", "Calendar [Read & Write] >", "Reminders [Off] >",

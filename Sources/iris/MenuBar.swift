@@ -37,7 +37,12 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate, MenuAction
     private lazy var remoteCheck = BackgroundCheck(compute: { checkRemote() }) { [weak self] in self?.show(remote: $0) }
     // The switch's server: this binary, with the server's default paths.
     private lazy var server = RemoteServer(executable: executablePath() ?? Bundle.main.executablePath ?? "iris",
-                                           defaults: .standard) { [weak self] _ in self?.serverChanged() }
+                                           defaults: .standard, active: { [weak self] in self?.serverActive() }) {
+        [weak self] _ in self?.serverChanged()
+    }
+    // The icon's mark for a request just made, and the one timer that takes it away.
+    private var mark = ActivityMark()
+    private var markTimer: Timer?
     // What the rows' submenus show: the scope file as last read, and each app's items as last listed. Only shown: a
     // tick lists its app again before it is applied.
     private lazy var scopeChanges = ScopeChanges(path: (defaultScopeFile as NSString).expandingTildeInPath,
@@ -91,7 +96,7 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate, MenuAction
     }
 
     private func model() -> MenuModel {
-        menuModel(remote, permissions, server.status)
+        menuModel(remote, permissions, server.status, activity: server.activity, now: Date(), fits: headerLineFits)
     }
 
     private func showMenu() {
@@ -107,6 +112,32 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate, MenuAction
         guard let answer else { return }
         listed[kind] = answer
         showMenu()
+    }
+
+    /// A request was made: the header says who, and the icon shows its mark until the requests have stopped for a
+    /// few seconds. The image changes only when the mark comes and when it goes.
+    private func serverActive() {
+        let now = Date()
+        let wasShown = mark.shown(at: now)
+        mark.record(at: now)
+        if !wasShown { showStatus() }
+        showMenu()
+        guard markTimer == nil else { return }
+        scheduleMarkCheck()
+    }
+
+    private func scheduleMarkCheck() {
+        let timer = Timer(fireAt: mark.until ?? Date(), interval: 0, target: self, selector: #selector(checkMark),
+                          userInfo: nil, repeats: false)
+        RunLoop.main.add(timer, forMode: .common)
+        markTimer = timer
+    }
+
+    // A request since the timer was set moved the end: wait until then.
+    @objc private func checkMark() {
+        markTimer = nil
+        if mark.shown(at: Date()) { return scheduleMarkCheck() }
+        showStatus()
     }
 
     // While the menu is open, what the rows allow is worked out again for the server now running, or not; a
@@ -142,7 +173,7 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate, MenuAction
     }
 
     private func showStatus() {
-        item.button?.image = botGlyph(badge: status != .fullAccess || notes == "denied")
+        item.button?.image = botGlyph(badge: status != .fullAccess || notes == "denied", active: mark.shown(at: Date()))
         item.button?.toolTip = "Iris: Calendar \(describe(status)), Notes \(notes)"
     }
 
@@ -603,7 +634,8 @@ let remoteRetryNote = "Iris tries again every \(Int(RemoteServerTiming().retry))
 ///
 /// The switch is on while the switch's server runs, starts or cannot start, and while any other server runs; it
 /// cannot be turned off while only others run, since Iris does not stop what it did not start.
-func menuModel(_ remote: RemoteAnswer, _ permissions: Permissions, _ server: RemoteServerStatus = RemoteServerStatus()) -> MenuModel {
+func menuModel(_ remote: RemoteAnswer, _ permissions: Permissions, _ server: RemoteServerStatus = RemoteServerStatus(),
+               activity: RemoteActivity = RemoteActivity(), now: Date = Date(), fits: (String) -> Bool = { _ in true }) -> MenuModel {
     var allows: (AppAccess?) -> String? = { _ in nil }
     if case .known(let state) = remote {
         let listeners = state.listeners
@@ -630,7 +662,7 @@ func menuModel(_ remote: RemoteAnswer, _ permissions: Permissions, _ server: Rem
     // With no server of its own running, any other running is what the menu shows, a failure to start included.
     let outside = server.pid == nil && !otherServers(remote, server).isEmpty
     let failure: String? = if case .failed(let reason) = server.phase, !outside { reason } else { nil }
-    return MenuModel(status: remoteStatusLine(remote, server), rows: [
+    return MenuModel(status: remoteStatusLine(remote, server, activity: activity, now: now, fits: fits), rows: [
         row("Calendar", state?.calendar, problem: calendarFix),
         row("Reminders", state?.reminders, problem: remindersFix),
         row("Notes", state?.notes, problem: permissions.notes == "denied" ? .open(.automation) : nil),
@@ -671,8 +703,10 @@ private func accessWords(_ access: AppAccess) -> String {
 }
 
 /// One short line: on or off, how many servers when more than one, and the one thing most worth knowing. No port:
-/// the menu shows none.
-func remoteStatusLine(_ remote: RemoteAnswer, _ server: RemoteServerStatus) -> String {
+/// the menu shows none. For the switch's own server alone, with settings that need nothing, who has used it lately
+/// (`activityStatus`).
+func remoteStatusLine(_ remote: RemoteAnswer, _ server: RemoteServerStatus, activity: RemoteActivity = RemoteActivity(),
+                      now: Date = Date(), fits: (String) -> Bool = { _ in true }) -> String {
     let others = otherServers(remote, server)
     if server.pid == nil && !others.isEmpty {
         return "On · " + (others.count == 1 ? "run outside Iris" : "\(others.count) servers run outside Iris")
@@ -692,10 +726,11 @@ func remoteStatusLine(_ remote: RemoteAnswer, _ server: RemoteServerStatus) -> S
             } else { [] }
             return "On · \(others.count + 1) servers · \(others.count) run outside Iris" + settingsWarning(remote, all)
         }
-        guard case .known(let state) = remote, let mine = state.listeners.first(where: { $0.listener.pid == server.pid }) else {
-            return "Remote access on"
+        if case .known(let state) = remote, let mine = state.listeners.first(where: { $0.listener.pid == server.pid }) {
+            let warning = settingsWarning(remote, [mine.state])
+            if !warning.isEmpty { return "Remote access on" + warning }
         }
-        return "Remote access on" + settingsWarning(remote, [mine.state])
+        return activityStatus(activity, now: now, fits: fits)
     case .off, .outside:
         switch remote {
         case .checking: return "Checking…"
@@ -1055,6 +1090,19 @@ final class MenuHeader: NSView {
     required init?(coder: NSCoder) { fatalError("not from a nib") }
 }
 
+/// Whether the header's grey line fits without making the menu wider than `headerMenuWidth`: room for the line beside
+/// the switch, measured as the label measures it.
+@MainActor
+func headerLineFits(_ line: String) -> Bool {
+    let label = NSTextField(labelWithString: line)
+    label.font = .menuFont(ofSize: NSFont.smallSystemFontSize)
+    let room = headerMenuWidth - 2 * menuTitleInset() - 16 - MenuSwitch().intrinsicContentSize.width
+    return label.fittingSize.width <= room
+}
+
+/// The widest the header's line makes the menu with several names in it; past this they are counted.
+let headerMenuWidth: CGFloat = 320
+
 /// Where a menu item's title starts, so the header lines up with the rows. AppKit does not say; this takes the
 /// padding it gives a plain item without a state column as the same on both sides.
 @MainActor
@@ -1067,8 +1115,9 @@ private func menuTitleInset() -> CGFloat {
 }
 
 /// Drawn in the 24-point grid of Assets/mascot.svg and scaled to the menu bar's 18.
-/// A template image is alpha only, so the eyes and the gap around the dot are cut out.
-func botGlyph(badge: Bool) -> NSImage {
+/// A template image is alpha only, so the eyes and the gap around the dot are cut out. `active` lights the antenna's
+/// tip, a shape and not a colour, since a template image has none; the dot for a problem stays at the other corner.
+func botGlyph(badge: Bool, active: Bool = false) -> NSImage {
     let image = NSImage(size: NSSize(width: 18, height: 18), flipped: true) { _ in
         guard let context = NSGraphicsContext.current else { return false }
         let scale = NSAffineTransform()
@@ -1081,6 +1130,7 @@ func botGlyph(badge: Bool) -> NSImage {
         antenna.line(to: NSPoint(x: 12, y: 4))
         antenna.line(to: NSPoint(x: 8, y: 4))
         stroke(antenna)
+        if active { NSBezierPath(ovalIn: NSRect(x: 5.25, y: 1.25, width: 5.5, height: 5.5)).fill() }
         let head = NSBezierPath(roundedRect: NSRect(x: 4, y: 8, width: 16, height: 12), xRadius: 2, yRadius: 2)
         head.fill()
         stroke(head)
