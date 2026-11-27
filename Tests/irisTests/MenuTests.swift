@@ -469,44 +469,44 @@ final class MenuTests: XCTestCase {
         let listed = ShareSource.listed(calendars)
         let some = ScopeFileState.file(ScopeFile(calendars: ["Work", "c3"], folders: [], writes: true))
         XCTAssertEqual(lines(shareEntries(.calendars, some, listed)),
-                       ["  All Calendars", "---", "-- iCloud", "✓ Work", "  Family", "-- Other", "✓ Birthdays", "---",
+                       ["  All Calendars", "  No Calendars", "---", "-- iCloud", "✓ Work", "  Family", "-- Other", "✓ Birthdays", "---",
                         "✓ Allow Changes", "  Include Events With Other People"])
         // Each choice is the tick that turns it the other way.
         let actions = shareEntries(.calendars, some, listed).compactMap { entry -> ShareAction? in
             if case .choice(_, _, _, _, let action) = entry { action } else { nil }
         }
-        XCTAssertEqual(actions, [.tick(.all(.calendars, true)), .tick(.item(.calendars, "c1", false)), .tick(.item(.calendars, "c2", true)),
+        XCTAssertEqual(actions, [.tick(.all(.calendars, true)), .tick(.all(.calendars, false)), .tick(.item(.calendars, "c1", false)), .tick(.item(.calendars, "c2", true)),
                                  .tick(.item(.calendars, "c3", false)), .tick(.writes(false)), .tick(.sharedEvents(true))])
         // "all": every item ticked; one account: no section headers.
         let one = ShareSource.listed(Array(calendars.prefix(2)))
         XCTAssertEqual(lines(shareEntries(.calendars, .file(ScopeFile(calendars: nil, folders: nil)), one)),
-                       ["✓ All Calendars", "---", "✓ Work", "✓ Family", "---", "  Allow Changes", "(  Include Events With Other People)"])
+                       ["✓ All Calendars", "  No Calendars", "---", "✓ Work", "✓ Family", "---", "  Allow Changes", "(  Include Events With Other People)"])
         // Nothing shared, or no file yet: changes cannot be turned on.
         for state in [ScopeFileState.missing, .file(ScopeFile(calendars: [], folders: []))] {
             XCTAssertEqual(lines(shareEntries(.calendars, state, one)),
-                           ["  All Calendars", "---", "  Work", "  Family", "---", "(  Allow Changes)", "(  Include Events With Other People)"])
+                           ["  All Calendars", "✓ No Calendars", "---", "  Work", "  Family", "---", "(  Allow Changes)", "(  Include Events With Other People)"])
         }
         // An entry that names nothing now, ticked at the end, to be unticked.
         let missing = shareEntries(.calendars, .file(ScopeFile(calendars: ["Old", "c1"], folders: [])), one)
-        XCTAssertEqual(lines(missing), ["  All Calendars", "---", "✓ Work", "  Family", "---", "✓ Missing: Old", "---",
+        XCTAssertEqual(lines(missing), ["  All Calendars", "  No Calendars", "---", "✓ Work", "  Family", "---", "✓ Missing: Old", "---",
                                         "  Allow Changes", "(  Include Events With Other People)"])
         XCTAssertTrue(missing.contains(.choice("Missing: Old", on: true, .tick(.remove(.calendars, "Old")))))
         // Not listed yet, or not to be listed without asking.
         XCTAssertEqual(lines(shareEntries(.calendars, some, .loading)),
-                       ["  All Calendars", "---", "(Loading…)", "---", "✓ Allow Changes", "  Include Events With Other People"])
+                       ["  All Calendars", "  No Calendars", "---", "(Loading…)", "---", "✓ Allow Changes", "  Include Events With Other People"])
         let lists = ScopeFileState.file(ScopeFile(calendars: [], folders: [], lists: nil, reminderWrites: true))
         XCTAssertEqual(lines(shareEntries(.lists, lists, .ask(.askReminders))),
-                       ["✓ All Lists", "---", "  Allow Reminders Access…", "---", "✓ Allow Changes"])
+                       ["✓ All Lists", "  No Lists", "---", "  Allow Reminders Access…", "---", "✓ Allow Changes"])
         XCTAssertEqual(lines(shareEntries(.lists, .file(ScopeFile(calendars: [], folders: [])), .listed([]))),
-                       ["  All Lists", "---", "(  Allow Changes)"])
+                       ["  All Lists", "✓ No Lists", "---", "(  Allow Changes)"])
         // Notes: folders by level, and no changes.
         let folders = [ShareItem(id: "f1", name: "Recipes", group: "iCloud"), ShareItem(id: "f2", name: "Travel", group: "iCloud"),
                        ShareItem(id: "f3", name: "Paris", group: "iCloud", level: 1)]
         XCTAssertEqual(lines(shareEntries(.folders, .file(ScopeFile(calendars: [], folders: ["f3"])), .listed(folders))),
-                       ["  All Folders", "---", "  Recipes", "  Travel", "✓   Paris"])
+                       ["  All Folders", "  No Folders", "---", "  Recipes", "  Travel", "✓   Paris"])
         XCTAssertEqual(lines(shareEntries(.folders, .file(ScopeFile(calendars: [], folders: nil)), .openNotes)),
-                       ["✓ All Folders", "---", "  Open Notes to Choose Folders"])
-        XCTAssertEqual(lines(shareEntries(.folders, .missing, .ask(.askNotes))), ["  All Folders", "---", "  Allow Notes Access…"])
+                       ["✓ All Folders", "  No Folders", "---", "  Open Notes to Choose Folders"])
+        XCTAssertEqual(lines(shareEntries(.folders, .missing, .ask(.askNotes))), ["  All Folders", "✓ No Folders", "---", "  Allow Notes Access…"])
         // A file that cannot be read offers only its problem.
         for kind in [ScopeKind.calendars, .lists, .folders] {
             XCTAssertEqual(shareEntries(kind, .broken("not a JSON object"), listed),
@@ -538,22 +538,22 @@ final class MenuTests: XCTestCase {
         XCTAssertTrue(items.rows[0].submenu === items.shares[0])
         XCTAssertFalse(items.shares[0].autoenablesItems)
         XCTAssertTrue(items.shares[0].showsStateColumn)
-        XCTAssertEqual(described(items.shares[0]), ["  All Calendars", "---", "(  Loading…)", "---", "✓ Allow Changes", "  Include Events With Other People"])
-        XCTAssertEqual(described(items.shares[1]), ["  All Lists", "---", "(  Loading…)", "---", "(  Allow Changes)"])
-        XCTAssertEqual(described(items.shares[2]), ["  All Folders", "---", "  Open Notes to Choose Folders"])
+        XCTAssertEqual(described(items.shares[0]), ["  All Calendars", "  No Calendars", "---", "(  Loading…)", "---", "✓ Allow Changes", "  Include Events With Other People"])
+        XCTAssertEqual(described(items.shares[1]), ["  All Lists", "✓ No Lists", "---", "(  Loading…)", "---", "(  Allow Changes)"])
+        XCTAssertEqual(described(items.shares[2]), ["  All Folders", "✓ No Folders", "---", "  Open Notes to Choose Folders"])
 
         // The listing comes in: a new shape, filled again.
         items.show(shares: shares(shareEntries(.calendars, file, .listed(calendars))))
-        XCTAssertEqual(described(items.shares[0]), ["  All Calendars", "---", "-- iCloud", "✓ Work", "  Family", "-- Other", "  Birthdays",
+        XCTAssertEqual(described(items.shares[0]), ["  All Calendars", "  No Calendars", "---", "-- iCloud", "✓ Work", "  Family", "-- Other", "  Birthdays",
                                                     "---", "✓ Allow Changes", "  Include Events With Other People"])
         // A tick keeps the shape: the same items, changed in place.
         let before = items.shares[0].items
         items.show(shares: shares(shareEntries(.calendars, .file(ScopeFile(calendars: ["c1", "c2"], folders: [])), .listed(calendars))))
         XCTAssertTrue(zip(before, items.shares[0].items).allSatisfy { $0 === $1 })
-        XCTAssertEqual(described(items.shares[0]), ["  All Calendars", "---", "-- iCloud", "✓ Work", "✓ Family", "-- Other", "  Birthdays",
+        XCTAssertEqual(described(items.shares[0]), ["  All Calendars", "  No Calendars", "---", "-- iCloud", "✓ Work", "✓ Family", "-- Other", "  Birthdays",
                                                     "---", "  Allow Changes", "(  Include Events With Other People)"])
         // A click reaches the target with its tick.
-        let family = items.shares[0].items[4]
+        let family = items.shares[0].items[5]
         XCTAssertTrue(family.target === actions)
         _ = (family.target as? NSObject)?.perform(family.action, with: family)
         XCTAssertEqual(actions.shared, [.tick(.item(.calendars, "c2", false))])

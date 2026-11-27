@@ -234,28 +234,54 @@ func checkedApplying(_ tick: ScopeTick, to file: ScopeFile, items: [Named]) thro
 }
 
 /// Runs `body` holding an exclusive lock that every copy of Iris takes before it reads the scope file to change it,
-/// so two changes never overwrite each other. The lock is on the file's folder (its target's, when the path is a
-/// link), since each write replaces the file itself. Waits at most `wait` seconds for another copy to finish.
+/// so two changes never overwrite each other. The lock is on a file of its own beside the scope file (beside its
+/// target, when the path is a link), <name>.lock, made owner-only and never written or removed: not the scope file,
+/// which each write replaces, and not its folder, which a server with writes on holds locked as its state folder.
+/// Waits at most `wait` seconds for another copy to finish; never call it on the main thread.
 func withScopeLock<T>(_ path: String, wait: Double = 2, _ body: () throws -> T) throws -> T {
-    let directory = (URL(fileURLWithPath: path).resolvingSymlinksInPath().path as NSString).deletingLastPathComponent
+    let target = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+    let directory = (target as NSString).deletingLastPathComponent
     do {
         try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true,
                                                 attributes: [.posixPermissions: 0o700])
     } catch {
         throw IrisError("cannot create \(directory): \(error.localizedDescription)")
     }
-    let folder = open(directory, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
-    guard folder >= 0 else { throw IrisError("cannot open \(directory): \(String(cString: strerror(errno)))") }
-    // Closing the folder releases the lock.
-    defer { close(folder) }
+    let lockPath = target + ".lock"
+    let lock = open(lockPath, O_RDONLY | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0o600)
+    guard lock >= 0 else { throw IrisError("cannot open \(lockPath): \(String(cString: strerror(errno)))") }
+    // Closing it releases the lock.
+    defer { close(lock) }
+    var info = stat()
+    guard fstat(lock, &info) == 0, info.st_mode & S_IFMT == S_IFREG, info.st_uid == getuid() else {
+        throw IrisError("\(lockPath) must be a file of yours")
+    }
     let deadline = Date().addingTimeInterval(wait)
-    while flock(folder, LOCK_EX | LOCK_NB) != 0 {
+    while flock(lock, LOCK_EX | LOCK_NB) != 0 {
         guard errno == EWOULDBLOCK, Date() < deadline else {
             throw IrisError("Another copy of Iris is changing what is shared; try again.")
         }
         usleep(10_000)
     }
     return try body()
+}
+
+/// One tick to the scope file at `path`, under the lock: the file after it, and whether it was written. A missing
+/// file starts from one that shares nothing; a file that cannot be read is never written over, and its problem is
+/// the error. `items` are the kind's items as listed just now.
+func changeScopeFile(_ path: String, _ tick: ScopeTick, items: [Named]) throws -> (file: ScopeFile, written: Bool) {
+    try withScopeLock(path) {
+        let current: ScopeFile
+        switch loadScopeFile(path) {
+        case .missing: current = ScopeFile(calendars: [], folders: [])
+        case .file(let file): current = file
+        case .broken(let problem): throw IrisError(problem)
+        }
+        let changed = try checkedApplying(tick, to: current, items: items)
+        guard changed != current else { return (current, false) }
+        try writeScopeFile(changed, to: path)
+        return (changed, true)
+    }
 }
 
 /// The scope file at a path as the menu bar finds it.

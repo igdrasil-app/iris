@@ -426,7 +426,7 @@ final class ScopeTests: XCTestCase {
     private let named = [Named(id: "c1", name: "Work"), Named(id: "c2", name: "Family"), Named(id: "c3", name: "Birthdays")]
     private let lists = [Named(id: "l1", name: "Errands"), Named(id: "l2", name: "Groceries")]
 
-    func testTicks() {
+    func testTicks() throws {
         let none = ScopeFile(calendars: [], folders: [])
         func tick(_ tick: ScopeTick, _ file: ScopeFile) -> ScopeFile {
             applying(tick, to: file, items: tick.kind == .lists ? lists : named)
@@ -471,6 +471,22 @@ final class ScopeTests: XCTestCase {
         XCTAssertThrowsError(try checkedApplying(.item(.calendars, "c1", true), to: ScopeFile(calendars: [], folders: []), items: confusing))
         XCTAssertEqual(try checkedApplying(.item(.calendars, "c4", true), to: ScopeFile(calendars: ["c1"], folders: []), items: confusing),
                        ScopeFile(calendars: ["c1", "c4"], folders: []))
+        // Stuck: each shared id is another item's name, so every item tick is refused; None gets out in one click,
+        // never through "all", and then an item can be ticked.
+        let stuck = [Named(id: "a", name: "Work"), Named(id: "b", name: "Home"), Named(id: "c", name: "a"), Named(id: "d", name: "b")]
+        let both = ScopeFile(calendars: ["a", "b"], folders: [], writes: true)
+        for tick in [ScopeTick.item(.calendars, "a", false), .item(.calendars, "b", false), .item(.calendars, "c", true),
+                     .item(.calendars, "d", true)] {
+            XCTAssertThrowsError(try checkedApplying(tick, to: both, items: stuck), "\(tick)")
+        }
+        let cleared = try checkedApplying(.all(.calendars, false), to: both, items: stuck)
+        XCTAssertEqual(cleared, ScopeFile(calendars: [], folders: []))
+        let withC = try checkedApplying(.item(.calendars, "c", true), to: cleared, items: stuck)
+        XCTAssertEqual(withC, ScopeFile(calendars: ["c"], folders: []))
+        // An id another item is named after can be shared only beside that other item.
+        XCTAssertThrowsError(try checkedApplying(.item(.calendars, "a", true), to: cleared, items: stuck))
+        XCTAssertEqual(try checkedApplying(.item(.calendars, "a", true), to: withC, items: stuck),
+                       ScopeFile(calendars: ["c", "a"], folders: []))
         // An entry that was there already and names nothing does not stop another change.
         XCTAssertEqual(try checkedApplying(.item(.calendars, "c2", true), to: ScopeFile(calendars: ["Old"], folders: []), items: named),
                        ScopeFile(calendars: ["Old", "c2"], folders: []))
@@ -594,22 +610,19 @@ final class ScopeTests: XCTestCase {
         let broken = Data("{\"calendars\": [\"c1\"".utf8)
         try broken.write(to: URL(fileURLWithPath: path))
         guard case .broken = loadScopeFile(path) else { return XCTFail("a broken file reads as broken") }
-        let changes = ScopeChanges(path: path, listing: { _ in [] }) {}
-        XCTAssertThrowsError(try changes.apply(.all(.calendars, true), items: []))
+        XCTAssertThrowsError(try changeScopeFile(path, .all(.calendars, true), items: []))
         XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: path)), broken)
         let copy = try resetScopeFile(path, now: Date(timeIntervalSince1970: 0))
         XCTAssertTrue(copy.hasPrefix(path + ".broken-19"))
         XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: copy)), broken)
         XCTAssertEqual(loadScopeFile(path), .file(ScopeFile(calendars: [], folders: [])))
         XCTAssertEqual(mode(path), 0o600)
-        // Reset does nothing to a file that reads well, as one fixed by hand while its alert was open.
-        XCTAssertNil(try changes.reset())
         // A file the server would refuse for its mode is no scope file to write over either: a tick leaves it as it
         // is, mode and all, rather than fix it quietly.
         chmod(path, 0o644)
         guard case .broken = loadScopeFile(path) else { return XCTFail("a file others can read reads as broken") }
         let loose = try Data(contentsOf: URL(fileURLWithPath: path))
-        XCTAssertThrowsError(try changes.apply(.all(.calendars, true), items: []))
+        XCTAssertThrowsError(try changeScopeFile(path, .all(.calendars, true), items: []))
         XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: path)), loose)
         XCTAssertEqual(mode(path), 0o644)
 
@@ -617,9 +630,38 @@ final class ScopeTests: XCTestCase {
         chmod(path, 0o600)
         try FileManager.default.createDirectory(atPath: folder + "/links", withIntermediateDirectories: true)
         try FileManager.default.createSymbolicLink(atPath: folder + "/links/http-scope", withDestinationPath: path)
-        _ = try ScopeChanges(path: folder + "/links/http-scope", listing: { _ in [] }) {}.apply(.all(.folders, true), items: [])
+        _ = try changeScopeFile(folder + "/links/http-scope", .all(.folders, true), items: [])
         XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: folder + "/links/http-scope"), path)
         XCTAssertEqual(loadScopeFile(path), .file(ScopeFile(calendars: [], folders: nil)))
+        // The lock is a file of its own beside the target, owner-only and empty; nothing beside the link.
+        XCTAssertEqual(mode(path + ".lock"), 0o600)
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: path + ".lock")), Data())
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: folder + "/links"), ["http-scope"])
+    }
+
+    /// A server with writes on holds its state folder locked for its whole life, and by default that folder holds the
+    /// scope file: a tick goes through all the same, at once.
+    func testTickWhileTheFolderIsLocked() throws {
+        let folder = NSTemporaryDirectory() + "iris-held-" + UUID().uuidString
+        defer { try? FileManager.default.removeItem(atPath: folder) }
+        try FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        // As WriteGuard takes it.
+        let state = open(folder, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        defer { close(state) }
+        XCTAssertEqual(flock(state, LOCK_EX | LOCK_NB), 0)
+        let begun = Date()
+        let changed = try changeScopeFile(folder + "/http-scope", .writes(true),
+                                          items: []).file
+        XCTAssertEqual(changed, ScopeFile(calendars: [], folders: []))
+        XCTAssertEqual(try changeScopeFile(folder + "/http-scope", .all(.calendars, true), items: []).file,
+                       ScopeFile(calendars: nil, folders: []))
+        XCTAssertEqual(try changeScopeFile(folder + "/http-scope", .writes(true), items: []).file,
+                       ScopeFile(calendars: nil, folders: [], writes: true))
+        XCTAssertLessThan(Date().timeIntervalSince(begun), 0.5)
+        // And the server's own lock is still its own.
+        let other = open(folder, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        defer { close(other) }
+        XCTAssertNotEqual(flock(other, LOCK_EX | LOCK_NB), 0)
     }
 
     /// The lock is held for the whole change: a change while another holds it waits, and gives up when it is not let go.

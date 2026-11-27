@@ -20,7 +20,7 @@ func runMenuBar() -> Never {
 /// The menu bar icon: the mascot's bot head, with a dot while Iris lacks full Calendar access or Notes
 /// access is denied. Notes not determined is no dot: many people never use Notes with Iris.
 @MainActor
-final class MenuBar: NSObject, NSMenuDelegate, MenuActions {
+final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate, MenuActions {
     private let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     private let store = EKEventStore()
     // Checks the appcast in Info.plist once a day and offers the update; the CLI never starts it.
@@ -54,6 +54,7 @@ final class MenuBar: NSObject, NSMenuDelegate, MenuActions {
 
     override init() {
         super.init()
+        NSApplication.shared.delegate = self
         let menu = NSMenu()
         menu.delegate = self
         item.menu = menu
@@ -222,14 +223,28 @@ final class MenuBar: NSObject, NSMenuDelegate, MenuActions {
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         // Fixed by hand while the alert was open: nothing is reset.
-        do {
-            _ = try scopeChanges.reset()
-        } catch {
-            showProblem("Couldn't reset the settings file", "\(error)")
+        scopeChanges.reset { [weak self] result in
+            guard let self else { return }
+            if case .failure(let error) = result { showProblem("Couldn't reset the settings file", "\(error)") }
+            scopeFile = loadScopeFile(scopeChanges.path)
+            showMenu()
+            remoteCheck.start()
         }
-        scopeFile = loadScopeFile(scopeChanges.path)
-        showMenu()
-        remoteCheck.start()
+    }
+
+    /// Quit waits for the changes still waiting or being made, a few seconds at most; the file is then as the last
+    /// one finished left it, since each is written whole or not at all. The server stops after, at willTerminate.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard scopeChanges.isBusy else { return .terminateNow }
+        var replied = false
+        let reply = {
+            guard !replied else { return }
+            replied = true
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        scopeChanges.whenDrained(reply)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { reply() }
+        return .terminateLater
     }
 
     private func allowRemindersAccess() {
@@ -458,7 +473,8 @@ enum ShareEntry: Equatable {
     case loading
 }
 
-/// A row's submenu: All, then each item, ticked when shared, with an entry of the file that names nothing now ticked
+/// A row's submenu: All and None, a way to every item or to none in one click whatever else the file holds, then
+/// each item, ticked when shared, with an entry of the file that names nothing now ticked
 /// at the end, to be unticked; then, for Calendar and Reminders, whether changes are allowed. Changes need something
 /// shared, and events with other people need changes; each is enabled when it can be turned on, or is on. A file that
 /// cannot be read offers only its problem, never a tick that would write over it.
@@ -475,7 +491,14 @@ func shareEntries(_ kind: ScopeKind, _ state: ScopeFileState, _ source: ShareSou
     case .lists: "All Lists"
     case .folders: "All Folders"
     }
-    var menu: [ShareEntry] = [.choice(all, on: entries == nil, .tick(.all(kind, entries != nil))), .separator]
+    let none = switch kind {
+    case .calendars: "No Calendars"
+    case .lists: "No Lists"
+    case .folders: "No Folders"
+    }
+    // A pair to choose from, as the system's radio items: choosing the one ticked changes nothing.
+    var menu: [ShareEntry] = [.choice(all, on: entries == nil, .tick(.all(kind, true))),
+                              .choice(none, on: entries == [], .tick(.all(kind, false))), .separator]
     // One line between parts, also when a part is empty.
     func separate() { if menu.last != .separator { menu.append(.separator) } }
     switch source {
