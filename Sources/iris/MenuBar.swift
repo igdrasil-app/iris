@@ -923,6 +923,9 @@ final class MenuSwitch: NSControl {
     var state: NSControl.StateValue = .off {
         didSet {
             guard state != oldValue else { return }
+            // A state set while the knob moves wins over where it was going.
+            moving?.invalidate()
+            moving = nil
             knob = state == .on ? 1 : 0
             NSAccessibility.post(element: self, notification: .valueChanged)
         }
@@ -930,6 +933,19 @@ final class MenuSwitch: NSControl {
     // Where the knob is, 0 at the left and 1 at the right; between the two while it moves.
     private var knob: CGFloat = 0 { didSet { needsDisplay = true } }
     private var moving: Timer?
+
+    deinit { moving?.invalidate() }
+
+    // As NSSwitch: the first click into a window that is not key turns it.
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard window == nil else { return }
+        moving?.invalidate()
+        moving = nil
+        knob = state == .on ? 1 : 0
+    }
 
     override var isEnabled: Bool { didSet { needsDisplay = true } }
 
@@ -950,7 +966,13 @@ final class MenuSwitch: NSControl {
         let knobRect = NSRect(x: inset + knob * (bounds.width - 2 * inset - knobWidth), y: inset, width: knobWidth, height: knobHeight)
         NSGraphicsContext.saveGraphicsState()
         defer { NSGraphicsContext.restoreGraphicsState() }
-        if !isEnabled { NSGraphicsContext.current?.cgContext.setAlpha(0.5) }
+        // Disabled, the whole control at half opacity, not each fill on its own.
+        let context = NSGraphicsContext.current?.cgContext
+        if !isEnabled {
+            context?.setAlpha(0.5)
+            context?.beginTransparencyLayer(auxiliaryInfo: nil)
+        }
+        defer { if !isEnabled { context?.endTransparencyLayer() } }
         NSColor.quaternaryLabelColor.setFill()
         track.fill()
         // The accent colour fades in as the knob moves right.
