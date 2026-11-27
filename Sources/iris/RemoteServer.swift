@@ -119,6 +119,22 @@ final class RemoteServer {
         reconcile()
     }
 
+    /// Starts the switch's server again, so it reads the scope file as it is now: the one running or starting is
+    /// stopped and then started, and after a start that failed the next try is now. Nothing while the switch is
+    /// off, while another server runs, or while one is already stopping, as its next start reads the file then.
+    func restart() {
+        guard isOn, !quitting, leftover == nil else { return }
+        if let child {
+            guard !child.stopping else { return }
+            stop(child)
+            reconcile()
+        } else if case .failed = status.phase {
+            next?.cancel()
+            next = nil
+            reconcile()
+        }
+    }
+
     /// At quit: finishes stopping a leftover and stops the server, each within the grace period, then SIGKILL.
     /// The choice stays, and so does the record: a server not seen to exit is stopped at the next launch.
     func quit() {
@@ -384,6 +400,147 @@ final class RemoteServer {
                 self.reconcile()
             }
         }
+    }
+}
+
+/// The menu's ticks and resets, one at a time in the order made, none of it on the main thread but the answers. A
+/// tick that changes which items are shared first lists that app again and is applied against that answer, never an
+/// older one; a listing that fails or takes longer than `listingDeadline` changes nothing and says so, and an answer
+/// after that is ignored. Each change is made to the scope file as it is on disk then, under the lock every copy of
+/// Iris takes, and written at once. The switch's server is restarted once the changes have stopped for `quiet`
+/// seconds and none is waiting: so once, after the last of them has been written, and the server reads it.
+@MainActor
+final class ScopeChanges {
+    let path: String
+    private let quiet: Double
+    private let listingDeadline: Double
+    private let listing: @Sendable (ScopeKind) -> [Named]?
+    private let restart: () -> Void
+    private var pending: DispatchWorkItem?
+    private var queue: [Job] = []
+    private var busy = false
+    private var waiting: UUID?  // the listing whose answer is still taken
+    private var drained: [() -> Void] = []
+
+    private struct Job {
+        let listing: ScopeKind?  // listed first
+        let change: @Sendable ([Named]) throws -> (file: ScopeFile?, written: Bool)  // under the lock
+        let done: (Result<ScopeFile?, Error>) -> Void
+    }
+
+    /// `listing` lists one app's items now, nil when it cannot without asking for a permission or opening Notes.
+    init(path: String, quiet: Double = 0.5, listingDeadline: Double = 15,
+         listing: @escaping @Sendable (ScopeKind) -> [Named]?, restart: @escaping () -> Void) {
+        self.path = path
+        self.quiet = quiet
+        self.listingDeadline = listingDeadline
+        self.listing = listing
+        self.restart = restart
+    }
+
+    /// Whether a change is waiting or being made.
+    var isBusy: Bool { busy }
+
+    /// Queues the tick; `done` gets the file after it, or why nothing changed.
+    func submit(_ tick: ScopeTick, done: @escaping (Result<ScopeFile, Error>) -> Void) {
+        let path = self.path
+        enqueue(Job(listing: tick.needsListing ? tick.kind : nil,
+                    change: { items in
+                        let (file, written) = try changeScopeFile(path, tick, items: items)
+                        return (file, written)
+                    },
+                    done: { done($0.map { $0! }) }))
+    }
+
+    /// Queues a reset of a file that cannot be read: kept beside it, and one sharing nothing in its place. `done`
+    /// gets whether it was done; not when the file was fixed meanwhile.
+    func reset(done: @escaping (Result<Bool, Error>) -> Void) {
+        let path = self.path
+        enqueue(Job(listing: nil,
+                    change: { _ in
+                        try withScopeLock(path) {
+                            guard case .broken = loadScopeFile(path) else { return (nil, false) }
+                            _ = try resetScopeFile(path)
+                            return (ScopeFile(calendars: [], folders: []), true)
+                        }
+                    },
+                    done: { done($0.map { $0 != nil }) }))
+    }
+
+    /// Calls `then` once nothing is waiting or being made: now, or when the last change has answered.
+    func whenDrained(_ then: @escaping () -> Void) {
+        if busy { drained.append(then) } else { then() }
+    }
+
+    private func enqueue(_ job: Job) {
+        queue.append(job)
+        if !busy { next() }
+    }
+
+    private func next() {
+        guard !queue.isEmpty else {
+            busy = false
+            let calls = drained
+            drained = []
+            calls.forEach { $0() }
+            return
+        }
+        busy = true
+        let job = queue.removeFirst()
+        guard let kind = job.listing else { return run(job, items: []) }
+        let request = UUID()
+        waiting = request
+        Task.detached { [weak self, listing] in
+            let items = listing(kind)
+            await self?.listed(items, job, request)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + listingDeadline) { [weak self] in
+            MainActor.assumeIsolated { self?.listed(nil, job, request) }
+        }
+    }
+
+    /// The first of the answer and the deadline; the other finds the request taken and does nothing.
+    private func listed(_ items: [Named]?, _ job: Job, _ request: UUID) {
+        guard waiting == request else { return }
+        waiting = nil
+        guard let items else {
+            let things = switch job.listing {
+            case .lists: "reminder lists"
+            case .folders: "note folders"
+            default: "calendars"
+            }
+            job.done(.failure(IrisError("Iris could not read your \(things) just now, so nothing was changed.")))
+            return next()
+        }
+        run(job, items: items)
+    }
+
+    private func run(_ job: Job, items: [Named]) {
+        let change = job.change
+        Task.detached { [weak self] in
+            let result = Result { try change(items) }
+            await self?.ran(result, job)
+        }
+    }
+
+    private func ran(_ result: Result<(file: ScopeFile?, written: Bool), Error>, _ job: Job) {
+        if case .success(let outcome) = result, outcome.written { restartSoon() }
+        job.done(result.map(\.file))
+        next()
+    }
+
+    private func restartSoon() {
+        pending?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.pending = nil
+                // A change still to be written: the restart waits for it.
+                if self.busy { self.restartSoon() } else { self.restart() }
+            }
+        }
+        pending = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + quiet, execute: work)
     }
 }
 

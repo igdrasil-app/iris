@@ -206,6 +206,195 @@ final class RemoteServerTests: XCTestCase {
         switched.turn(on: false)
     }
 
+    /// A restart stops the server and starts another; after a failed start it tries at once; with the switch off, or
+    /// another server running, it does nothing.
+    @MainActor
+    func testRestart() throws {
+        let serving = try script(#"echo '{"port": 1}'; exec sleep 600"#)
+        var phases: [RemoteServerPhase] = []
+        let switched = server(serving, seen: { phases.append($0.phase) })
+        switched.restart()
+        XCTAssertEqual(switched.starts, 0)
+        switched.turn(on: true)
+        wait(10) { switched.status.phase == .on(port: defaultHTTPPort) }
+        let first = try XCTUnwrap(switched.status.pid)
+        phases = []
+        switched.restart()
+        switched.restart()
+        XCTAssertEqual(switched.status.phase, .starting)
+        wait(20) { switched.status.phase == .on(port: defaultHTTPPort) }
+        XCTAssertFalse(running(first))
+        XCTAssertNotEqual(switched.status.pid, first)
+        XCTAssertEqual(switched.starts, 2)
+        // Starting while the first stops and while the second starts, then on.
+        let changes = phases.reduce(into: [RemoteServerPhase]()) { if $0.last != $1 { $0.append($1) } }
+        XCTAssertEqual(changes, [.starting, .on(port: defaultHTTPPort)])
+        switched.turn(on: false)
+        wait(10) { switched.status.pid == nil }
+
+        let failing = try script(#"echo "Error: no" >&2; exit 1"#)
+        let failed = server(failing)
+        failed.turn(on: true)
+        wait(5) { failed.status.phase != .starting }
+        XCTAssertEqual(failed.starts, 1)
+        failed.restart()
+        XCTAssertEqual(failed.starts, 2)
+        failed.turn(on: false)
+
+        let outside = server(serving, listeners: [Listener(pid: 1, port: 8788, scopeFile: "/x/scope", started: Date())])
+        outside.turn(on: true)
+        outside.restart()
+        XCTAssertEqual(outside.status.phase, .outside([8788]))
+        XCTAssertEqual(outside.starts, 0)
+        outside.turn(on: false)
+    }
+
+    /// Quick ticks: each is in the file as it answers, and one restart follows the last. The restart waits for ticks
+    /// still being made, even when the quiet time has passed: a slow listing holds it off.
+    @MainActor
+    func testTicksRestartOnce() throws {
+        var restarts = 0
+        let items = (1...5).map { Named(id: "c\($0)", name: "Calendar \($0)") }
+        let changes = ScopeChanges(path: folder + "/state/scope", quiet: 0.3, listing: { _ in
+            usleep(40_000)
+            return items
+        }) { restarts += 1 }
+        var expected = ScopeFile(calendars: [], folders: [])
+        var answers: [ScopeFile] = []
+        var restartsSeen: [Int] = []
+        for index in 0..<20 {
+            let tick = ScopeTick.item(.calendars, "c\(index % 5 + 1)", index % 3 != 2)
+            expected = applying(tick, to: expected, items: items)
+            let wanted = expected
+            changes.submit(tick) { result in
+                answers.append((try? result.get()) ?? ScopeFile(calendars: ["failed"], folders: nil))
+                XCTAssertEqual(try? readScopeFile(self.folder + "/state/scope"), wanted)
+                restartsSeen.append(restarts)
+            }
+        }
+        // 20 listings of 40 ms: well past the quiet time before the last tick is written.
+        wait(10) { answers.count == 20 }
+        XCTAssertEqual(answers.last, expected)
+        XCTAssertEqual(restartsSeen, Array(repeating: 0, count: 20))
+        wait(2) { restarts > 0 }
+        wait(0.5) { false }
+        XCTAssertEqual(restarts, 1)
+        // A tick that changes nothing writes nothing and restarts nothing.
+        var same: ScopeFile?
+        changes.submit(.sharedEvents(true)) { same = try? $0.get() }
+        wait(2) { same != nil }
+        XCTAssertEqual(same, expected)
+        wait(0.6) { false }
+        XCTAssertEqual(restarts, 1)
+    }
+
+    /// A listing that never answers: after the deadline the tick fails with nothing changed, the queue moves on, and
+    /// the answer when it comes is not applied.
+    @MainActor
+    func testListingDeadline() throws {
+        let release = DispatchSemaphore(value: 0)
+        let items = [Named(id: "c1", name: "Work")]
+        let changes = ScopeChanges(path: folder + "/state/scope", listingDeadline: 0.5, listing: { _ in
+            release.wait()
+            return items
+        }) {}
+        var answers: [String] = []
+        changes.submit(.item(.calendars, "c1", true)) { result in
+            switch result {
+            case .success(let file): answers.append("\(file.calendars ?? [])")
+            case .failure(let error): answers.append("\(error)")
+            }
+        }
+        changes.submit(.writes(false)) { answers.append((try? $0.get()).map { "\($0.calendars ?? [])" } ?? "failed") }
+        changes.submit(.all(.lists, true)) { answers.append((try? $0.get()).map { "lists \($0.lists == nil ? "all" : "some")" } ?? "failed") }
+        wait(0.3) { false }
+        XCTAssertEqual(answers, [])
+        XCTAssertTrue(changes.isBusy)
+        wait(5) { answers.count == 3 }
+        XCTAssertEqual(answers, ["Iris could not read your calendars just now, so nothing was changed.", "[]", "lists all"])
+        // The late answer comes and changes nothing.
+        release.signal()
+        wait(0.5) { false }
+        XCTAssertEqual(answers.count, 3)
+        XCTAssertEqual(try readScopeFile(folder + "/state/scope"), ScopeFile(calendars: [], folders: [], lists: nil))
+        XCTAssertFalse(changes.isBusy)
+    }
+
+    /// What Quit waits for: called once every queued change has answered, at once when none is queued.
+    @MainActor
+    func testDrain() throws {
+        let items = [Named(id: "c1", name: "Work")]
+        let changes = ScopeChanges(path: folder + "/state/scope", listing: { _ in
+            usleep(200_000)
+            return items
+        }) {}
+        var drained = 0
+        changes.whenDrained { drained += 1 }
+        XCTAssertEqual(drained, 1)
+        var answered = 0
+        for tick in [ScopeTick.item(.calendars, "c1", true), .writes(true), .item(.calendars, "c1", false)] {
+            changes.submit(tick) { _ in answered += 1 }
+        }
+        changes.whenDrained { drained += 1 }
+        XCTAssertEqual(drained, 1)
+        wait(5) { drained == 2 }
+        XCTAssertEqual(answered, 3)
+        XCTAssertEqual(try readScopeFile(folder + "/state/scope"), ScopeFile(calendars: [], folders: []))
+
+        // Reset through the same queue: done when the file is broken, nothing when it reads well.
+        var resets: [Bool] = []
+        changes.reset { resets.append((try? $0.get()) ?? false) }
+        wait(5) { resets.count == 1 }
+        try Data("broken".utf8).write(to: URL(fileURLWithPath: folder + "/state/scope"))
+        changes.reset { resets.append((try? $0.get()) ?? false) }
+        wait(5) { resets.count == 2 }
+        XCTAssertEqual(resets, [false, true])
+        XCTAssertEqual(loadScopeFile(folder + "/state/scope"), .file(ScopeFile(calendars: [], folders: [])))
+    }
+
+    /// Ticks made while one waits for its listing queue behind it: each is applied in the order made, against the
+    /// listing made for it, and each answers, a failed listing with nothing changed.
+    @MainActor
+    func testTicksWaitForTheirListing() throws {
+        final class Listings: @unchecked Sendable {
+            let lock = NSLock()
+            var calls = 0
+        }
+        let listings = Listings()
+        let items = (1...3).map { Named(id: "c\($0)", name: "Calendar \($0)") }
+        let changes = ScopeChanges(path: folder + "/state/scope", listing: { _ in
+            let call = listings.lock.withLock {
+                listings.calls += 1
+                return listings.calls
+            }
+            usleep(UInt32(150_000 - 40_000 * min(call, 3)))
+            // The third listing fails, as Calendar not answering does.
+            return call == 3 ? nil : items
+        }) {}
+        let ticks: [ScopeTick] = [.item(.calendars, "c1", true), .writes(true), .item(.calendars, "c2", true),
+                                  .item(.calendars, "c3", true), .all(.folders, true), .item(.calendars, "c1", false),
+                                  .sharedEvents(true)]
+        var answers: [(Int, String)] = []
+        for (index, tick) in ticks.enumerated() {
+            changes.submit(tick) { result in
+                switch result {
+                case .success(let file): answers.append((index, "\(file.calendars ?? []) \(file.writes) \(file.sharedEvents)"))
+                case .failure(let error): answers.append((index, "\(error)"))
+                }
+            }
+        }
+        wait(10) { answers.count == ticks.count }
+        XCTAssertEqual(answers.map(\.0), Array(ticks.indices))
+        XCTAssertEqual(answers.map(\.1), [
+            #"["c1"] false false"#, #"["c1"] true false"#, #"["c1", "c2"] true false"#,
+            "Iris could not read your calendars just now, so nothing was changed.",
+            #"["c1", "c2"] true false"#, #"["c2"] true false"#, #"["c2"] true true"#,
+        ])
+        XCTAssertEqual(listings.lock.withLock { listings.calls }, 4)
+        XCTAssertEqual(try readScopeFile(folder + "/state/scope"),
+                       ScopeFile(calendars: ["c2"], folders: nil, writes: true, sharedEvents: true))
+    }
+
     @MainActor
     func testAnotherServerRuns() throws {
         let serving = try script(#"echo '{"port": 1}'; exec sleep 600"#)

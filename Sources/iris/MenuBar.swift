@@ -20,7 +20,7 @@ func runMenuBar() -> Never {
 /// The menu bar icon: the mascot's bot head, with a dot while Iris lacks full Calendar access or Notes
 /// access is denied. Notes not determined is no dot: many people never use Notes with Iris.
 @MainActor
-final class MenuBar: NSObject, NSMenuDelegate, MenuActions {
+final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate, MenuActions {
     private let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     private let store = EKEventStore()
     // Checks the appcast in Info.plist once a day and offers the update; the CLI never starts it.
@@ -34,14 +34,27 @@ final class MenuBar: NSObject, NSMenuDelegate, MenuActions {
     private var remote = RemoteAnswer.checking
     private var shown: MenuItems?
     private var menuOpen = false
-    private lazy var remoteCheck = RemoteCheck(compute: { checkRemote() }) { [weak self] in self?.show(remote: $0) }
+    private lazy var remoteCheck = BackgroundCheck(compute: { checkRemote() }) { [weak self] in self?.show(remote: $0) }
     // The switch's server: this binary, with the server's default paths.
     private lazy var server = RemoteServer(executable: executablePath() ?? Bundle.main.executablePath ?? "iris",
                                            defaults: .standard) { [weak self] _ in self?.serverChanged() }
+    // What the rows' submenus show: the scope file as last read, and each app's items as last listed. Only shown: a
+    // tick lists its app again before it is applied.
+    private lazy var scopeChanges = ScopeChanges(path: (defaultScopeFile as NSString).expandingTildeInPath,
+                                                 listing: { listShareItems($0)?.map { Named(id: $0.id, name: $0.name) } }) {
+        [weak self] in self?.server.restart()
+    }
+    private var scopeFile = ScopeFileState.missing
+    private var listed: [ScopeKind: [ShareItem]] = [:]
+    // One for each app, so a slow one (Notes) holds up only its own submenu.
+    private lazy var listings = [ScopeKind.calendars, .lists, .folders].map { kind in
+        BackgroundCheck(compute: { listShareItems(kind) }) { [weak self] in self?.show(listed: $0, kind) }
+    }
     private var timer: Timer?
 
     override init() {
         super.init()
+        NSApplication.shared.delegate = self
         let menu = NSMenu()
         menu.delegate = self
         item.menu = menu
@@ -64,23 +77,41 @@ final class MenuBar: NSObject, NSMenuDelegate, MenuActions {
 
     private func refresh() {
         probeNotes()
-        shown?.show(model())
+        showMenu()
         let now = EKEventStore.authorizationStatus(for: .event)
         guard now != status else { return }
         status = now
         showStatus()
     }
 
+    private var permissions: Permissions {
+        Permissions(calendar: EKEventStore.authorizationStatus(for: .event),
+                    reminders: EKEventStore.authorizationStatus(for: .reminder), notes: notes)
+    }
+
     private func model() -> MenuModel {
-        menuModel(remote, Permissions(calendar: EKEventStore.authorizationStatus(for: .event),
-                                      reminders: EKEventStore.authorizationStatus(for: .reminder), notes: notes),
-                  server.status)
+        menuModel(remote, permissions, server.status)
+    }
+
+    private func showMenu() {
+        shown?.show(model())
+        let permissions = self.permissions
+        shown?.show(shares: [ScopeKind.calendars, .lists, .folders].map { kind in
+            shareEntries(kind, scopeFile, shareSource(kind, permissions, listed[kind]))
+        })
+    }
+
+    // A listing that failed keeps the last one.
+    private func show(listed answer: [ShareItem]?, _ kind: ScopeKind) {
+        guard let answer else { return }
+        listed[kind] = answer
+        showMenu()
     }
 
     // While the menu is open, what the rows allow is worked out again for the server now running, or not; a
     // closed menu has it worked out when it opens.
     private func serverChanged() {
-        shown?.show(model())
+        showMenu()
         if menuOpen { remoteCheck.start() }
     }
 
@@ -100,13 +131,13 @@ final class MenuBar: NSObject, NSMenuDelegate, MenuActions {
         guard answer != notes else { return }
         notes = answer
         showStatus()
-        shown?.show(model())
+        showMenu()
     }
 
     // The menu may be open: its items change in place.
     private func show(remote answer: RemoteAnswer) {
         remote = answer
-        shown?.show(model())
+        showMenu()
     }
 
     private func showStatus() {
@@ -121,11 +152,13 @@ final class MenuBar: NSObject, NSMenuDelegate, MenuActions {
         case .requiresApproval: .mixed
         default: .off
         }
+        scopeFile = loadScopeFile(scopeChanges.path)
         let items = MenuItems(target: self)
         fill(menu, with: items, version: version, openAtLogin: login, target: self, updater: updater)
-        items.show(model())
         shown = items
+        showMenu()
         remoteCheck.start()
+        listings.forEach { $0.start() }
     }
 
     func menuWillOpen(_ menu: NSMenu) {
@@ -137,11 +170,94 @@ final class MenuBar: NSObject, NSMenuDelegate, MenuActions {
     }
 
     func chooseRow(_ sender: NSMenuItem) {
-        switch sender.representedObject as? RowAction {
+        if let action = sender.representedObject as? RowAction { perform(action) }
+    }
+
+    private func perform(_ action: RowAction) {
+        switch action {
         case .askCalendar: allowAccess()
         case .askNotes: allowNotesAccess()
+        case .askReminders: allowRemindersAccess()
         case .open(let pane): NSWorkspace.shared.open(pane.url)
+        }
+    }
+
+    func chooseShare(_ sender: NSMenuItem) {
+        switch sender.representedObject as? ShareAction {
+        case .tick(let tick): change(tick)
+        case .fixFile: offerReset()
+        case .ask(let action): perform(action)
+        case .openNotes:
+            NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: "/System/Applications/Notes.app"),
+                                               configuration: NSWorkspace.OpenConfiguration())
         case nil: break
+        }
+    }
+
+    /// Writes the tick to the scope file; the rows say what it allows once the check has read it again.
+    private func change(_ tick: ScopeTick) {
+        scopeChanges.submit(tick) { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success(let file):
+                scopeFile = .file(file)
+            case .failure(let error):
+                scopeFile = loadScopeFile(scopeChanges.path)
+                showProblem("Couldn't change what is shared", "\(error)")
+            }
+            showMenu()
+            remoteCheck.start()
+        }
+    }
+
+    /// The problem, and a choice: Reset, after keeping the file beside it, or leave it to be fixed by hand.
+    private func offerReset() {
+        guard case .broken(let problem) = scopeFile else { return }
+        NSApp.activate()
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Iris's settings file has a problem"
+        alert.informativeText = problem + "\n\nReset replaces it with settings that share nothing, and keeps the "
+            + "file as it is now beside it, with .broken and the date added to its name."
+        alert.addButton(withTitle: "Reset")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        // Fixed by hand while the alert was open: nothing is reset.
+        scopeChanges.reset { [weak self] result in
+            guard let self else { return }
+            if case .failure(let error) = result { showProblem("Couldn't reset the settings file", "\(error)") }
+            scopeFile = loadScopeFile(scopeChanges.path)
+            showMenu()
+            remoteCheck.start()
+        }
+    }
+
+    /// Quit waits for the changes still waiting or being made, a few seconds at most; the file is then as the last
+    /// one finished left it, since each is written whole or not at all. The server stops after, at willTerminate.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard scopeChanges.isBusy else { return .terminateNow }
+        var replied = false
+        let reply = {
+            guard !replied else { return }
+            replied = true
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        scopeChanges.whenDrained(reply)
+        // A timer in the common modes: it also fires while an alert about a failed tick is up.
+        let timeout = Timer(timeInterval: 5, repeats: false) { _ in MainActor.assumeIsolated { reply() } }
+        RunLoop.main.add(timeout, forMode: .common)
+        return .terminateLater
+    }
+
+    private func allowRemindersAccess() {
+        NSApp.activate()
+        Task {
+            do {
+                _ = try await store.requestFullAccessToReminders()
+            } catch {
+                showError(error)
+            }
+            refresh()
         }
     }
 
@@ -165,7 +281,7 @@ final class MenuBar: NSObject, NSMenuDelegate, MenuActions {
 
     func toggleRemoteAccess(_ sender: NSSwitch) {
         server.turn(on: sender.state == .on)
-        shown?.show(model())
+        showMenu()
     }
 
     func showRemoteFailure() {
@@ -201,6 +317,15 @@ final class MenuBar: NSObject, NSMenuDelegate, MenuActions {
         NSApp.activate()
         NSAlert(error: error).runModal()
     }
+
+    private func showProblem(_ title: String, _ text: String) {
+        NSApp.activate()
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = title
+        alert.informativeText = text
+        alert.runModal()
+    }
 }
 
 /// What `iris remote status` would answer. Reads only: it starts no server, writes no file and takes no lock,
@@ -211,21 +336,37 @@ private func checkRemote() -> RemoteAnswer {
     return state.map(RemoteAnswer.known) ?? .unknown
 }
 
-/// Works out remote access off the main thread, since a scope naming calendars or lists is looked up by child
-/// processes and can take seconds. One at a time: a start while one runs does nothing.
-@MainActor
-final class RemoteCheck {
-    private let compute: @Sendable () -> RemoteAnswer
-    private let show: (RemoteAnswer) -> Void
-    private var running = false
+/// The calendars, reminder lists or note folders, looked up only where that cannot show a permission dialog or
+/// open Notes; nil when they could not be listed.
+private func listShareItems(_ kind: ScopeKind) -> [ShareItem]? {
+    let arguments = switch kind {
+    case .calendars: ["calendar", "calendars"]
+    case .lists: ["reminders", "lists"]
+    case .folders: ["notes", "folders"]
+    }
+    return (try? listWithoutAsking(arguments)).flatMap { shareItems(kind, $0) }
+}
 
-    init(compute: @escaping @Sendable () -> RemoteAnswer, show: @escaping (RemoteAnswer) -> Void) {
+/// Works out an answer off the main thread, since remote access and the items to share are looked up by child
+/// processes and can take seconds. One at a time: a start while one runs starts the next once it has answered,
+/// so the last answer shown is never older than the last start.
+@MainActor
+final class BackgroundCheck<Answer> {
+    private let compute: @Sendable () -> Answer
+    private let show: (Answer) -> Void
+    private var running = false
+    private var again = false
+
+    init(compute: @escaping @Sendable () -> Answer, show: @escaping (Answer) -> Void) {
         self.compute = compute
         self.show = show
     }
 
     func start() {
-        guard !running else { return }
+        guard !running else {
+            again = true
+            return
+        }
         running = true
         Task.detached { [weak self, compute] in
             let answer = compute()
@@ -233,9 +374,13 @@ final class RemoteCheck {
         }
     }
 
-    private func finish(_ answer: RemoteAnswer) {
+    private func finish(_ answer: Answer) {
         running = false
         show(answer)
+        if again {
+            again = false
+            start()
+        }
     }
 }
 
@@ -262,7 +407,149 @@ enum SettingsPane: String {
 enum RowAction: Equatable {
     case askCalendar
     case askNotes
+    case askReminders
     case open(SettingsPane)
+}
+
+/// A calendar, reminder list or note folder as a row's submenu shows it.
+struct ShareItem: Equatable {
+    let id: String
+    let name: String
+    let group: String  // its account
+    var level = 0      // how many folders it sits in
+}
+
+/// The items in the JSON of `iris calendar calendars`, `reminders lists` or `notes folders`, in the order a submenu
+/// shows them: by account, accounts by name, and within one as listed, a folder right after the folder it sits in.
+func shareItems(_ kind: ScopeKind, _ data: Data) -> [ShareItem]? {
+    guard let listed = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return nil }
+    let (nameKey, groupKey) = kind == .folders ? ("name", "account") : ("title", "source")
+    let items = listed.compactMap { entry -> (item: ShareItem, parent: String?)? in
+        guard let id = entry["id"] as? String else { return nil }
+        return (ShareItem(id: id, name: entry[nameKey] as? String ?? "", group: entry[groupKey] as? String ?? ""),
+                entry["parent"] as? String)
+    }
+    let ids = Set(items.map(\.item.id))
+    var ordered: [ShareItem] = []
+    func add(in parent: String?, group: String, level: Int) {
+        for (item, itemParent) in items where item.group == group && itemParent.flatMap({ ids.contains($0) ? $0 : nil }) == parent {
+            var item = item
+            item.level = level
+            ordered.append(item)
+            add(in: item.id, group: group, level: level + 1)
+        }
+    }
+    let groups = Set(items.map(\.item.group)).sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+    for group in groups { add(in: nil, group: group, level: 0) }
+    return ordered
+}
+
+/// Where a submenu's items come from: a listing, or what stands in for one that cannot be made without asking.
+enum ShareSource: Equatable {
+    case listed([ShareItem])
+    case loading
+    case ask(RowAction)  // the app was never asked, and listing it would show a permission dialog
+    case openNotes       // listing the folders would open Notes
+}
+
+func shareSource(_ kind: ScopeKind, _ permissions: Permissions, _ listed: [ShareItem]?) -> ShareSource {
+    switch kind {
+    case .lists where permissions.reminders == .notDetermined: return .ask(.askReminders)
+    case .folders where permissions.notes == "not determined": return .ask(.askNotes)
+    case .folders where permissions.notes == "unknown (Notes not running)": return .openNotes
+    default: return listed.map(ShareSource.listed) ?? .loading
+    }
+}
+
+enum ShareAction: Equatable {
+    case tick(ScopeTick)
+    case fixFile
+    case ask(RowAction)
+    case openNotes
+}
+
+enum ShareEntry: Equatable {
+    case choice(String, on: Bool, enabled: Bool = true, level: Int = 0, ShareAction)
+    case section(String)
+    case separator
+    case loading
+}
+
+/// A row's submenu: All and None, a way to every item or to none in one click whatever else the file holds, then
+/// each item, ticked when shared, with an entry of the file that names nothing now ticked
+/// at the end, to be unticked; then, for Calendar and Reminders, whether changes are allowed. Changes need something
+/// shared, and events with other people need changes; each is enabled when it can be turned on, or is on. A file that
+/// cannot be read offers only its problem, never a tick that would write over it.
+func shareEntries(_ kind: ScopeKind, _ state: ScopeFileState, _ source: ShareSource) -> [ShareEntry] {
+    let file: ScopeFile
+    switch state {
+    case .broken: return [.choice("Settings File Has a Problem…", on: false, .fixFile)]
+    case .missing: file = ScopeFile(calendars: [], folders: [])
+    case .file(let read): file = read
+    }
+    let entries = file[kind]
+    let all = switch kind {
+    case .calendars: "All Calendars"
+    case .lists: "All Lists"
+    case .folders: "All Folders"
+    }
+    let none = switch kind {
+    case .calendars: "No Calendars"
+    case .lists: "No Lists"
+    case .folders: "No Folders"
+    }
+    // A pair to choose from, as the system's radio items: choosing the one ticked changes nothing.
+    var menu: [ShareEntry] = [.choice(all, on: entries == nil, .tick(.all(kind, true))),
+                              .choice(none, on: entries == [], .tick(.all(kind, false))), .separator]
+    // One line between parts, also when a part is empty.
+    func separate() { if menu.last != .separator { menu.append(.separator) } }
+    switch source {
+    case .loading:
+        menu.append(.loading)
+    case .ask(let action):
+        menu.append(.choice(kind == .lists ? "Allow Reminders Access…" : "Allow Notes Access…", on: false, .ask(action)))
+    case .openNotes:
+        menu.append(.choice("Open Notes to Choose Folders", on: false, .openNotes))
+    case .listed(let items):
+        let named = items.map { Named(id: $0.id, name: $0.name) }
+        var shared = Set(items.map(\.id))
+        var missing: [String] = []
+        if let entries {
+            shared = []
+            for entry in entries {
+                let found = pick([entry], from: named, allowed: nil, id: \.id, name: \.name).found ?? []
+                if found.isEmpty { missing.append(entry) } else { shared.formUnion(found.map(\.id)) }
+            }
+        }
+        let sections = Set(items.map(\.group)).count > 1
+        var group: String?
+        for item in items {
+            if sections && item.group != group {
+                menu.append(.section(item.group))
+                group = item.group
+            }
+            let on = shared.contains(item.id)
+            menu.append(.choice(item.name, on: on, level: item.level, .tick(.item(kind, item.id, !on))))
+        }
+        if !missing.isEmpty { separate() }
+        for entry in missing {
+            menu.append(.choice("Missing: \(entry)", on: true, .tick(.remove(kind, entry))))
+        }
+    }
+    switch kind {
+    case .calendars:
+        separate()
+        menu += [.choice("Allow Changes", on: file.writes, enabled: file.calendars != [] || file.writes, .tick(.writes(!file.writes))),
+                 .choice("Include Events With Other People", on: file.sharedEvents, enabled: file.writes || file.sharedEvents,
+                         .tick(.sharedEvents(!file.sharedEvents)))]
+    case .lists:
+        separate()
+        menu += [.choice("Allow Changes", on: file.reminderWrites, enabled: file.lists != [] || file.reminderWrites,
+                         .tick(.reminderWrites(!file.reminderWrites)))]
+    case .folders:
+        if menu.last == .separator { menu.removeLast() }
+    }
+    return menu
 }
 
 /// One app's row: what a remote assistant may do there, or, when Iris lacks what it needs, that problem.
@@ -393,6 +680,7 @@ func remoteStatusLine(_ remote: RemoteAnswer, _ server: RemoteServerStatus) -> S
 
 @MainActor @objc protocol MenuActions {
     func chooseRow(_ sender: NSMenuItem)
+    func chooseShare(_ sender: NSMenuItem)
     func toggleRemoteAccess(_ sender: NSSwitch)
     func showRemoteFailure()
     func toggleOpenAtLogin()
@@ -407,9 +695,13 @@ final class MenuItems {
     let failure = NSMenuItem(title: "Why It Couldn't Start…", action: #selector(MenuActions.showRemoteFailure), keyEquivalent: "")
     let rows: [NSMenuItem]
     let notesAccess = NSMenuItem(title: "Allow Notes Access…", action: #selector(MenuActions.chooseRow), keyEquivalent: "")
+    let shares: [NSMenu]  // the rows' submenus, Calendar, Reminders and Notes
+    private let target: MenuActions
     private var shown: MenuModel?
+    private var sharesShown: [[ShareEntry]]?
 
     init(target: MenuActions) {
+        self.target = target
         header.view = headerView
         header.isEnabled = false
         headerView.toggle.target = target
@@ -424,6 +716,11 @@ final class MenuItems {
             item.target = target
             return item
         }
+        shares = (0..<3).map { _ in
+            let menu = NSMenu()
+            menu.autoenablesItems = false
+            return menu
+        }
     }
 
     func show(_ model: MenuModel) {
@@ -434,12 +731,67 @@ final class MenuItems {
         headerView.toggle.isEnabled = model.switchEnabled
         failure.isHidden = model.failure == nil
         headerView.status = model.status
-        for (item, row) in zip(rows, model.rows) {
+        for (index, row) in model.rows.enumerated() {
+            let item = rows[index]
             item.title = row.title
             item.badge = row.detail.map { NSMenuItemBadge(string: $0) }
             item.representedObject = row.action
+            // A row that needs access has no submenu: its click asks for it, or opens its pane.
+            item.submenu = row.action == nil ? shares[index] : nil
         }
         notesAccess.isHidden = !model.offersNotesAccess
+    }
+
+    /// The rows' submenus, each changed in place while it keeps its shape (the same separators and section headers
+    /// in the same places), else filled again.
+    func show(shares entries: [[ShareEntry]]) {
+        func shape(_ entry: ShareEntry) -> Int {
+            switch entry {
+            case .separator: 0
+            case .section: 1
+            default: 2
+            }
+        }
+        guard entries != sharesShown else { return }
+        sharesShown = entries
+        for (menu, entries) in zip(shares, entries) {
+            let same = menu.items.count == entries.count && zip(menu.items, entries).allSatisfy { item, entry in
+                shape(entry) == (item.isSeparatorItem ? 0 : item.isSectionHeader ? 1 : 2)
+            }
+            if !same {
+                menu.removeAllItems()
+                for entry in entries {
+                    switch entry {
+                    case .separator: menu.addItem(.separator())
+                    case .section(let title): menu.addItem(.sectionHeader(title: title))
+                    default: menu.addItem(NSMenuItem())
+                    }
+                }
+            }
+            for (item, entry) in zip(menu.items, entries) {
+                switch entry {
+                case .separator:
+                    break
+                case .section(let title):
+                    item.title = title
+                case .loading:
+                    item.title = "Loading…"
+                    item.state = .off
+                    item.isEnabled = false
+                    item.indentationLevel = 0
+                    item.action = nil
+                    item.representedObject = nil
+                case .choice(let title, let on, let enabled, let level, let action):
+                    item.title = title
+                    item.state = on ? .on : .off
+                    item.isEnabled = enabled
+                    item.indentationLevel = min(level, 15)  // AppKit's most
+                    item.target = target
+                    item.action = #selector(MenuActions.chooseShare)
+                    item.representedObject = action
+                }
+            }
+        }
     }
 }
 

@@ -225,7 +225,7 @@ private struct NotAsked: Error, CustomStringConvertible {
 
 /// A server's lookup, made only when it cannot show a permission dialog: with access given or denied. Not
 /// yet asked, it would ask, and Notes not running cannot be asked without opening it.
-private func listWithoutAsking(_ arguments: [String]) throws -> Data {
+func listWithoutAsking(_ arguments: [String]) throws -> Data {
     let command = "iris \(arguments.joined(separator: " "))"
     if arguments.first == "notes" && notesPermission() == "unknown (Notes not running)" {
         throw NotAsked(description: "not checked: Notes is not running, and whether Iris may control it cannot be told "

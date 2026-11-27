@@ -227,7 +227,9 @@ final class MenuTests: XCTestCase {
     private final class Actions: NSObject, MenuActions {
         var switched: [NSControl.StateValue] = []
         var failuresShown = 0
+        var shared: [ShareAction] = []
         func chooseRow(_ sender: NSMenuItem) {}
+        func chooseShare(_ sender: NSMenuItem) { shared.append(sender.representedObject as! ShareAction) }
         func toggleRemoteAccess(_ sender: NSSwitch) { switched.append(sender.state) }
         func showRemoteFailure() { failuresShown += 1 }
         func toggleOpenAtLogin() {}
@@ -262,19 +264,19 @@ final class MenuTests: XCTestCase {
         let off = RemoteServerStatus()
         let failed = RemoteServerStatus(phase: .failed("/x/http-scope: not a JSON object"))
         let states: [(RemoteAnswer, Permissions, RemoteServerStatus, [String])] = [
-            (.checking, fine, off, ["(Iris / Checking…)", "Calendar", "Reminders", "Notes"]),
+            (.checking, fine, off, ["(Iris / Checking…)", "Calendar >", "Reminders >", "Notes >"]),
             (.known(state(listeners: [(8788, .current)])), fine, mine,
-             ["(Iris / Remote access · port 8788)", "Calendar [Read & write]", "Reminders [Off]", "Notes [Read only]"]),
+             ["(Iris / Remote access · port 8788)", "Calendar [Read & write] >", "Reminders [Off] >", "Notes [Read only] >"]),
             (.known(state(listeners: [])), fine, off,
-             ["(Iris / Remote access off)", "Calendar [Read & write]", "Reminders [Off]", "Notes [Read only]"]),
+             ["(Iris / Remote access off)", "Calendar [Read & write] >", "Reminders [Off] >", "Notes [Read only] >"]),
             (.known(state(listeners: [(8788, .current)])), Permissions(calendar: .denied, reminders: .fullAccess, notes: "granted"), mine,
-             ["(Iris / Remote access · port 8788)", "Calendar [Needs access]", "Reminders [Off]", "Notes [Read only]"]),
-            (.unknown, fine, off, ["(Iris / Remote access unknown)", "Calendar", "Reminders", "Notes"]),
+             ["(Iris / Remote access · port 8788)", "Calendar [Needs access]", "Reminders [Off] >", "Notes [Read only] >"]),
+            (.unknown, fine, off, ["(Iris / Remote access unknown)", "Calendar >", "Reminders >", "Notes >"]),
             (.known(state(listeners: [])), fine, failed,
-             ["(Iris / Remote access · couldn't start)", "Why It Couldn't Start…", "Calendar [Read & write]", "Reminders [Off]",
-              "Notes [Read only]"]),
+             ["(Iris / Remote access · couldn't start)", "Why It Couldn't Start…", "Calendar [Read & write] >", "Reminders [Off] >",
+              "Notes [Read only] >"]),
             (.known(state(listeners: [(8788, .current)])), fine, off,
-             ["(Iris / Remote access · port 8788 · run outside Iris)", "Calendar [Read & write]", "Reminders [Off]", "Notes [Read only]"]),
+             ["(Iris / Remote access · port 8788 · run outside Iris)", "Calendar [Read & write] >", "Reminders [Off] >", "Notes [Read only] >"]),
         ]
         let header = menu.items[0]
         let rows = Array(menu.items[3...5])
@@ -370,7 +372,7 @@ final class MenuTests: XCTestCase {
         CFRunLoopAddCommonMode(CFRunLoopGetMain(), CFRunLoopMode(RunLoop.Mode.eventTracking.rawValue as CFString))
         let probe = Probe()
         var shown: [String] = []
-        let check = RemoteCheck(compute: {
+        let check = BackgroundCheck(compute: { () -> RemoteAnswer in
             probe.lock.withLock {
                 probe.calls += 1
                 probe.onMain.append(Thread.isMainThread)
@@ -393,16 +395,174 @@ final class MenuTests: XCTestCase {
             RunLoop.main.run(mode: .eventTracking, before: Date().addingTimeInterval(0.05))
         }
         XCTAssertEqual(shown, ["Remote access unknown"])
-        XCTAssertEqual(probe.lock.withLock { probe.calls }, 1)
 
-        // Once the answer is in, the next start runs again.
-        check.start()
+        // The two starts made while it ran make one more run, once it has answered.
         XCTAssertEqual(probe.entered.wait(timeout: .now() + 10), .success)
         probe.release.signal()
         while shown.count < 2 && Date() < deadline.addingTimeInterval(10) {
             RunLoop.main.run(mode: .eventTracking, before: Date().addingTimeInterval(0.05))
         }
         XCTAssertEqual(shown.count, 2)
-        XCTAssertEqual(probe.lock.withLock { probe.onMain }, [false, false])
+        RunLoop.main.run(mode: .eventTracking, before: Date().addingTimeInterval(0.3))
+        XCTAssertEqual(probe.lock.withLock { probe.calls }, 2)
+
+        // Once the answer is in, the next start runs again.
+        check.start()
+        XCTAssertEqual(probe.entered.wait(timeout: .now() + 10), .success)
+        probe.release.signal()
+        while shown.count < 3 && Date() < deadline.addingTimeInterval(20) {
+            RunLoop.main.run(mode: .eventTracking, before: Date().addingTimeInterval(0.05))
+        }
+        XCTAssertEqual(shown.count, 3)
+        XCTAssertEqual(probe.lock.withLock { probe.onMain }, [false, false, false])
+    }
+
+    private let calendars = [ShareItem(id: "c1", name: "Work", group: "iCloud"), ShareItem(id: "c2", name: "Family", group: "iCloud"),
+                             ShareItem(id: "c3", name: "Birthdays", group: "Other")]
+
+    /// The listings' JSON as submenus order it: accounts by name, a folder right after the one it sits in.
+    func testShareItems() throws {
+        let calendars = #"[{"id": "c1", "title": "Work", "source": "iCloud", "writable": true},"#
+            + #" {"id": "c3", "title": "Birthdays", "source": "Other", "writable": false},"#
+            + #" {"id": "c2", "title": "Family", "source": "iCloud", "writable": true}]"#
+        XCTAssertEqual(shareItems(.calendars, Data(calendars.utf8)), self.calendars)
+        let lists = #"[{"id": "l1", "title": "Errands", "source": "iCloud", "writable": true, "open": 2}]"#
+        XCTAssertEqual(shareItems(.lists, Data(lists.utf8)), [ShareItem(id: "l1", name: "Errands", group: "iCloud")])
+        let folders = #"[{"id": "f3", "name": "Paris", "account": "iCloud", "parent": "f2", "noteCount": 1},"#
+            + #" {"id": "f1", "name": "Recipes", "account": "iCloud", "parent": null, "noteCount": 1},"#
+            + #" {"id": "f2", "name": "Travel", "account": "iCloud", "parent": null, "noteCount": 1},"#
+            + #" {"id": "f4", "name": "Notes", "account": "On My Mac", "parent": null, "noteCount": 1},"#
+            + #" {"id": "f5", "name": "Lyon", "account": "iCloud", "parent": "f3", "noteCount": 1}]"#
+        XCTAssertEqual(try XCTUnwrap(shareItems(.folders, Data(folders.utf8))).map { "\($0.group) \(String(repeating: "  ", count: $0.level))\($0.name)" },
+                       ["iCloud Recipes", "iCloud Travel", "iCloud   Paris", "iCloud     Lyon", "On My Mac Notes"])
+        XCTAssertNil(shareItems(.calendars, Data("not json".utf8)))
+    }
+
+    /// Where a submenu's items come from: never a lookup that would ask, or open Notes.
+    func testShareSource() {
+        let listed = [ShareItem(id: "l1", name: "Errands", group: "iCloud")]
+        XCTAssertEqual(shareSource(.lists, fine, listed), .listed(listed))
+        XCTAssertEqual(shareSource(.lists, fine, nil), .loading)
+        XCTAssertEqual(shareSource(.lists, Permissions(calendar: .fullAccess, reminders: .notDetermined, notes: "granted"), listed),
+                       .ask(.askReminders))
+        XCTAssertEqual(shareSource(.folders, Permissions(calendar: .fullAccess, reminders: .fullAccess, notes: "not determined"), nil),
+                       .ask(.askNotes))
+        XCTAssertEqual(shareSource(.folders, Permissions(calendar: .fullAccess, reminders: .fullAccess, notes: "unknown (Notes not running)"), listed),
+                       .openNotes)
+        XCTAssertEqual(shareSource(.calendars, Permissions(calendar: .fullAccess, reminders: .notDetermined, notes: "not determined"), nil), .loading)
+    }
+
+    /// A submenu as text: ✓ for a tick, () for disabled, -- for a section header, an indent per level.
+    private func lines(_ entries: [ShareEntry]) -> [String] {
+        entries.map { entry in
+            switch entry {
+            case .separator: "---"
+            case .section(let title): "-- \(title)"
+            case .loading: "(Loading…)"
+            case .choice(let title, let on, let enabled, let level, _):
+                (enabled ? "" : "(") + (on ? "✓ " : "  ") + String(repeating: "  ", count: level) + title + (enabled ? "" : ")")
+            }
+        }
+    }
+
+    func testShareEntries() {
+        let listed = ShareSource.listed(calendars)
+        let some = ScopeFileState.file(ScopeFile(calendars: ["Work", "c3"], folders: [], writes: true))
+        XCTAssertEqual(lines(shareEntries(.calendars, some, listed)),
+                       ["  All Calendars", "  No Calendars", "---", "-- iCloud", "✓ Work", "  Family", "-- Other", "✓ Birthdays", "---",
+                        "✓ Allow Changes", "  Include Events With Other People"])
+        // Each choice is the tick that turns it the other way.
+        let actions = shareEntries(.calendars, some, listed).compactMap { entry -> ShareAction? in
+            if case .choice(_, _, _, _, let action) = entry { action } else { nil }
+        }
+        XCTAssertEqual(actions, [.tick(.all(.calendars, true)), .tick(.all(.calendars, false)), .tick(.item(.calendars, "c1", false)), .tick(.item(.calendars, "c2", true)),
+                                 .tick(.item(.calendars, "c3", false)), .tick(.writes(false)), .tick(.sharedEvents(true))])
+        // "all": every item ticked; one account: no section headers.
+        let one = ShareSource.listed(Array(calendars.prefix(2)))
+        XCTAssertEqual(lines(shareEntries(.calendars, .file(ScopeFile(calendars: nil, folders: nil)), one)),
+                       ["✓ All Calendars", "  No Calendars", "---", "✓ Work", "✓ Family", "---", "  Allow Changes", "(  Include Events With Other People)"])
+        // Nothing shared, or no file yet: changes cannot be turned on.
+        for state in [ScopeFileState.missing, .file(ScopeFile(calendars: [], folders: []))] {
+            XCTAssertEqual(lines(shareEntries(.calendars, state, one)),
+                           ["  All Calendars", "✓ No Calendars", "---", "  Work", "  Family", "---", "(  Allow Changes)", "(  Include Events With Other People)"])
+        }
+        // An entry that names nothing now, ticked at the end, to be unticked.
+        let missing = shareEntries(.calendars, .file(ScopeFile(calendars: ["Old", "c1"], folders: [])), one)
+        XCTAssertEqual(lines(missing), ["  All Calendars", "  No Calendars", "---", "✓ Work", "  Family", "---", "✓ Missing: Old", "---",
+                                        "  Allow Changes", "(  Include Events With Other People)"])
+        XCTAssertTrue(missing.contains(.choice("Missing: Old", on: true, .tick(.remove(.calendars, "Old")))))
+        // Not listed yet, or not to be listed without asking.
+        XCTAssertEqual(lines(shareEntries(.calendars, some, .loading)),
+                       ["  All Calendars", "  No Calendars", "---", "(Loading…)", "---", "✓ Allow Changes", "  Include Events With Other People"])
+        let lists = ScopeFileState.file(ScopeFile(calendars: [], folders: [], lists: nil, reminderWrites: true))
+        XCTAssertEqual(lines(shareEntries(.lists, lists, .ask(.askReminders))),
+                       ["✓ All Lists", "  No Lists", "---", "  Allow Reminders Access…", "---", "✓ Allow Changes"])
+        XCTAssertEqual(lines(shareEntries(.lists, .file(ScopeFile(calendars: [], folders: [])), .listed([]))),
+                       ["  All Lists", "✓ No Lists", "---", "(  Allow Changes)"])
+        // Notes: folders by level, and no changes.
+        let folders = [ShareItem(id: "f1", name: "Recipes", group: "iCloud"), ShareItem(id: "f2", name: "Travel", group: "iCloud"),
+                       ShareItem(id: "f3", name: "Paris", group: "iCloud", level: 1)]
+        XCTAssertEqual(lines(shareEntries(.folders, .file(ScopeFile(calendars: [], folders: ["f3"])), .listed(folders))),
+                       ["  All Folders", "  No Folders", "---", "  Recipes", "  Travel", "✓   Paris"])
+        XCTAssertEqual(lines(shareEntries(.folders, .file(ScopeFile(calendars: [], folders: nil)), .openNotes)),
+                       ["✓ All Folders", "  No Folders", "---", "  Open Notes to Choose Folders"])
+        XCTAssertEqual(lines(shareEntries(.folders, .missing, .ask(.askNotes))), ["  All Folders", "✓ No Folders", "---", "  Allow Notes Access…"])
+        // A file that cannot be read offers only its problem.
+        for kind in [ScopeKind.calendars, .lists, .folders] {
+            XCTAssertEqual(shareEntries(kind, .broken("not a JSON object"), listed),
+                           [.choice("Settings File Has a Problem…", on: false, .fixFile)])
+        }
+    }
+
+    /// The rows' submenus as AppKit items, changed in place while their shape holds, and none on a row that needs access.
+    @MainActor
+    func testShareMenus() {
+        let actions = Actions()
+        let menu = NSMenu()
+        let items = MenuItems(target: actions)
+        fill(menu, with: items, version: "1.0", openAtLogin: .off, target: actions, updater: nil)
+        items.show(menuModel(.checking, fine))
+        func shares(_ calendars: [ShareEntry]) -> [[ShareEntry]] {
+            [calendars, shareEntries(.lists, .missing, .loading), shareEntries(.folders, .missing, .openNotes)]
+        }
+        func described(_ menu: NSMenu) -> [String] {
+            menu.items.map { item in
+                if item.isSeparatorItem { return "---" }
+                if item.isSectionHeader { return "-- \(item.title)" }
+                let text = (item.state == .on ? "✓ " : "  ") + String(repeating: "  ", count: item.indentationLevel) + item.title
+                return item.isEnabled ? text : "(\(text))"
+            }
+        }
+        let file = ScopeFileState.file(ScopeFile(calendars: ["c1"], folders: [], writes: true))
+        items.show(shares: shares(shareEntries(.calendars, file, .loading)))
+        XCTAssertTrue(items.rows[0].submenu === items.shares[0])
+        XCTAssertFalse(items.shares[0].autoenablesItems)
+        XCTAssertTrue(items.shares[0].showsStateColumn)
+        XCTAssertEqual(described(items.shares[0]), ["  All Calendars", "  No Calendars", "---", "(  Loading…)", "---", "✓ Allow Changes", "  Include Events With Other People"])
+        XCTAssertEqual(described(items.shares[1]), ["  All Lists", "✓ No Lists", "---", "(  Loading…)", "---", "(  Allow Changes)"])
+        XCTAssertEqual(described(items.shares[2]), ["  All Folders", "✓ No Folders", "---", "  Open Notes to Choose Folders"])
+
+        // The listing comes in: a new shape, filled again.
+        items.show(shares: shares(shareEntries(.calendars, file, .listed(calendars))))
+        XCTAssertEqual(described(items.shares[0]), ["  All Calendars", "  No Calendars", "---", "-- iCloud", "✓ Work", "  Family", "-- Other", "  Birthdays",
+                                                    "---", "✓ Allow Changes", "  Include Events With Other People"])
+        // A tick keeps the shape: the same items, changed in place.
+        let before = items.shares[0].items
+        items.show(shares: shares(shareEntries(.calendars, .file(ScopeFile(calendars: ["c1", "c2"], folders: [])), .listed(calendars))))
+        XCTAssertTrue(zip(before, items.shares[0].items).allSatisfy { $0 === $1 })
+        XCTAssertEqual(described(items.shares[0]), ["  All Calendars", "  No Calendars", "---", "-- iCloud", "✓ Work", "✓ Family", "-- Other", "  Birthdays",
+                                                    "---", "  Allow Changes", "(  Include Events With Other People)"])
+        // A click reaches the target with its tick.
+        let family = items.shares[0].items[5]
+        XCTAssertTrue(family.target === actions)
+        _ = (family.target as? NSObject)?.perform(family.action, with: family)
+        XCTAssertEqual(actions.shared, [.tick(.item(.calendars, "c2", false))])
+
+        // A row that needs access has no submenu; given access, it has it again.
+        items.show(menuModel(.checking, Permissions(calendar: .denied, reminders: .fullAccess, notes: "granted")))
+        XCTAssertNil(items.rows[0].submenu)
+        XCTAssertTrue(items.rows[1].submenu === items.shares[1])
+        items.show(menuModel(.checking, fine))
+        XCTAssertTrue(items.rows[0].submenu === items.shares[0])
     }
 }
