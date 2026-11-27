@@ -109,6 +109,69 @@ final class RemoteServerTests: XCTestCase {
         wait(10) { next.status.pid == nil }
     }
 
+    /// The server's activity lines, asked for by the environment, are kept in memory and never logged; the request log
+    /// gets every other byte. Activity outlives a restart and is cleared when the switch is turned off.
+    @MainActor
+    func testActivity() throws {
+        let serving = try script(#"""
+            echo '{"port": 1}'
+            [ "$IRIS_REPORT_ACTIVITY" = 1 ] || exec sleep 600
+            now=$(date +%Y-%m-%dT%H:%M:%S%z)
+            printf '@activity %s Hark\n2026-11-26T10:00:00+01:00 POST initialize - 200 0.001s\n@activ' "$now" >&2
+            sleep 0.2
+            printf 'ity %s Claude\n' "$now" >&2
+            exec sleep 600
+            """#)
+        var actives = 0
+        let switched = RemoteServer(executable: serving, log: folder + "/logs/http.log", defaults: defaults,
+                                    tokenFile: folder + "/state/token", scopeFile: folder + "/state/scope",
+                                    stateDir: folder + "/state", listeners: { [] }, active: { actives += 1 }) { _ in }
+        switched.turn(on: true)
+        // However the pipe splits the reads, both names arrive, in one snapshot or two.
+        wait(10) { switched.activity.named.count == 2 }
+        XCTAssertGreaterThan(actives, 0)
+        XCTAssertEqual(switched.activity.named.map(\.name), ["Hark", "Claude"])
+        XCTAssertEqual(try String(contentsOfFile: folder + "/logs/http.log"), "2026-11-26T10:00:00+01:00 POST initialize - 200 0.001s\n")
+        let first = switched.status.pid
+        switched.restart()
+        wait(20) { switched.status.phase == .on(port: defaultHTTPPort) && switched.status.pid != first }
+        XCTAssertEqual(switched.activity.named.map(\.name), ["Hark", "Claude"])
+        switched.turn(on: false)
+        XCTAssertNil(switched.activity.lastUsed)
+        wait(10) { switched.status.pid == nil }
+        XCTAssertNil(switched.activity.lastUsed)
+    }
+
+    /// A line the old server sent before Off, still waiting for the main thread, is not kept after On.
+    @MainActor
+    func testActivityQueuedBeforeOffIsDropped() throws {
+        let marker = folder + "/reported"
+        let serving = try script(#"""
+            echo '{"port": 1}'
+            [ -e "\#(marker)" ] && exec sleep 600
+            touch "\#(marker)"
+            sleep 0.3
+            printf '@activity %s Hark\n' "$(date +%Y-%m-%dT%H:%M:%S%z)" >&2
+            exec sleep 600
+            """#)
+        var actives = 0
+        let switched = RemoteServer(executable: serving, log: folder + "/logs/http.log", defaults: defaults,
+                                    tokenFile: folder + "/state/token", scopeFile: folder + "/state/scope",
+                                    stateDir: folder + "/state", listeners: { [] }, active: { actives += 1 }) { _ in }
+        switched.turn(on: true)
+        wait(10) { switched.status.phase == .on(port: defaultHTTPPort) }
+        // The main thread held while the line is read and queued for it.
+        Thread.sleep(forTimeInterval: 1.5)
+        switched.turn(on: false)
+        switched.turn(on: true)
+        wait(10) { switched.status.phase == .on(port: defaultHTTPPort) && FileManager.default.fileExists(atPath: marker) }
+        wait(1) { false }
+        XCTAssertEqual(actives, 0)
+        XCTAssertNil(switched.activity.lastUsed)
+        switched.turn(on: false)
+        wait(10) { switched.status.pid == nil }
+    }
+
     @MainActor
     func testFilesAreNeverReplaced() throws {
         try FileManager.default.createDirectory(atPath: folder + "/state", withIntermediateDirectories: true,

@@ -51,7 +51,7 @@ final class MenuTests: XCTestCase {
     }
 
     func testOneServer() {
-        XCTAssertEqual(shown(.known(state(listeners: [(8788, .current)])), nil, mine), ["Remote access on"] + usual)
+        XCTAssertEqual(shown(.known(state(listeners: [(8788, .current)])), nil, mine), ["On · no activity yet"] + usual)
         XCTAssertEqual(shown(.known(state(listeners: [(8788, .changed)])), nil, mine),
                        ["Remote access on · restart to apply changes"] + usual)
         // A name that matches nothing: the access stands.
@@ -64,12 +64,12 @@ final class MenuTests: XCTestCase {
                        ["Remote access on · settings have a problem"] + blank)
         // Not checked, since checking would ask for a permission: no problem known.
         XCTAssertEqual(shown(.known(state(usable: nil, calendar: AppAccess(access: "read", items: .unknown), listeners: [(8788, .current)])), nil, mine),
-                       ["Remote access on", "Calendar: Read Only", "Reminders: Off", "Notes: Read Only"])
+                       ["On · no activity yet", "Calendar: Read Only", "Reminders: Off", "Notes: Read Only"])
         // The last check has not seen the server yet, or not since it started again: the switch's server is on.
-        XCTAssertEqual(shown(.known(state(listeners: [])), nil, mine), ["Remote access on"] + usual)
-        XCTAssertEqual(shown(.checking, nil, mine), ["Remote access on"] + blank)
+        XCTAssertEqual(shown(.known(state(listeners: [])), nil, mine), ["On · no activity yet"] + usual)
+        XCTAssertEqual(shown(.checking, nil, mine), ["On · no activity yet"] + blank)
         let again = RemoteServerStatus(phase: .on(port: 8788), pid: 101, ours: [id(100), id(101)])
-        XCTAssertEqual(shown(.known(state(listeners: [(8788, .changed)])), nil, again), ["Remote access on"] + usual)
+        XCTAssertEqual(shown(.known(state(listeners: [(8788, .changed)])), nil, again), ["On · no activity yet"] + usual)
     }
 
     func testOutside() {
@@ -138,7 +138,7 @@ final class MenuTests: XCTestCase {
         for remote in [RemoteAnswer.checking, none] {
             XCTAssertEqual(header(remote, RemoteServerStatus(phase: .starting, pid: 100, ours: [id(100)])), ["Starting…", "on", "-"])
             XCTAssertEqual(header(remote, RemoteServerStatus(phase: .failed(reason))), ["Couldn't start", "on", reason])
-            XCTAssertEqual(header(remote, RemoteServerStatus(phase: .on(port: 8765), pid: 100, ours: [id(100)])), ["Remote access on", "on", "-"])
+            XCTAssertEqual(header(remote, RemoteServerStatus(phase: .on(port: 8765), pid: 100, ours: [id(100)])), ["On · no activity yet", "on", "-"])
         }
         // Not started by this Iris: on, and it cannot be turned off here, whether the choice is off or on.
         XCTAssertEqual(header(foreign, RemoteServerStatus()), ["On · run outside Iris", "on -", "-"])
@@ -213,7 +213,7 @@ final class MenuTests: XCTestCase {
         }
         // Each app's problem shows on its own row only.
         let none = Permissions(calendar: .denied, reminders: .denied, notes: "denied")
-        XCTAssertEqual(shown(on, none, mine), ["Remote access on", "Calendar: Needs Access !", "Reminders: Needs Access !",
+        XCTAssertEqual(shown(on, none, mine), ["On · no activity yet", "Calendar: Needs Access !", "Reminders: Needs Access !",
                                                "Notes: Needs Access !"])
     }
 
@@ -267,11 +267,11 @@ final class MenuTests: XCTestCase {
         let states: [(RemoteAnswer, Permissions, RemoteServerStatus, [String])] = [
             (.checking, fine, off, ["(Iris / Checking…)", "Calendar >", "Reminders >", "Notes >"]),
             (.known(state(listeners: [(8788, .current)])), fine, mine,
-             ["(Iris / Remote access on)", "Calendar [Read & Write] >", "Reminders [Off] >", "Notes [Read Only] >"]),
+             ["(Iris / On · no activity yet)", "Calendar [Read & Write] >", "Reminders [Off] >", "Notes [Read Only] >"]),
             (.known(state(listeners: [])), fine, off,
              ["(Iris / Remote access off)", "Calendar [Read & Write] >", "Reminders [Off] >", "Notes [Read Only] >"]),
             (.known(state(listeners: [(8788, .current)])), Permissions(calendar: .denied, reminders: .fullAccess, notes: "granted"), mine,
-             ["(Iris / Remote access on)", "Calendar [Needs Access]", "Reminders [Off] >", "Notes [Read Only] >"]),
+             ["(Iris / On · no activity yet)", "Calendar [Needs Access]", "Reminders [Off] >", "Notes [Read Only] >"]),
             (.unknown, fine, off, ["(Iris / Remote access unknown)", "Calendar >", "Reminders >", "Notes >"]),
             (.known(state(listeners: [])), fine, failed,
              ["(Iris / Couldn't start)", "Why It Couldn't Start…", "Calendar [Read & Write] >", "Reminders [Off] >",
@@ -420,6 +420,51 @@ final class MenuTests: XCTestCase {
             items.headerView.layoutSubtreeIfNeeded()
             let line = items.headerView.subviews.compactMap { $0 as? NSStackView }.first!.views.last!
             XCTAssertLessThanOrEqual(line.convert(line.bounds, to: items.headerView).maxX, items.headerView.toggle.frame.minX, first.status)
+        }
+    }
+
+    /// Three short names fit in the header, and a line that fits keeps the menu within `headerMenuWidth`.
+    @MainActor
+    func testHeaderLineFits() {
+        let three = "Hark, Claude and Cursor · active 9 min ago"
+        XCTAssertTrue(headerLineFits(three))
+        XCTAssertFalse(headerLineFits(three + ", and more"))
+        let menu = NSMenu()
+        let actions = Actions()
+        let items = MenuItems(target: actions)
+        fill(menu, with: items, version: "1.0", openAtLogin: .off, target: actions, updater: nil)
+        let shown = menuModel(.known(state(listeners: [(8788, .current)])), fine, mine)
+        items.show(MenuModel(status: three, rows: shown.rows))
+        XCTAssertLessThanOrEqual(menu.size.width, headerMenuWidth)
+    }
+
+    /// In an image as tall as the menu bar, the head is where the 18-point image puts it, centred; the activity dot
+    /// shows only below the head, with blank rows between, and inside the image.
+    @MainActor
+    func testActivityDot() throws {
+        // Alpha at 2x, the image drawn at `y` points from the top of a canvas `height` points tall.
+        func alpha(_ image: NSImage, height: CGFloat, y: CGFloat = 0) throws -> [[UInt8]] {
+            let pixels = Int(height * 2)
+            let rep = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 36, pixelsHigh: pixels, bitsPerSample: 8,
+                                                     samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                                     colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+            rep.size = NSSize(width: 18, height: height)
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+            image.draw(in: NSRect(x: 0, y: height - y - image.size.height, width: image.size.width, height: image.size.height))
+            NSGraphicsContext.restoreGraphicsState()
+            return (0..<pixels).map { row in (0..<36).map { x in UInt8(rep.colorAt(x: x, y: row)!.alphaComponent * 255) } }
+        }
+        for height: CGFloat in [22, 24] {
+            for badge in [false, true] {
+                let rest = try alpha(botGlyph(badge: badge, height: height), height: height)
+                XCTAssertEqual(rest, try alpha(botGlyph(badge: badge), height: height, y: (height - 18) / 2), "\(height)")
+                let active = try alpha(botGlyph(badge: badge, active: true, height: height), height: height)
+                let differing = rest.indices.filter { rest[$0] != active[$0] }
+                let headBottom = try XCTUnwrap(rest.indices.last { rest[$0].contains { $0 > 0 } })
+                XCTAssertGreaterThan(try XCTUnwrap(differing.min()), headBottom + 1, "\(height)")
+                XCTAssertLessThan(try XCTUnwrap(differing.max()), rest.count - 1, "\(height)")
+            }
         }
     }
 
