@@ -264,7 +264,7 @@ final class RemoteServerTests: XCTestCase {
         var restartsSeen: [Int] = []
         for index in 0..<20 {
             let tick = ScopeTick.item(.calendars, "c\(index % 5 + 1)", index % 3 != 2)
-            expected = applying(tick, to: expected, items: items)
+            expected = applying(tick, to: expected, items: items).file
             let wanted = expected
             changes.submit(tick) { result in
                 answers.append((try? result.get()) ?? ScopeFile(calendars: ["failed"], folders: nil))
@@ -305,18 +305,18 @@ final class RemoteServerTests: XCTestCase {
             case .failure(let error): answers.append("\(error)")
             }
         }
-        changes.submit(.writes(false)) { answers.append((try? $0.get()).map { "\($0.calendars ?? [])" } ?? "failed") }
-        changes.submit(.all(.lists, true)) { answers.append((try? $0.get()).map { "lists \($0.lists == nil ? "all" : "some")" } ?? "failed") }
+        changes.submit(.access(.calendars, .readOnly)) { answers.append((try? $0.get()).map { "calendars \($0.calendars == nil ? "all" : "some")" } ?? "failed") }
+        changes.submit(.all(.lists)) { answers.append((try? $0.get()).map { "lists \($0.lists == nil ? "all" : "some")" } ?? "failed") }
         wait(0.3) { false }
         XCTAssertEqual(answers, [])
         XCTAssertTrue(changes.isBusy)
         wait(5) { answers.count == 3 }
-        XCTAssertEqual(answers, ["Iris could not read your calendars just now, so nothing was changed.", "[]", "lists all"])
+        XCTAssertEqual(answers, ["Iris could not read your calendars just now, so nothing was changed.", "calendars all", "lists all"])
         // The late answer comes and changes nothing.
         release.signal()
         wait(0.5) { false }
         XCTAssertEqual(answers.count, 3)
-        XCTAssertEqual(try readScopeFile(folder + "/state/scope"), ScopeFile(calendars: [], folders: [], lists: nil))
+        XCTAssertEqual(try readScopeFile(folder + "/state/scope"), ScopeFile(calendars: nil, folders: [], lists: nil))
         XCTAssertFalse(changes.isBusy)
     }
 
@@ -332,7 +332,7 @@ final class RemoteServerTests: XCTestCase {
         changes.whenDrained { drained += 1 }
         XCTAssertEqual(drained, 1)
         var answered = 0
-        for tick in [ScopeTick.item(.calendars, "c1", true), .writes(true), .item(.calendars, "c1", false)] {
+        for tick in [ScopeTick.item(.calendars, "c1", true), .access(.calendars, .readWrite), .item(.calendars, "c1", false)] {
             changes.submit(tick) { _ in answered += 1 }
         }
         changes.whenDrained { drained += 1 }
@@ -371,8 +371,8 @@ final class RemoteServerTests: XCTestCase {
             // The third listing fails, as Calendar not answering does.
             return call == 3 ? nil : items
         }) {}
-        let ticks: [ScopeTick] = [.item(.calendars, "c1", true), .writes(true), .item(.calendars, "c2", true),
-                                  .item(.calendars, "c3", true), .all(.folders, true), .item(.calendars, "c1", false),
+        let ticks: [ScopeTick] = [.item(.calendars, "c1", true), .access(.calendars, .readWrite), .item(.calendars, "c2", true),
+                                  .item(.calendars, "c3", true), .all(.folders), .item(.calendars, "c1", false),
                                   .sharedEvents(true)]
         var answers: [(Int, String)] = []
         for (index, tick) in ticks.enumerated() {
@@ -393,6 +393,85 @@ final class RemoteServerTests: XCTestCase {
         XCTAssertEqual(listings.lock.withLock { listings.calls }, 4)
         XCTAssertEqual(try readScopeFile(folder + "/state/scope"),
                        ScopeFile(calendars: ["c2"], folders: nil, writes: true, sharedEvents: true))
+    }
+
+    /// Off and then Read Only, clicked before Off has answered: Read Only finds Off's memory under the lock, so it lists
+    /// and shares again what Off remembered, not everything. The memory is the file beside the scope file.
+    @MainActor
+    func testOffThenOnQueued() throws {
+        final class Listings: @unchecked Sendable {
+            let lock = NSLock()
+            var calls = 0
+        }
+        let listings = Listings()
+        let scope = folder + "/state/scope"
+        let items = (1...3).map { Named(id: "c\($0)", name: "Calendar \($0)") }
+        try writeScopeFile(ScopeFile(calendars: ["c2"], folders: [], writes: true), to: scope)
+        let changes = ScopeChanges(path: scope, listing: { _ in
+            listings.lock.withLock { listings.calls += 1 }
+            return items
+        }) {}
+        var answers: [ScopeFile] = []
+        for tick in [ScopeTick.access(.calendars, .off), .access(.calendars, .readOnly)] {
+            changes.submit(tick) { answers.append((try? $0.get()) ?? ScopeFile(calendars: ["failed"], folders: nil)) }
+        }
+        wait(5) { answers.count == 2 }
+        XCTAssertEqual(answers, [ScopeFile(calendars: [], folders: []), ScopeFile(calendars: ["c2"], folders: [])])
+        XCTAssertEqual(listings.lock.withLock { listings.calls }, 1)
+        XCTAssertEqual(loadSharedBefore(scope + ".shared-before"), [:])
+        // Off again: remembered.
+        changes.submit(.access(.calendars, .off)) { answers.append((try? $0.get()) ?? ScopeFile(calendars: ["failed"], folders: nil)) }
+        wait(5) { answers.count == 3 }
+        XCTAssertEqual(loadSharedBefore(scope + ".shared-before"), [.calendars: .entries(["c2"])])
+
+        // Notes closed: folders remembered cannot be shared again, so nothing changes and the answer says why.
+        try writeScopeFile(ScopeFile(calendars: [], folders: ["f1"]), to: scope)
+        let closed = ScopeChanges(path: scope, listing: { _ in nil }) {}
+        var failures: [String] = []
+        for tick in [ScopeTick.access(.folders, .off), .access(.folders, .readOnly)] {
+            closed.submit(tick) { if case .failure(let error) = $0 { failures.append("\(error)") } }
+        }
+        wait(5) { !closed.isBusy }
+        XCTAssertEqual(failures, ["Iris could not read your note folders just now, so nothing was changed. Open Notes and try again."])
+        XCTAssertEqual(try readScopeFile(scope), ScopeFile(calendars: [], folders: []))
+        XCTAssertEqual(loadSharedBefore(scope + ".shared-before"), [.calendars: .entries(["c2"]), .folders: .entries(["f1"])])
+    }
+
+    /// Two copies of Iris on one scope file. A's Read & Write would need no listing while Calendar shares; B turns
+    /// Calendar off first. A decides under the lock, finds B's memory, lists, and shares again what B remembered, never
+    /// everything. Not listed is never taken for listed and empty.
+    @MainActor
+    func testTwoCopies() throws {
+        let scope = folder + "/state/scope"
+        let items = (1...3).map { Named(id: "c\($0)", name: "Calendar \($0)") }
+        try writeScopeFile(ScopeFile(calendars: ["c1"], folders: []), to: scope)
+        // Straight under the lock: not listed, it asks for a listing; listed and empty, it stays off.
+        _ = try changeScopeFile(scope, .access(.calendars, .off), items: nil)
+        XCTAssertThrowsError(try changeScopeFile(scope, .access(.calendars, .readWrite), items: nil)) {
+            XCTAssertEqual(($0 as? ScopeListingNeeded)?.kind, .calendars)
+        }
+        XCTAssertThrowsError(try changeScopeFile(scope, .access(.calendars, .readWrite), items: []))
+        XCTAssertEqual(try readScopeFile(scope), ScopeFile(calendars: [], folders: []))
+        try writeScopeFile(ScopeFile(calendars: ["c1"], folders: []), to: scope)
+
+        let release = DispatchSemaphore(value: 0)
+        let a = ScopeChanges(path: scope, listing: { _ in items }) {}
+        let b = ScopeChanges(path: scope, listing: { _ in
+            release.wait()
+            return items
+        }) {}
+        var answers: [String] = []
+        // B's item tick holds its queue on a listing; its Off waits behind it.
+        b.submit(.item(.calendars, "c3", true)) { answers.append("B item " + ((try? $0.get()).map { "\($0.calendars ?? [])" } ?? "failed")) }
+        b.submit(.access(.calendars, .off)) { answers.append("B off " + ((try? $0.get()).map { "\($0.calendars ?? [])" } ?? "failed")) }
+        wait(0.3) { false }
+        release.signal()
+        wait(5) { answers.count == 2 }
+        a.submit(.access(.calendars, .readWrite)) { result in
+            answers.append("A " + ((try? result.get()).map { "\($0.calendars.map { "\($0)" } ?? "all") \($0.writes)" } ?? "failed"))
+        }
+        wait(5) { answers.count == 3 }
+        XCTAssertEqual(answers, [#"B item ["c1", "c3"]"#, "B off []", #"A ["c1", "c3"] true"#])
     }
 
     @MainActor

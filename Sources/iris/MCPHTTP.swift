@@ -153,10 +153,11 @@ func readToken(_ path: String) throws -> String {
 }
 
 /// A file of at most `limit` bytes that must be a regular file of this user's that no one else may read.
-/// `noun` and `recipe` say in the errors what the file is and how to make one.
-func readPrivateFile(_ path: String, noun: String, recipe: String, limit: Int) throws -> Data {
+/// `noun` and `recipe` say in the errors what the file is and how to make one. A link is followed unless
+/// `followLinks` is false, when it is refused.
+func readPrivateFile(_ path: String, noun: String, recipe: String, limit: Int, followLinks: Bool = true) throws -> Data {
     // Non-blocking, so a FIFO without a writer cannot hold the open; the check below refuses it.
-    let descriptor = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC)
+    let descriptor = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC | (followLinks ? 0 : O_NOFOLLOW))
     guard descriptor >= 0 else {
         if errno == ENOENT { throw IrisError("no \(noun) at \(path); \(recipe)") }
         throw IrisError("cannot read the \(noun) \(path): \(String(cString: strerror(errno)))")

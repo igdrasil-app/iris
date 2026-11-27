@@ -403,12 +403,13 @@ final class RemoteServer {
     }
 }
 
-/// The menu's ticks and resets, one at a time in the order made, none of it on the main thread but the answers. A
-/// tick that changes which items are shared first lists that app again and is applied against that answer, never an
-/// older one; a listing that fails or takes longer than `listingDeadline` changes nothing and says so, and an answer
-/// after that is ignored. Each change is made to the scope file as it is on disk then, under the lock every copy of
-/// Iris takes, and written at once. The switch's server is restarted once the changes have stopped for `quiet`
-/// seconds and none is waiting: so once, after the last of them has been written, and the server reads it.
+/// The menu's ticks and resets, one at a time in the order made, none of it on the main thread but the answers. Each
+/// change is made to the scope file as it is on disk then, under the lock every copy of Iris takes, and written at
+/// once. A tick that needs its app's items as they are now, as that change finds the files under the lock, changes
+/// nothing then: its app is listed and the change made again with that answer, never an older one, and once only.
+/// A listing that fails or takes longer than `listingDeadline` changes nothing and says so, and an answer after that
+/// is ignored. The switch's server is restarted once the changes have stopped for `quiet` seconds and none is
+/// waiting: so once, after the last of them has been written, and the server reads it.
 @MainActor
 final class ScopeChanges {
     let path: String
@@ -423,8 +424,7 @@ final class ScopeChanges {
     private var drained: [() -> Void] = []
 
     private struct Job {
-        let listing: ScopeKind?  // listed first
-        let change: @Sendable ([Named]) throws -> (file: ScopeFile?, written: Bool)  // under the lock
+        let change: @Sendable ([Named]?) throws -> (file: ScopeFile?, written: Bool)  // under the lock
         let done: (Result<ScopeFile?, Error>) -> Void
     }
 
@@ -444,8 +444,7 @@ final class ScopeChanges {
     /// Queues the tick; `done` gets the file after it, or why nothing changed.
     func submit(_ tick: ScopeTick, done: @escaping (Result<ScopeFile, Error>) -> Void) {
         let path = self.path
-        enqueue(Job(listing: tick.needsListing ? tick.kind : nil,
-                    change: { items in
+        enqueue(Job(change: { items in
                         let (file, written) = try changeScopeFile(path, tick, items: items)
                         return (file, written)
                     },
@@ -456,8 +455,7 @@ final class ScopeChanges {
     /// gets whether it was done; not when the file was fixed meanwhile.
     func reset(done: @escaping (Result<Bool, Error>) -> Void) {
         let path = self.path
-        enqueue(Job(listing: nil,
-                    change: { _ in
+        enqueue(Job(change: { _ in
                         try withScopeLock(path) {
                             guard case .broken = loadScopeFile(path) else { return (nil, false) }
                             _ = try resetScopeFile(path)
@@ -486,44 +484,51 @@ final class ScopeChanges {
             return
         }
         busy = true
-        let job = queue.removeFirst()
-        guard let kind = job.listing else { return run(job, items: []) }
+        run(queue.removeFirst(), items: nil)
+    }
+
+    private func list(_ kind: ScopeKind, _ job: Job) {
         let request = UUID()
         waiting = request
         Task.detached { [weak self, listing] in
             let items = listing(kind)
-            await self?.listed(items, job, request)
+            await self?.listed(items, kind, job, request)
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + listingDeadline) { [weak self] in
-            MainActor.assumeIsolated { self?.listed(nil, job, request) }
+            MainActor.assumeIsolated { self?.listed(nil, kind, job, request) }
         }
     }
 
     /// The first of the answer and the deadline; the other finds the request taken and does nothing.
-    private func listed(_ items: [Named]?, _ job: Job, _ request: UUID) {
+    private func listed(_ items: [Named]?, _ kind: ScopeKind, _ job: Job, _ request: UUID) {
         guard waiting == request else { return }
         waiting = nil
         guard let items else {
-            let things = switch job.listing {
-            case .lists: "reminder lists"
-            case .folders: "note folders"
-            default: "calendars"
+            // Notes folders are listed only while Notes is open, Reminders lists only once Iris may read them.
+            let problem = switch kind {
+            case .lists: "Iris could not read your reminder lists just now, so nothing was changed. If Iris has never "
+                + "asked for Reminders, run `iris reminders lists` once and allow it."
+            case .folders: "Iris could not read your note folders just now, so nothing was changed. Open Notes and try again."
+            default: "Iris could not read your calendars just now, so nothing was changed."
             }
-            job.done(.failure(IrisError("Iris could not read your \(things) just now, so nothing was changed.")))
+            job.done(.failure(IrisError(problem)))
             return next()
         }
         run(job, items: items)
     }
 
-    private func run(_ job: Job, items: [Named]) {
+    private func run(_ job: Job, items: [Named]?) {
         let change = job.change
         Task.detached { [weak self] in
             let result = Result { try change(items) }
-            await self?.ran(result, job)
+            await self?.ran(result, job, listed: items != nil)
         }
     }
 
-    private func ran(_ result: Result<(file: ScopeFile?, written: Bool), Error>, _ job: Job) {
+    private func ran(_ result: Result<(file: ScopeFile?, written: Bool), Error>, _ job: Job, listed: Bool) {
+        if case .failure(let error) = result, let needed = error as? ScopeListingNeeded, !listed {
+            return list(needed.kind, job)
+        }
         if case .success(let outcome) = result, outcome.written { restartSoon() }
         job.done(result.map(\.file))
         next()
