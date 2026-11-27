@@ -56,7 +56,7 @@ final class AlarmTests: XCTestCase {
         XCTAssertEqual(alarmMinutes([location, timed], start: start), [5])
     }
 
-    func testReminderAlarmsCountFromTheDueInTheirOwnOrder() {
+    func testReminderAlarmsCountFromTheDueLargestFirst() {
         let alarms = [
             EKAlarm(absoluteDate: start),
             EKAlarm(absoluteDate: start.addingTimeInterval(-10 * 60 - 29)),
@@ -64,7 +64,7 @@ final class AlarmTests: XCTestCase {
             EKAlarm(relativeOffset: -15 * 60),
         ]
         // A fixed alarm reads back relativeOffset 0 too: only absoluteDate tells it from one at the due.
-        XCTAssertEqual(reminderAlarmMinutes(alarms, due: start), [0, 10, -5, 15])
+        XCTAssertEqual(reminderAlarmMinutes(alarms, due: start), [15, 10, 0, -5])
         // No moment to count from: a fixed alarm is left out, a relative one is not.
         XCTAssertEqual(reminderAlarmMinutes(alarms, due: nil), [15])
         XCTAssertEqual(reminderAlarmMinutes([], due: start), [])
@@ -84,7 +84,7 @@ final class AlarmTests: XCTestCase {
         // Each keeps its minutes before the due, in order, and comes out as a fixed moment, a relative one too.
         let moved = movedAlarms(timed, from: start, to: later)
         XCTAssertEqual(moved?.map(\.absoluteDate), [later.addingTimeInterval(-600), later.addingTimeInterval(-900), later])
-        XCTAssertEqual(reminderAlarmMinutes(moved ?? [], due: later), [10, 15, 0])
+        XCTAssertEqual(reminderAlarmMinutes(moved ?? [], due: later), [15, 10, 0])
         // No old moment: a fixed alarm cannot be counted, a relative one still can.
         XCTAssertNil(movedAlarms(timed, from: nil, to: later))
         XCTAssertEqual(movedAlarms([EKAlarm(relativeOffset: -300)], from: nil, to: later)?.map(\.absoluteDate),
