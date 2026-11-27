@@ -197,14 +197,6 @@ final class ReminderWriteTests: XCTestCase {
         XCTAssertNil(start.timeZone)
     }
 
-    // Which refusal is chosen. That a refused reminder stays as it was is checked on the device, not here.
-    func testWhichRefusalADueChangeGets() {
-        XCTAssertNil(dueChangeRefusal(hasAlarms: false, repeats: false))
-        XCTAssertTrue(dueChangeRefusal(hasAlarms: true, repeats: false)!.contains("alarm"))
-        XCTAssertTrue(dueChangeRefusal(hasAlarms: false, repeats: true)!.contains("repeats"))
-        XCTAssertTrue(dueChangeRefusal(hasAlarms: true, repeats: true)!.contains("alarm"))
-    }
-
     func testUpdateNeedsAnOptionAndAValidOne() {
         XCTAssertThrowsError(try UpdateReminder.parse(["some-id"]))
         for title in ["", " \n\t "] {
@@ -212,7 +204,13 @@ final class ReminderWriteTests: XCTestCase {
         }
         XCTAssertThrowsError(try UpdateReminder.parse(["some-id", "--due", "tomorrow"]))
         XCTAssertThrowsError(try UpdateReminder.parse(["some-id", "--priority", "urgent"]))
-        for args in [["--notes", ""], ["--due", ""], ["--due", "2030-03-04"], ["--priority", "none"], ["--list", "x"]] {
+        for args in [["--alarm", "-5"], ["--alarm", "5", "--no-alarms"], ["--alarm", "5", "--due", "2030-03-04"],
+                     ["--alarm", "5", "--due", ""]] {
+            XCTAssertThrowsError(try UpdateReminder.parse(["some-id"] + args), "\(args)")
+        }
+        for args in [["--notes", ""], ["--due", ""], ["--due", "2030-03-04"], ["--priority", "none"], ["--list", "x"],
+                     ["--alarm", "0"], ["--no-alarms"], ["--alarm", "5", "--due", "2030-03-04T09:00"],
+                     ["--no-alarms", "--due", ""]] {
             XCTAssertNoThrow(try UpdateReminder.parse(["some-id"] + args), "\(args)")
         }
     }

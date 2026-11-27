@@ -218,9 +218,12 @@ extension Reminder {
 /// alarm at a set time needs that moment to count from, so without one (no due, date only, or a date that is
 /// no moment) it is left out; so is an alarm on arriving at or leaving a place.
 func reminderAlarmMinutes(_ alarms: [EKAlarm], due: Date?) -> [Int] {
-    alarms
-        .filter { $0.structuredLocation == nil && $0.proximity == .none }
-        .compactMap { minutesBefore($0, start: due) }
+    alarms.filter(isTimedAlarm).compactMap { minutesBefore($0, start: due) }
+}
+
+/// An alarm that fires at a time, not on arriving at or leaving a place.
+func isTimedAlarm(_ alarm: EKAlarm) -> Bool {
+    alarm.structuredLocation == nil && alarm.proximity == .none
 }
 
 /// When a reminder is due. date and time are as kept in the reminder; at is the moment, nil for date only.

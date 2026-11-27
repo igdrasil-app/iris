@@ -156,15 +156,24 @@ struct UpdateReminder: AsyncParsableCommand {
             as Reminders sets it when a reminder is first saved, and cleared with the due date. Without \
             --due the start date is left as it is, also one that differs from the due.
 
-            --due is refused, with nothing changed, whatever its value, the same one included:
-            - when the reminder has an alarm. An alarm set in Reminders would stay at its old time, and iris \
-            cannot move it: change the time in Reminders.
-            - when the reminder repeats. Its due date anchors every later occurrence, and iris does not \
-            change a series yet: change it in Reminders.
-            Its title, notes, priority and list can still be changed.
+            --due on a reminder that repeats is refused, with nothing changed, whatever its value, the same \
+            one included: its due date anchors every later occurrence, and iris does not change a series yet: \
+            change it in Reminders. Its title, notes, priority and list can still be changed.
 
-            Alarms are never added, moved or removed, and completed stays as it is. Not offered: alarms, \
-            URL, location, repeating, start date, completed.
+            Timed alarms, those in alarms, move with --due: each keeps its minutes before the due. Moving them \
+            is refused, with nothing changed, when the new due is empty or date only, which leaves them no \
+            time to follow, and when an alarm at a set time cannot be counted because the current due is no \
+            moment (no due, or date only); add --no-alarms to remove them instead.
+            --alarm replaces every timed alarm with the ones given, in minutes before the due as `iris \
+            reminders add` takes them, counted from --due when given, else from the current due. With no \
+            --due, a current due that is missing or date only refuses --alarm.
+            --no-alarms removes every timed alarm.
+            Every alarm written, moved ones too, is kept as the moment it fires, so it notifies on the Mac, \
+            iPhone and Watch alike; Reminders does the same when a time is changed there. --alarm and \
+            --no-alarms on a reminder that repeats are refused: alarms on a repeating reminder are not \
+            offered yet. An alarm on arriving at or leaving a place is never touched.
+
+            completed stays as it is. Not offered: URL, location, repeating, start date, completed.
             """
     )
 
@@ -177,7 +186,7 @@ struct UpdateReminder: AsyncParsableCommand {
     @Option(help: "New notes. An empty string clears them.")
     var notes: String?
 
-    @Option(help: "New due date: 2026-10-13 (date only), 2026-10-13T09:00 (this Mac's time), or ISO 8601 with an offset or Z, as `iris reminders add` takes it. An empty string clears it. Refused when the reminder has an alarm or repeats.")
+    @Option(help: "New due date: 2026-10-13 (date only), 2026-10-13T09:00 (this Mac's time), or ISO 8601 with an offset or Z, as `iris reminders add` takes it. An empty string clears it. Timed alarms move with it. Refused when the reminder repeats.")
     var due: String?
 
     @Option(help: "New priority, in the words `iris reminders list` prints.")
@@ -186,16 +195,27 @@ struct UpdateReminder: AsyncParsableCommand {
     @Option(help: "Move the reminder to this list: id or title, from `iris reminders lists`. Must name one list, and it must be writable.")
     var list: String?
 
+    @Option(name: .customLong("alarm"), help: "Alarm this many minutes before the due time, 0 at it; repeat for several. Replaces every timed alarm. Counted from --due, else the current due, which needs a time. Refused when the reminder repeats. Default: alarms unchanged, or moved with --due.")
+    var alarms: [Int] = []
+
+    @Flag(help: "Remove every timed alarm. Refused when the reminder repeats. Default: alarms unchanged, or moved with --due.")
+    var noAlarms = false
+
     @Option(help: allowedHelp(.lists))
     var allowedLists: String?
 
     func validate() throws {
         _ = try allowedIds(allowedLists, "--allowed-lists")
-        if title == nil, notes == nil, due == nil, priority == nil, list == nil {
-            throw ValidationError("name at least one of --title, --notes, --due, --priority, --list")
+        if title == nil, notes == nil, due == nil, priority == nil, list == nil, alarms.isEmpty, !noAlarms {
+            throw ValidationError("name at least one of --title, --notes, --due, --priority, --list, --alarm, --no-alarms")
         }
         if let title, !isValidTitle(title) { throw ValidationError("--title must not be empty") }
-        _ = try newDue(mac: macCalendar())
+        let dueParts = try newDue(mac: macCalendar())
+        if alarms.contains(where: { $0 < 0 }) { throw ValidationError("--alarm takes minutes of 0 or more") }
+        if noAlarms, !alarms.isEmpty { throw ValidationError("--no-alarms and --alarm do not mix") }
+        if !alarms.isEmpty, due != nil, dueParts?.hour == nil {
+            throw ValidationError("--alarm needs a due with a time, and --due here is date only or empty")
+        }
     }
 
     func run() async throws {
@@ -209,11 +229,19 @@ struct UpdateReminder: AsyncParsableCommand {
             throw IrisError("list \(reminder.calendar?.title ?? "") is read-only")
         }
         let target = try list.map { try writableList($0, in: store, allowed: allowed) }
-        // The alarms themselves are read: only they say for certain whether there is one.
-        let hasAlarms = !(reminder.alarms ?? []).isEmpty
-        if due != nil, let refusal = dueChangeRefusal(hasAlarms: hasAlarms, repeats: reminder.hasRecurrenceRules) {
-            throw IrisError(refusal)
+        let repeats = reminder.hasRecurrenceRules
+        if due != nil, repeats {
+            throw IrisError("this reminder repeats, and iris does not change the due date of a repeating reminder, so "
+                + "nothing was changed. Change it in Reminders.")
         }
+        if repeats, !alarms.isEmpty || noAlarms {
+            throw IrisError("this reminder repeats, and alarms on a repeating reminder are not offered yet, so nothing "
+                + "was changed. Change them in Reminders.")
+        }
+        // Worked out before anything changes, so a refusal leaves the reminder as it was.
+        let timed = (reminder.alarms ?? []).filter(isTimedAlarm)
+        let newTimed = try newTimedAlarms(timed, currentDue: reminderDue(reminder.dueDateComponents, mac: mac)?.at,
+                                          dueParts: dueParts, mac: mac)
 
         if let title { reminder.title = title }
         if let notes { reminder.notes = notes.isEmpty ? nil : notes }
@@ -222,6 +250,10 @@ struct UpdateReminder: AsyncParsableCommand {
         if due != nil {
             reminder.dueDateComponents = dueParts
             reminder.startDateComponents = dueParts.map(startComponents)
+        }
+        if let newTimed {
+            for alarm in timed { reminder.removeAlarm(alarm) }
+            for alarm in newTimed { reminder.addAlarm(alarm) }
         }
 
         do {
@@ -237,19 +269,42 @@ struct UpdateReminder: AsyncParsableCommand {
         guard let due, !due.isEmpty else { return nil }
         return try dueComponents(due, mac: mac)
     }
+
+    /// The timed alarms that take the place of `timed`, or nil to leave them as they are.
+    private func newTimedAlarms(_ timed: [EKAlarm], currentDue: Date?, dueParts: DateComponents?,
+                                mac: Calendar) throws -> [EKAlarm]? {
+        if noAlarms { return [] }
+        let newDue = due == nil ? currentDue : dueParts.flatMap { reminderDue($0, mac: mac)?.at }
+        if !alarms.isEmpty {
+            // validate() refused a --due without a time, so only the current due can lack one here.
+            guard let newDue else {
+                throw IrisError("this reminder's due has no time, so --alarm has nothing to count from, and nothing "
+                    + "was changed. Pass --due with a time too.")
+            }
+            return reminderAlarms(alarms, due: newDue)
+        }
+        guard due != nil, !timed.isEmpty else { return nil }
+        guard let newDue else {
+            throw IrisError("this reminder has alarms, and the new due has no time for them to follow, so nothing was "
+                + "changed. Pass --no-alarms too to remove them, or a --due with a time.")
+        }
+        guard let moved = movedAlarms(timed, from: currentDue, to: newDue) else {
+            throw IrisError("this reminder has an alarm at a set time, and its due has no time to count it from, so it "
+                + "cannot be moved, and nothing was changed. Pass --alarm to set new ones, or --no-alarms to remove them.")
+        }
+        return moved
+    }
 }
 
-/// Why the due date of a reminder cannot be changed here, or nil when it can.
-func dueChangeRefusal(hasAlarms: Bool, repeats: Bool) -> String? {
-    if hasAlarms {
-        return "this reminder has an alarm set in Reminders, which would stay at its old time if the due date "
-            + "changed, and iris cannot move it, so nothing was changed. Change the time in Reminders."
+/// Timed alarms moved with the due from `old` to `new`: each keeps its whole minutes before the due, in order,
+/// and is written as the moment it fires. nil when one is at a set time and there is no `old` to count it from.
+func movedAlarms(_ timed: [EKAlarm], from old: Date?, to new: Date) -> [EKAlarm]? {
+    var minutes: [Int] = []
+    for alarm in timed {
+        guard let before = minutesBefore(alarm, start: old) else { return nil }
+        minutes.append(before)
     }
-    if repeats {
-        return "this reminder repeats, and iris does not change the due date of a repeating reminder, so nothing "
-            + "was changed. Change it in Reminders."
-    }
-    return nil
+    return reminderAlarms(minutes, due: new)
 }
 
 /// The start date Reminders itself sets when a reminder with this due is first saved: the due for a time,

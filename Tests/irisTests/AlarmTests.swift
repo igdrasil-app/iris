@@ -77,6 +77,21 @@ final class AlarmTests: XCTestCase {
         XCTAssertEqual(reminderAlarmMinutes(written, due: start), [10, 0])
     }
 
+    func testReminderAlarmsMoveWithTheDue() {
+        let later = start.addingTimeInterval(90 * 60)
+        let timed = [EKAlarm(absoluteDate: start.addingTimeInterval(-600)), EKAlarm(relativeOffset: -15 * 60),
+                     EKAlarm(absoluteDate: start)]
+        // Each keeps its minutes before the due, in order, and comes out as a fixed moment, a relative one too.
+        let moved = movedAlarms(timed, from: start, to: later)
+        XCTAssertEqual(moved?.map(\.absoluteDate), [later.addingTimeInterval(-600), later.addingTimeInterval(-900), later])
+        XCTAssertEqual(reminderAlarmMinutes(moved ?? [], due: later), [10, 15, 0])
+        // No old moment: a fixed alarm cannot be counted, a relative one still can.
+        XCTAssertNil(movedAlarms(timed, from: nil, to: later))
+        XCTAssertEqual(movedAlarms([EKAlarm(relativeOffset: -300)], from: nil, to: later)?.map(\.absoluteDate),
+                       [later.addingTimeInterval(-300)])
+        XCTAssertEqual(movedAlarms([], from: nil, to: later)?.count, 0)
+    }
+
     func testReminderLocationAlarmIsLeftOut() {
         let arriving = EKAlarm(relativeOffset: 0)
         arriving.structuredLocation = EKStructuredLocation(title: "Home")

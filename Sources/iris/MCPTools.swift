@@ -260,7 +260,7 @@ let tools: [Tool] = [
     ]),
 
     Tool(name: "update_reminder",
-         description: "Change a reminder. Only the fields you name, at least one, change; the id stays. Returns it as reminders lists it. due is refused, with nothing changed, whatever its value, when the reminder has an alarm (iris cannot move it; the time is changed in Reminders) or repeats. Alarms and completed are never changed.",
+         description: "Change a reminder. Only the fields you name, at least one, change; the id stays. Returns it as reminders lists it. due is refused, with nothing changed, whatever its value, when the reminder repeats. Timed alarms move with due, keeping their minutes before it; refused, with nothing changed, when the new due is empty or date only, or an alarm at a set time cannot be counted from the current due, unless noAlarms removes them. Alarms are written as fixed moments, so they notify on every device; an alarm at a place is never touched. alarms and noAlarms are refused on a repeating reminder. completed is never changed.",
          command: ["reminders", "update"], scope: .lists, parameters: [
         Parameter(name: "id", kind: .positional, description: "Reminder id, from reminders.", required: true),
         Parameter(name: "title", kind: .string, description: "New title, not empty."),
@@ -268,6 +268,8 @@ let tools: [Tool] = [
         Parameter(name: "due", kind: .string, description: "New due date, in the forms of add_reminder. An empty string clears it. The start date Reminders keeps follows it."),
         Parameter(name: "priority", kind: .string, description: "New priority.", choices: ["none", "low", "medium", "high"]),
         Parameter(name: "list", kind: .string, description: "Move the reminder to this list: id or title, from reminder_lists. Must name one writable list."),
+        Parameter(name: "alarms", kind: .integers, description: "Minutes before the due time, one entry per alarm; 0 is at the due time. Replaces every timed alarm. Counted from due, else the current due, which needs a time. Default: alarms unchanged, or moved with due.", flag: "alarm"),
+        Parameter(name: "noAlarms", kind: .flag, description: "Remove every timed alarm. Default: alarms unchanged, or moved with due.", flag: "no-alarms"),
     ]),
 
     Tool(name: "complete_reminder",
