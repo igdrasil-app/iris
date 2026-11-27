@@ -112,7 +112,7 @@ struct AddReminder: AsyncParsableCommand {
         }
         // validate() made sure --alarm comes with a due that is a moment.
         if let dueMoment = dueParts.flatMap({ reminderDue($0, mac: mac)?.at }) {
-            for minutes in alarms { reminder.addAlarm(EKAlarm(absoluteDate: dueMoment.addingTimeInterval(-Double(minutes) * 60))) }
+            for alarm in reminderAlarms(alarms, due: dueMoment) { reminder.addAlarm(alarm) }
         }
 
         do {
@@ -428,6 +428,11 @@ func isDay(_ text: String) -> Bool {
     guard let day = parseDay(text, timeZone: utc.timeZone) else { return false }
     let parts = utc.dateComponents([.year, .month, .day], from: day)
     return String(format: "%04ld-%02ld-%02ld", parts.year ?? 0, parts.month ?? 0, parts.day ?? 0) == text
+}
+
+/// Alarms `minutes` before `due`, each kept as the moment it fires: a relative offset notifies on the Mac only.
+func reminderAlarms(_ minutes: [Int], due: Date) -> [EKAlarm] {
+    minutes.map { EKAlarm(absoluteDate: due.addingTimeInterval(-Double($0) * 60)) }
 }
 
 /// A reminder as `complete` prints it: the 13 keys of `iris reminders list`, and completedOccurrence.

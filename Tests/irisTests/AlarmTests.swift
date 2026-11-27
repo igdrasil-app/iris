@@ -70,6 +70,13 @@ final class AlarmTests: XCTestCase {
         XCTAssertEqual(reminderAlarmMinutes([], due: start), [])
     }
 
+    func testReminderAlarmsAreWrittenAsFixedMoments() {
+        // A relative alarm notifies on the Mac only (measured, IGD-128): every one written must carry a moment.
+        let written = reminderAlarms([10, 0], due: start)
+        XCTAssertEqual(written.map(\.absoluteDate), [start.addingTimeInterval(-600), start])
+        XCTAssertEqual(reminderAlarmMinutes(written, due: start), [10, 0])
+    }
+
     func testReminderLocationAlarmIsLeftOut() {
         let arriving = EKAlarm(relativeOffset: 0)
         arriving.structuredLocation = EKStructuredLocation(title: "Home")
