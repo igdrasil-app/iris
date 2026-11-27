@@ -72,7 +72,8 @@ cask "iris" do
 end
 CASK
 
-# The feed SUFeedURL in Info.plist reads; Sparkle downloads the same tarball as brew.
+# The feed Sparkle reads: SUFeedURL serves this file through updates.igdrasil.app (the tap's stats/feed),
+# and Iris 0.1.10 and earlier reads it here on GitHub directly. Sparkle downloads the same tarball as brew.
 mkdir -p "$TAP/Appcasts"
 cat > "$APPCAST" <<APPCAST
 <?xml version="1.0" encoding="utf-8"?>

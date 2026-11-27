@@ -24,6 +24,14 @@ The switch at the top of the menu runs remote access for you: on, Iris starts `i
 
 While it runs, the menu bar app updates Iris itself: it checks once a day, offers a new version, and has Check for Updates… next to the version, under Settings. The update replaces Iris.app in place with the same signature, so the Calendar grant, `/opt/homebrew/bin/iris` and `iris mcp` servers started outside Iris carry on (remote access switched on in the menu stops and starts with the app), and the next `iris` starts without a Gatekeeper dialog. A plain `brew upgrade` skips Iris once the app is current; the tap-qualified upgrade reinstalls it, because brew still records the version it installed.
 
+## What Iris sends
+
+Your calendars, notes and reminders stay on this Mac, except what an assistant you connect asks for. Iris itself makes only these requests, and none of them carries anything about you:
+
+- **The menu bar app's update check**, once a day and on Check for Updates…. It asks `https://updates.igdrasil.app/iris/appcast.xml` for the latest version, sending `User-Agent: Iris/<version> Sparkle/<version>` and nothing else: no install id, no system profile. To know how many copies are in use, that server adds 1 to the day's count for the version and the country Cloudflare derives from the connection. It keeps no IP address and no request log, so no one can be told apart. Its code is public, in [homebrew-tap/stats](https://github.com/igdrasil-app/homebrew-tap/tree/main/stats).
+- **An update you accept** is downloaded from the tap's GitHub releases, like `brew install`.
+- **`iris doctor`** asks GitHub's API for the latest release, sending `User-Agent: iris`.
+
 ## Use
 
     iris --help
