@@ -423,6 +423,21 @@ final class MenuTests: XCTestCase {
         }
     }
 
+    /// Three short names fit in the header, and a line that fits keeps the menu within `headerMenuWidth`.
+    @MainActor
+    func testHeaderLineFits() {
+        let three = "Hark, Claude and Cursor · active 9 min ago"
+        XCTAssertTrue(headerLineFits(three))
+        XCTAssertFalse(headerLineFits(three + ", and more"))
+        let menu = NSMenu()
+        let actions = Actions()
+        let items = MenuItems(target: actions)
+        fill(menu, with: items, version: "1.0", openAtLogin: .off, target: actions, updater: nil)
+        let shown = menuModel(.known(state(listeners: [(8788, .current)])), fine, mine)
+        items.show(MenuModel(status: three, rows: shown.rows))
+        XCTAssertLessThanOrEqual(menu.size.width, headerMenuWidth)
+    }
+
     /// The work runs off the main thread, one at a time, and its answer lands on the main thread while the run
     /// loop is in the mode an open menu tracks in.
     @MainActor

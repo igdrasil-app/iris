@@ -1123,7 +1123,7 @@ func headerLineFits(_ line: String) -> Bool {
 }
 
 /// The widest the header's line makes the menu with several names in it; past this they are counted.
-let headerMenuWidth: CGFloat = 320
+let headerMenuWidth: CGFloat = 332
 
 /// Where a menu item's title starts, so the header lines up with the rows. AppKit does not say; this takes the
 /// padding it gives a plain item without a state column as the same on both sides.
