@@ -90,6 +90,9 @@ final class AlarmTests: XCTestCase {
         XCTAssertEqual(movedAlarms([EKAlarm(relativeOffset: -300)], from: nil, to: later)?.map(\.absoluteDate),
                        [later.addingTimeInterval(-300)])
         XCTAssertEqual(movedAlarms([], from: nil, to: later)?.count, 0)
+        // Seconds are kept, not rounded away: 29 s before stays 29 s before.
+        XCTAssertEqual(movedAlarms([EKAlarm(absoluteDate: start.addingTimeInterval(-29))], from: start, to: later)?.map(\.absoluteDate),
+                       [later.addingTimeInterval(-29)])
     }
 
     func testReminderLocationAlarmIsLeftOut() {

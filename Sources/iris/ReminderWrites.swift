@@ -160,10 +160,10 @@ struct UpdateReminder: AsyncParsableCommand {
             one included: its due date anchors every later occurrence, and iris does not change a series yet: \
             change it in Reminders. Its title, notes, priority and list can still be changed.
 
-            Timed alarms, those in alarms, move with --due: each keeps its minutes before the due. Moving them \
+            Timed alarms, those in alarms, move with --due: each keeps its time before the due, to the second. Moving them \
             is refused, with nothing changed, when the new due is empty or date only, which leaves them no \
             time to follow, and when an alarm at a set time cannot be counted because the current due is no \
-            moment (no due, or date only); add --no-alarms to remove them instead.
+            moment (no due, or date only); add --alarm to replace them or --no-alarms to remove them instead.
             --alarm replaces every timed alarm with the ones given, in minutes before the due as `iris \
             reminders add` takes them, counted from --due when given, else from the current due. With no \
             --due, a current due that is missing or date only refuses --alarm.
@@ -296,15 +296,19 @@ struct UpdateReminder: AsyncParsableCommand {
     }
 }
 
-/// Timed alarms moved with the due from `old` to `new`: each keeps its whole minutes before the due, in order,
-/// and is written as the moment it fires. nil when one is at a set time and there is no `old` to count it from.
+/// Timed alarms moved with the due from `old` to `new`: each keeps exactly its time before the due, and is
+/// written as the moment it fires. nil when one is at a set time and there is no `old` to count it from.
 func movedAlarms(_ timed: [EKAlarm], from old: Date?, to new: Date) -> [EKAlarm]? {
-    var minutes: [Int] = []
+    var moved: [EKAlarm] = []
     for alarm in timed {
-        guard let before = minutesBefore(alarm, start: old) else { return nil }
-        minutes.append(before)
+        if let at = alarm.absoluteDate {
+            guard let old else { return nil }
+            moved.append(EKAlarm(absoluteDate: at.addingTimeInterval(new.timeIntervalSince(old))))
+        } else {
+            moved.append(EKAlarm(absoluteDate: new.addingTimeInterval(alarm.relativeOffset)))
+        }
     }
-    return reminderAlarms(minutes, due: new)
+    return moved
 }
 
 /// The start date Reminders itself sets when a reminder with this due is first saved: the due for a time,

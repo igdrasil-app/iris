@@ -260,7 +260,7 @@ let tools: [Tool] = [
     ]),
 
     Tool(name: "update_reminder",
-         description: "Change a reminder. Only the fields you name, at least one, change; the id stays. Returns it as reminders lists it. due is refused, with nothing changed, whatever its value, when the reminder repeats. Timed alarms move with due, keeping their minutes before it; refused, with nothing changed, when the new due is empty or date only, or an alarm at a set time cannot be counted from the current due, unless noAlarms removes them. Alarms are written as fixed moments, so they notify on every device; an alarm at a place is never touched. alarms and noAlarms are refused on a repeating reminder. completed is never changed.",
+         description: "Change a reminder. Only the fields you name, at least one, change; the id stays. Returns it as reminders lists it. due is refused, with nothing changed, whatever its value, when the reminder repeats. Timed alarms move with due, keeping their time before it; refused, with nothing changed, when the new due is empty or date only, or an alarm at a set time cannot be counted from the current due, unless alarms replaces them or noAlarms removes them. Alarms are written as fixed moments, so they notify on every device; an alarm at a place is never touched. alarms and noAlarms are refused on a repeating reminder. completed is never changed.",
          command: ["reminders", "update"], scope: .lists, parameters: [
         Parameter(name: "id", kind: .positional, description: "Reminder id, from reminders.", required: true),
         Parameter(name: "title", kind: .string, description: "New title, not empty."),
