@@ -282,7 +282,7 @@ func applying(_ tick: ScopeTick, to file: ScopeFile, items: [Named],
 /// What an app turned on again shares: the remembered entries, read as the file would have been, as the ids of the
 /// items they name now; dropped, those that name nothing now, and those `checkedApplying` would refuse as one item's
 /// id and another's name. None when nothing is left.
-func restored(_ entries: [String], _ items: [Named]) -> [String] {
+private func restored(_ entries: [String], _ items: [Named]) -> [String] {
     let ids = Set(items.map(\.id))
     var shared = asIds(entries, items).filter(ids.contains)
     while let confusing = shared.first(where: { id in items.contains { $0.name == id && !shared.contains($0.id) } }) {
@@ -424,12 +424,12 @@ func sharedBeforePath(_ scopePath: String) -> String {
 /// again, so an app that is off stays off until its items are chosen, never turned on with everything.
 let unreadableSharedBefore: SharedBefore = [.calendars: .entries([]), .lists: .entries([]), .folders: .entries([])]
 
-/// What is remembered: nothing when there is no file, as on a first run; nil when the file cannot be read, or is
-/// not one Iris writes. Read without the lock by the menu, which only shows it: each write replaces the file whole.
+/// What is remembered: nothing when there is no file, as on a first run; nil when the file cannot be read, is a
+/// link, or is not one Iris writes. Read without the lock by the menu, which only shows it: each write replaces the file whole.
 func loadSharedBefore(_ path: String) -> SharedBefore? {
     var info = stat()
     if lstat(path, &info) != 0 && errno == ENOENT { return [:] }
-    guard let data = try? readPrivateFile(path, noun: "memory", recipe: "", limit: scopeFileLimit),
+    guard let data = try? readPrivateFile(path, noun: "memory", recipe: "", limit: scopeFileLimit, followLinks: false),
           let keys = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return nil }
     var remembered: SharedBefore = [:]
     for (key, value) in keys {
@@ -445,7 +445,8 @@ func loadSharedBefore(_ path: String) -> SharedBefore? {
     return remembered
 }
 
-/// Replaces the memory whole, owner-only, as the scope file is written.
+/// Replaces the memory whole, owner-only, as the scope file is written; a link in its place is replaced itself, and
+/// what it leads to left alone.
 func writeSharedBefore(_ remembered: SharedBefore, to path: String) throws {
     var keys: [String: Any] = [:]
     for (kind, value) in remembered {
@@ -456,7 +457,7 @@ func writeSharedBefore(_ remembered: SharedBefore, to path: String) throws {
     }
     let data = try JSONSerialization.data(withJSONObject: keys, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
     guard data.count < scopeFileLimit else { throw IrisError("what Iris remembers would be too long to read back") }
-    try replacePrivateFile(path, data + Data("\n".utf8))
+    try replacePrivateFile(path, data + Data("\n".utf8), followLinks: false)
 }
 
 /// The scope file at a path as the menu bar finds it.
@@ -506,8 +507,8 @@ func resetScopeFile(_ path: String, now: Date = Date()) throws -> String {
 /// the old one, so a reader sees the old file or the new, never a part. Links are followed: the file they lead to
 /// is replaced. The folder must be this user's and writable by no one else, so no one can put another file in
 /// its place; one made here is open to this user only.
-private func replacePrivateFile(_ path: String, _ contents: Data) throws {
-    let target = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+private func replacePrivateFile(_ path: String, _ contents: Data, followLinks: Bool = true) throws {
+    let target = followLinks ? URL(fileURLWithPath: path).resolvingSymlinksInPath().path : path
     let directory = (target as NSString).deletingLastPathComponent
     do {
         try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true,

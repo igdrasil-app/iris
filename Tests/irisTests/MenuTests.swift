@@ -230,7 +230,7 @@ final class MenuTests: XCTestCase {
         var shared: [ShareAction] = []
         func chooseRow(_ sender: NSMenuItem) {}
         func chooseShare(_ sender: NSMenuItem) { shared.append(sender.representedObject as! ShareAction) }
-        func toggleRemoteAccess(_ sender: NSSwitch) { switched.append(sender.state) }
+        func toggleRemoteAccess(_ sender: MenuSwitch) { switched.append(sender.state) }
         func showRemoteFailure() { failuresShown += 1 }
         func toggleOpenAtLogin() {}
     }
@@ -335,6 +335,64 @@ final class MenuTests: XCTestCase {
         XCTAssertTrue(settings.items[2].target === actions)
         XCTAssertEqual(settings.items[2].action, #selector(MenuActions.toggleOpenAtLogin))
         XCTAssertEqual(settings.items[1].action, #selector(SPUStandardUpdaterController.checkForUpdates))
+    }
+
+    /// The header's switch: read by VoiceOver as a switch, turned by a click or VoiceOver's press, each sending the
+    /// action once; disabled, neither. Drawn in a window that is not key, as a menu's is, it shows the accent colour
+    /// when on, and not when off.
+    @MainActor
+    func testMenuSwitch() throws {
+        let actions = Actions()
+        let toggle = MenuSwitch(frame: NSRect(origin: .zero, size: MenuSwitch().intrinsicContentSize))
+        toggle.target = actions
+        toggle.action = #selector(MenuActions.toggleRemoteAccess)
+        toggle.setAccessibilityLabel("Remote access")
+        XCTAssertTrue(toggle.isAccessibilityElement())
+        XCTAssertEqual(toggle.accessibilityRole(), .button)
+        XCTAssertEqual(toggle.accessibilitySubrole(), .switch)
+        XCTAssertEqual(toggle.accessibilityLabel(), "Remote access")
+        XCTAssertEqual(toggle.accessibilityValue() as? NSNumber, 0)
+        XCTAssertTrue(toggle.accessibilityPerformPress())
+        XCTAssertEqual(toggle.state, .on)
+        XCTAssertEqual(toggle.accessibilityValue() as? NSNumber, 1)
+        let up = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseUp, location: NSPoint(x: 5, y: 5), modifierFlags: [], timestamp: 0,
+                                                  windowNumber: 0, context: nil, eventNumber: 0, clickCount: 1, pressure: 0))
+        toggle.mouseUp(with: up)
+        XCTAssertEqual(toggle.state, .off)
+        XCTAssertEqual(actions.switched, [.on, .off])
+        toggle.isEnabled = false
+        XCTAssertFalse(toggle.accessibilityPerformPress())
+        toggle.mouseUp(with: up)
+        XCTAssertEqual(actions.switched, [.on, .off])
+        XCTAssertFalse(toggle.isAccessibilityEnabled())
+
+        /// The most saturated colour drawn, in a borderless window never made key.
+        func saturation(on: Bool, enabled: Bool, _ name: NSAppearance.Name) throws -> CGFloat {
+            let window = NSWindow(contentRect: NSRect(x: -10000, y: -10000, width: 80, height: 40), styleMask: [.borderless],
+                                  backing: .buffered, defer: false)
+            let drawn = MenuSwitch(frame: NSRect(origin: .zero, size: toggle.frame.size))
+            drawn.state = on ? .on : .off
+            drawn.isEnabled = enabled
+            window.contentView?.addSubview(drawn)
+            window.appearance = NSAppearance(named: name)
+            XCTAssertFalse(window.isKeyWindow)
+            let rep = try XCTUnwrap(drawn.bitmapImageRepForCachingDisplay(in: drawn.bounds))
+            drawn.cacheDisplay(in: drawn.bounds, to: rep)
+            var most: CGFloat = 0
+            for x in 0..<rep.pixelsWide {
+                for y in 0..<rep.pixelsHigh {
+                    guard let color = rep.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
+                    most = max(most, color.saturationComponent * color.alphaComponent)
+                }
+            }
+            return most
+        }
+        for name in [NSAppearance.Name.aqua, .darkAqua] {
+            XCTAssertGreaterThan(try saturation(on: true, enabled: true, name), 0.6, name.rawValue)
+            XCTAssertLessThan(try saturation(on: false, enabled: true, name), 0.1, name.rawValue)
+            let dimmed = try saturation(on: true, enabled: false, name)
+            XCTAssertTrue(dimmed > 0.2 && dimmed < 0.6, "\(name.rawValue) \(dimmed)")
+        }
     }
 
     /// A menu already measured grows for a longer header line. Not a test of a menu that is open.
@@ -499,8 +557,8 @@ final class MenuTests: XCTestCase {
             XCTAssertEqual(lines(off.choices), ["✓ Off", "  Read Only", "  Read & Write"])
             XCTAssertNil(off.which)
         }
-        // Off, and nothing remembered can be shared again (deleted, or not listed yet to tell, or a memory that cannot
-        // be read): the items are offered to choose from, none ticked. Not while Read Only can turn it on.
+        // Off with entries remembered (deleted or not, listed or not, or a memory that cannot be read): the items are
+        // offered to choose from, none ticked. Not with nothing remembered, or "all", which Read Only always restores.
         let none = ScopeFileState.file(ScopeFile(calendars: [], folders: []))
         let gone = shareMenu(.calendars, none, listed, remembered: .entries(["c9"]))
         XCTAssertEqual(lines(gone.choices), ["✓ Off", "  Read Only", "  Read & Write"])
@@ -508,7 +566,7 @@ final class MenuTests: XCTestCase {
         XCTAssertEqual(lines(gone.items), ["  All Calendars", "---", "  Work", "  Family", "  Birthdays"])
         XCTAssertEqual(shareMenu(.calendars, none, .loading, remembered: .entries(["c1"])).which, "Choose Calendars")
         XCTAssertEqual(shareMenu(.folders, .missing, .openNotes, remembered: .entries([])).which, "Choose Folders")
-        XCTAssertNil(shareMenu(.calendars, none, listed, remembered: .entries(["c1", "c9"])).which)
+        XCTAssertEqual(shareMenu(.calendars, none, listed, remembered: .entries(["c1", "c9"])).which, "Choose Calendars")
         XCTAssertNil(shareMenu(.calendars, none, listed, remembered: .all).which)
         XCTAssertNil(shareMenu(.calendars, none, listed).which)
         XCTAssertEqual(shareMenu(.calendars, some, listed, remembered: .entries(["c9"])).which, "2 of 3 Calendars")

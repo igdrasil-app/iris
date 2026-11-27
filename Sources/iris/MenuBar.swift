@@ -286,7 +286,7 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate, MenuAction
         probeNotes(ask: true)
     }
 
-    func toggleRemoteAccess(_ sender: NSSwitch) {
+    func toggleRemoteAccess(_ sender: MenuSwitch) {
         server.turn(on: sender.state == .on)
         showMenu()
     }
@@ -482,8 +482,8 @@ enum ShareEntry: Equatable {
 }
 
 /// A row's submenu: Off, Read Only and, for Calendar and Reminders, Read & Write, one of them ticked; then a line
-/// that says which items, opening `items`: while the app shares something, and while it is off and Read Only could
-/// not turn it on, as nothing it shared before can be shared again. A file that cannot be read offers only its
+/// that says which items, opening `items`: while the app shares something, and while it is off with entries it
+/// shared before remembered, which Read Only may find it cannot share again. A file that cannot be read offers only its
 /// problem, never a tick that would write over it.
 struct ShareMenu: Equatable {
     let choices: [ShareEntry]
@@ -556,14 +556,9 @@ func shareMenu(_ kind: ScopeKind, _ state: ScopeFileState, _ source: ShareSource
             items.append(.choice("Missing: \(entry)", on: true, .tick(.remove(kind, entry))))
         }
     }
-    // Not known to be possible until listed.
+    // Whether Read Only can turn the app on is known only once it is listed under the lock.
     var choose: String?
-    if !shared, case .entries(let entries) = remembered {
-        let restorable = if case .listed(let listed) = source {
-            !restored(entries, listed.map { Named(id: $0.id, name: $0.name) }).isEmpty
-        } else { false }
-        if !restorable { choose = "Choose \(noun)" }
-    }
+    if !shared, case .entries = remembered { choose = "Choose \(noun)" }
     return ShareMenu(choices: choices, which: shared ? which : choose, items: items)
 }
 
@@ -713,7 +708,7 @@ func remoteStatusLine(_ remote: RemoteAnswer, _ server: RemoteServerStatus) -> S
 @MainActor @objc protocol MenuActions {
     func chooseRow(_ sender: NSMenuItem)
     func chooseShare(_ sender: NSMenuItem)
-    func toggleRemoteAccess(_ sender: NSSwitch)
+    func toggleRemoteAccess(_ sender: MenuSwitch)
     func showRemoteFailure()
     func toggleOpenAtLogin()
 }
@@ -910,12 +905,105 @@ func fill(_ menu: NSMenu, with items: MenuItems, version: String?, openAtLogin: 
 
     menu.addItem(.separator())
     menu.addItem(withTitle: "Quit Iris", action: #selector(NSApplication.terminate), keyEquivalent: "")
-    // ⌘Q quits all the same, from an item that is not shown: one shown would make every row keep room for its key,
-    // which pushes the rows' words away from their arrows.
+    // While the menu is open, ⌘Q quits from an item that is not shown, as the shown one did: one shown would make
+    // every row keep room for its key, which pushes the rows' words away from their arrows.
     let quit = NSMenuItem(title: "Quit Iris", action: #selector(NSApplication.terminate), keyEquivalent: "q")
     quit.isHidden = true
     quit.allowsKeyEquivalentWhenHidden = true
     menu.addItem(quit)
+}
+
+/// The header's on and off switch, drawn here in the system switch's size and colours. NSSwitch draws its inactive
+/// look, a grey track, in any window that is not key, and a menu's window never is; AppKit has no way to ask for the
+/// active look. On, the track is the accent colour; off, the system's light fill; disabled, both dimmed. A click
+/// turns it and sends the action, and the menu stays open. VoiceOver reads it as NSSwitch reads: a switch, by its
+/// label, with its value.
+@MainActor
+final class MenuSwitch: NSControl {
+    var state: NSControl.StateValue = .off {
+        didSet {
+            guard state != oldValue else { return }
+            knob = state == .on ? 1 : 0
+            NSAccessibility.post(element: self, notification: .valueChanged)
+        }
+    }
+    // Where the knob is, 0 at the left and 1 at the right; between the two while it moves.
+    private var knob: CGFloat = 0 { didSet { needsDisplay = true } }
+    private var moving: Timer?
+
+    override var isEnabled: Bool { didSet { needsDisplay = true } }
+
+    /// The size of the system's small switch on this macOS.
+    override var intrinsicContentSize: NSSize {
+        let system = NSSwitch()
+        system.controlSize = .small
+        return system.intrinsicContentSize
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let bounds = self.bounds
+        let inset = (bounds.height / 12).rounded(.toNearestOrAwayFromZero) / 2  // 1.5 at the system's 24 points high
+        let track = NSBezierPath(roundedRect: bounds, xRadius: bounds.height / 2, yRadius: bounds.height / 2)
+        let knobHeight = bounds.height - 2 * inset
+        // macOS 26 draws the knob as a capsule more than half the track's width; earlier ones as a circle.
+        let knobWidth: CGFloat = if #available(macOS 26, *) { (bounds.width * 0.58).rounded() } else { knobHeight }
+        let knobRect = NSRect(x: inset + knob * (bounds.width - 2 * inset - knobWidth), y: inset, width: knobWidth, height: knobHeight)
+        NSGraphicsContext.saveGraphicsState()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+        if !isEnabled { NSGraphicsContext.current?.cgContext.setAlpha(0.5) }
+        NSColor.quaternaryLabelColor.setFill()
+        track.fill()
+        // The accent colour fades in as the knob moves right.
+        NSColor.controlAccentColor.withAlphaComponent(knob).setFill()
+        track.fill()
+        let shadow = NSShadow()
+        shadow.shadowColor = NSColor.black.withAlphaComponent(0.25)
+        shadow.shadowOffset = NSSize(width: 0, height: -0.5)
+        shadow.shadowBlurRadius = 1
+        shadow.set()
+        NSColor.white.setFill()
+        NSBezierPath(roundedRect: knobRect, xRadius: knobHeight / 2, yRadius: knobHeight / 2).fill()
+    }
+
+    override func mouseDown(with event: NSEvent) {}
+
+    override func mouseUp(with event: NSEvent) {
+        guard isEnabled, bounds.contains(convert(event.locationInWindow, from: nil)) else { return }
+        turn()
+    }
+
+    /// The knob moves over a sixth of a second, by a timer in the common modes, which run while a menu is open.
+    private func turn() {
+        let from = knob
+        state = state == .on ? .off : .on
+        let to = knob
+        knob = from
+        moving?.invalidate()
+        let start = Date()
+        let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] timer in
+            MainActor.assumeIsolated {
+                guard let self else { return timer.invalidate() }
+                let done = min(Date().timeIntervalSince(start) / 0.17, 1)
+                self.knob = from + (to - from) * CGFloat(done)
+                if done == 1 { timer.invalidate() }
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        moving = timer
+        sendAction(action, to: target)
+    }
+
+    override func isAccessibilityElement() -> Bool { true }
+    override func accessibilityRole() -> NSAccessibility.Role? { .button }
+    override func accessibilitySubrole() -> NSAccessibility.Subrole? { .switch }
+    override func accessibilityValue() -> Any? { NSNumber(value: state == .on ? 1 : 0) }
+    override func isAccessibilityEnabled() -> Bool { isEnabled }
+
+    override func accessibilityPerformPress() -> Bool {
+        guard isEnabled else { return false }
+        turn()
+        return true
+    }
 }
 
 /// The menu's first item, not a row: Iris, and under it the state of remote access in grey, with the remote
@@ -925,7 +1013,7 @@ func fill(_ menu: NSMenu, with items: MenuItems, version: String?, openAtLogin: 
 final class MenuHeader: NSView {
     private let name = NSTextField(labelWithString: "Iris")
     private let state = NSTextField(labelWithString: "")
-    let toggle = NSSwitch()
+    let toggle = MenuSwitch()
 
     var status: String {
         get { state.stringValue }
@@ -949,7 +1037,6 @@ final class MenuHeader: NSView {
         lines.spacing = 1
         lines.translatesAutoresizingMaskIntoConstraints = false
         addSubview(lines)
-        toggle.controlSize = .small
         toggle.setAccessibilityLabel("Remote access")
         toggle.translatesAutoresizingMaskIntoConstraints = false
         addSubview(toggle)

@@ -702,6 +702,27 @@ final class ScopeTests: XCTestCase {
         XCTAssertEqual(try changeScopeFile(path, .access(.calendars, .readOnly), items: nil).file.calendars, nil)
     }
 
+    /// A link in the memory's place is never followed: read, it is a memory that cannot be read, so an app off stays
+    /// off; written, the link itself is replaced and the file it led to keeps its bytes.
+    func testMemoryLinkIsNotFollowed() throws {
+        let folder = NSTemporaryDirectory() + "iris-memory-link-" + UUID().uuidString
+        defer { try? FileManager.default.removeItem(atPath: folder) }
+        let path = folder + "/http-scope"
+        let memory = path + ".shared-before"
+        let unrelated = folder + "/unrelated"
+        try writeScopeFile(ScopeFile(calendars: [], folders: ["f1"]), to: path)
+        let bytes = Data("private, not Iris's\n".utf8)
+        XCTAssertTrue(FileManager.default.createFile(atPath: unrelated, contents: bytes, attributes: [.posixPermissions: 0o600]))
+        try FileManager.default.createSymbolicLink(atPath: memory, withDestinationPath: unrelated)
+        XCTAssertNil(loadSharedBefore(memory))
+        XCTAssertThrowsError(try changeScopeFile(path, .access(.calendars, .readOnly), items: nil))
+        XCTAssertEqual(try readScopeFile(path).calendars, [])
+        _ = try changeScopeFile(path, .access(.folders, .off), items: nil)
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: unrelated)), bytes)
+        XCTAssertEqual(try FileManager.default.attributesOfItem(atPath: memory)[.type] as? FileAttributeType, .typeRegular)
+        XCTAssertEqual(loadSharedBefore(memory), [.calendars: .entries([]), .lists: .entries([]), .folders: .entries(["f1"])])
+    }
+
     func testEncodedFileReadsBack() throws {
         let files = [ScopeFile(calendars: [], folders: []), ScopeFile(calendars: nil, folders: nil, lists: nil),
                      ScopeFile(calendars: ["c1", "x/y \"quoted\""], folders: ["f/1"], lists: ["l1"], writes: true,
