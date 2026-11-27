@@ -24,6 +24,14 @@ The switch at the top of the menu runs remote access for you: on, Iris starts `i
 
 While it runs, the menu bar app updates Iris itself: it checks once a day, offers a new version, and has Check for Updates… next to the version, under Settings. The update replaces Iris.app in place with the same signature, so the Calendar grant, `/opt/homebrew/bin/iris` and `iris mcp` servers started outside Iris carry on (remote access switched on in the menu stops and starts with the app), and the next `iris` starts without a Gatekeeper dialog. A plain `brew upgrade` skips Iris once the app is current; the tap-qualified upgrade reinstalls it, because brew still records the version it installed.
 
+## What Iris sends
+
+Iris reads your calendars, notes and reminders on this Mac and never uploads them; only an assistant you connect gets what it asks for. Your accounts' own syncing (iCloud and others) carries on as before. Iris itself makes only the requests below. None carries an account, an install id or anything from your calendars, notes or reminders. Like any request, each one reveals your IP address to the server, and macOS adds your preferred languages (`Accept-Language`).
+
+- **The menu bar app's update check**, once a day and on Check for Updates…. It asks `https://updates.igdrasil.app/iris/appcast.xml` for the latest version, identified as `User-Agent: Iris/<version> Sparkle/<version>`, with no system profile. To know how many copies are in use, that server adds 1 to the day's count for the version and the country Cloudflare derives from the connection. It stores nothing else: no IP address, no request log. Its code is public, in [homebrew-tap/stats](https://github.com/igdrasil-app/homebrew-tap/tree/main/stats).
+- **An update** is downloaded from the tap's GitHub releases, like `brew install`, with the same `User-Agent: Iris/<version> Sparkle/<version>`. That happens when you accept it, or by itself if you chose to download and install updates automatically.
+- **`iris doctor`** asks GitHub's API for the latest release, as `User-Agent: iris`.
+
 ## Use
 
     iris --help
