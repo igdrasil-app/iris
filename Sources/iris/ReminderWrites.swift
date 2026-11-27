@@ -7,7 +7,7 @@ struct AddReminder: AsyncParsableCommand {
         commandName: "add",
         abstract: "Create a reminder. Prints it as `iris reminders list` does.",
         discussion: """
-            Prints the reminder with the 12 keys of `iris reminders list`, read back after the save.
+            Prints the reminder with the 13 keys of `iris reminders list`, read back after the save.
 
             --due takes three forms:
             - A bare date, 2026-10-13: due that day at no set time. date is 2026-10-13; time, timeZone and \
@@ -34,8 +34,12 @@ struct AddReminder: AsyncParsableCommand {
             - With --count 1, or --until on the due day, it still reads recurring true, and completing its \
             one occurrence completes the reminder itself.
 
-            No alarm is set, whatever the due, and nothing here promises a notification. Not offered: \
-            alarms, URL, location, start date, completed.
+            --alarm sets an alarm that many minutes before the due time, 0 at it; repeat for several. It \
+            needs --due with a time. Each is kept as the moment it fires, not as an offset from the due, so \
+            it notifies on the Mac, iPhone and Watch alike, and reads back in alarms as minutes before the \
+            due. Without --alarm no alarm is set, and a reminder with a time but no alarm does not notify: \
+            --alarm 0 is how to be notified at the due time. Alarms on a repeating reminder are not offered: \
+            --alarm is refused with --repeat. Not offered: URL, location, start date, completed.
             """
     )
 
@@ -69,6 +73,9 @@ struct AddReminder: AsyncParsableCommand {
     @Option(help: "With --repeat: stop after this many occurrences, the first included. Not with --until. Default: no limit.")
     var count: Int?
 
+    @Option(name: .customLong("alarm"), help: "Alarm this many minutes before the due time, 0 at it; repeat for several. Needs --due with a time. Not with --repeat. Read back in the reminder's alarms. Default: no alarms, and no notification.")
+    var alarms: [Int] = []
+
     @Option(help: allowedHelp(.lists))
     var allowedLists: String?
 
@@ -79,6 +86,11 @@ struct AddReminder: AsyncParsableCommand {
         try checkRepeat(repeatFrequency, every: every, on: on, until: until, count: count)
         if repeatFrequency != nil, dueParts == nil { throw ValidationError("--repeat needs --due") }
         _ = try repeatEnd(dueParts)
+        if alarms.contains(where: { $0 < 0 }) { throw ValidationError("--alarm takes minutes of 0 or more") }
+        if !alarms.isEmpty, dueParts?.hour == nil { throw ValidationError("--alarm needs --due with a time") }
+        if !alarms.isEmpty, repeatFrequency != nil {
+            throw ValidationError("--alarm is not offered with --repeat: alarms on a repeating reminder are not offered yet")
+        }
     }
 
     func run() async throws {
@@ -97,6 +109,10 @@ struct AddReminder: AsyncParsableCommand {
         reminder.priority = priority.value
         if let repeatFrequency {
             reminder.recurrenceRules = [try recurrenceRule(repeatFrequency, every: every, on: on, until: end, count: count)]
+        }
+        // validate() made sure --alarm comes with a due that is a moment.
+        if let dueMoment = dueParts.flatMap({ reminderDue($0, mac: mac)?.at }) {
+            for alarm in reminderAlarms(alarms, due: dueMoment) { reminder.addAlarm(alarm) }
         }
 
         do {
@@ -131,7 +147,7 @@ struct UpdateReminder: AsyncParsableCommand {
         commandName: "update",
         abstract: "Change a reminder. Only the fields you name change. Prints it as `iris reminders list` does.",
         discussion: """
-            Prints the reminder with the 12 keys of `iris reminders list`, read back after the save. Name at \
+            Prints the reminder with the 13 keys of `iris reminders list`, read back after the save. Name at \
             least one option. The id stays the same, also when the reminder moves to another list. A \
             reminder in a read-only list cannot be changed.
 
@@ -248,9 +264,9 @@ struct CompleteReminder: AsyncParsableCommand {
         commandName: "complete",
         abstract: "Mark a reminder completed, or not completed with --undo. Prints it as `iris reminders list` does, and the occurrence completed.",
         discussion: """
-            Prints the reminder whose id was given, with the 12 keys of `iris reminders list`, read back after \
-            the call, and a 13th key, completedOccurrence: null, except after completing an occurrence of a \
-            repeating reminder (below), where it is that occurrence, with the same 12 keys.
+            Prints the reminder whose id was given, with the 13 keys of `iris reminders list`, read back after \
+            the call, and a 14th key, completedOccurrence: null, except after completing an occurrence of a \
+            repeating reminder (below), where it is that occurrence, with the same 13 keys.
 
             A reminder that does not repeat is marked completed, and completedAt says when. One already \
             completed is left as it is, completedAt kept, so the same call sent twice changes nothing the \
@@ -414,7 +430,12 @@ func isDay(_ text: String) -> Bool {
     return String(format: "%04ld-%02ld-%02ld", parts.year ?? 0, parts.month ?? 0, parts.day ?? 0) == text
 }
 
-/// A reminder as `complete` prints it: the 12 keys of `iris reminders list`, and completedOccurrence.
+/// Alarms `minutes` before `due`, each kept as the moment it fires: a relative offset notifies on the Mac only.
+func reminderAlarms(_ minutes: [Int], due: Date) -> [EKAlarm] {
+    minutes.map { EKAlarm(absoluteDate: due.addingTimeInterval(-Double($0) * 60)) }
+}
+
+/// A reminder as `complete` prints it: the 13 keys of `iris reminders list`, and completedOccurrence.
 struct CompletedReminder: Encodable {
     let reminder: Reminder
     let completedOccurrence: Reminder?

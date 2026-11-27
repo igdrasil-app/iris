@@ -55,4 +55,36 @@ final class AlarmTests: XCTestCase {
         location.proximity = .leave
         XCTAssertEqual(alarmMinutes([location, timed], start: start), [5])
     }
+
+    func testReminderAlarmsCountFromTheDueInTheirOwnOrder() {
+        let alarms = [
+            EKAlarm(absoluteDate: start),
+            EKAlarm(absoluteDate: start.addingTimeInterval(-10 * 60 - 29)),
+            EKAlarm(absoluteDate: start.addingTimeInterval(5 * 60)),   // after the due
+            EKAlarm(relativeOffset: -15 * 60),
+        ]
+        // A fixed alarm reads back relativeOffset 0 too: only absoluteDate tells it from one at the due.
+        XCTAssertEqual(reminderAlarmMinutes(alarms, due: start), [0, 10, -5, 15])
+        // No moment to count from: a fixed alarm is left out, a relative one is not.
+        XCTAssertEqual(reminderAlarmMinutes(alarms, due: nil), [15])
+        XCTAssertEqual(reminderAlarmMinutes([], due: start), [])
+    }
+
+    func testReminderAlarmsAreWrittenAsFixedMoments() {
+        // A relative alarm notifies on the Mac only (measured, IGD-128): every one written must carry a moment.
+        let written = reminderAlarms([10, 0], due: start)
+        XCTAssertEqual(written.map(\.absoluteDate), [start.addingTimeInterval(-600), start])
+        XCTAssertEqual(reminderAlarmMinutes(written, due: start), [10, 0])
+    }
+
+    func testReminderLocationAlarmIsLeftOut() {
+        let arriving = EKAlarm(relativeOffset: 0)
+        arriving.structuredLocation = EKStructuredLocation(title: "Home")
+        arriving.proximity = .enter
+        let placeOnly = EKAlarm(absoluteDate: start)
+        placeOnly.structuredLocation = EKStructuredLocation(title: "Office")
+        let proximityOnly = EKAlarm(relativeOffset: 0)
+        proximityOnly.proximity = .leave
+        XCTAssertEqual(reminderAlarmMinutes([arriving, placeOnly, proximityOnly, EKAlarm(absoluteDate: start)], due: start), [0])
+    }
 }

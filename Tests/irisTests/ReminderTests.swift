@@ -194,7 +194,7 @@ final class ReminderTests: XCTestCase {
     private func reminder(_ id: String, due: Due? = nil, created: String? = nil, title: String = "Pay rent",
                           listId: String = "list-a") -> Reminder {
         Reminder(id: id, title: title, list: "Home", listId: listId, notes: nil, due: due, priority: "none",
-                 completed: false, completedAt: nil, created: created.map(instant), modified: nil, recurring: false)
+                 completed: false, completedAt: nil, created: created.map(instant), modified: nil, recurring: false, alarms: [])
     }
 
     private func assertOrder(_ expected: [Reminder], file: StaticString = #filePath, line: UInt = #line) {
@@ -245,7 +245,7 @@ final class ReminderTests: XCTestCase {
         func undated(_ id: String, _ title: String, created: Double) -> Reminder {
             Reminder(id: id, title: title, list: "Home", listId: "list-a", notes: nil, due: nil, priority: "none",
                      completed: false, completedAt: nil, created: Date(timeIntervalSince1970: created), modified: nil,
-                     recurring: false)
+                     recurring: false, alarms: [])
         }
         // b was created later within the same second; a newer second still comes first.
         assertOrder([undated("c", "Zed", created: 1_800_000_001.1),
@@ -254,7 +254,7 @@ final class ReminderTests: XCTestCase {
             let moment = Date(timeIntervalSince1970: at)
             let due = Due(date: "2027-01-15", time: "09:00", timeZone: nil, at: moment, day: Day(year: 2027, month: 1, day: 15))
             return Reminder(id: id, title: title, list: "Home", listId: "list-a", notes: nil, due: due, priority: "none",
-                            completed: false, completedAt: nil, created: nil, modified: nil, recurring: false)
+                            completed: false, completedAt: nil, created: nil, modified: nil, recurring: false, alarms: [])
         }
         assertOrder([timed("a", "Ann", at: 1_800_000_000.9), timed("b", "Bob", at: 1_800_000_000.2),
                      timed("c", "Ann", at: 1_800_000_001.0)])
@@ -279,7 +279,7 @@ final class ReminderTests: XCTestCase {
     func testEveryKeyIsAlwaysThere() throws {
         let undated = try JSONSerialization.jsonObject(with: JSONEncoder().encode(reminder("a"))) as! [String: Any]
         XCTAssertEqual(Set(undated.keys), ["id", "title", "list", "listId", "notes", "due", "priority", "completed",
-                                           "completedAt", "created", "modified", "recurring"])
+                                           "completedAt", "created", "modified", "recurring", "alarms"])
         XCTAssertTrue(undated["due"] is NSNull)
         XCTAssertTrue(undated["notes"] is NSNull)
         XCTAssertTrue(undated["created"] is NSNull)
