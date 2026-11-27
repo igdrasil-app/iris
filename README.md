@@ -95,6 +95,8 @@ Over HTTP the reminder tools are offered only when the scope file names reminder
     mkdir -p ~/Library/Application\ Support/Iris
     (umask 077; openssl rand -base64 32 > ~/Library/Application\ Support/Iris/http-token)
 
+To give a client the token, read it from that file, for example with `pbcopy < ~/Library/Application\ Support/Iris/http-token`. The client also needs an address it can reach: `http://127.0.0.1:8765/mcp` on this Mac, or the public address of a tunnel you run to it.
+
 A caller sees only the calendars, note folders and reminder lists named in `~/Library/Application Support/Iris/http-scope` (or `--scope-file`), and without that file the server does not start. It is JSON with the keys `calendars` and `folders`, and optionally `lists` for reminder lists; each holds names or ids, `"all"`, or `[]` for none:
 
     (umask 077; echo '{"calendars": ["Work"], "folders": "all"}' \
