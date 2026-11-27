@@ -51,75 +51,75 @@ final class MenuTests: XCTestCase {
     }
 
     func testOneServer() {
-        XCTAssertEqual(shown(.known(state(listeners: [(8788, .current)])), nil, mine), ["Remote access · port 8788"] + usual)
+        XCTAssertEqual(shown(.known(state(listeners: [(8788, .current)])), nil, mine), ["Remote access on"] + usual)
         XCTAssertEqual(shown(.known(state(listeners: [(8788, .changed)])), nil, mine),
-                       ["Remote access · port 8788 · restart to apply changes"] + usual)
+                       ["Remote access on · restart to apply changes"] + usual)
         // A name that matches nothing: the access stands.
         XCTAssertEqual(shown(.known(state(usable: false, calendar: AppAccess(access: "read", items: .unknown), listeners: [(8788, .current)])), nil, mine),
-                       ["Remote access · port 8788 · settings have a problem", "Calendar: Read only", "Reminders: Off", "Notes: Read only"])
+                       ["Remote access on · settings have a problem", "Calendar: Read only", "Reminders: Off", "Notes: Read only"])
         // A problem outweighs a change: a restart would not start. A file that cannot be read says nothing of what runs.
         XCTAssertEqual(shown(.known(state(usable: false, calendar: nil, notes: nil, reminders: nil, listeners: [(8788, .changed)])), nil, mine),
-                       ["Remote access · port 8788 · settings have a problem"] + blank)
+                       ["Remote access on · settings have a problem"] + blank)
         XCTAssertEqual(shown(.known(state(usable: false, calendar: nil, notes: nil, reminders: nil, listeners: [(8788, .unknown)])), nil, mine),
-                       ["Remote access · port 8788 · settings have a problem"] + blank)
+                       ["Remote access on · settings have a problem"] + blank)
         // Not checked, since checking would ask for a permission: no problem known.
         XCTAssertEqual(shown(.known(state(usable: nil, calendar: AppAccess(access: "read", items: .unknown), listeners: [(8788, .current)])), nil, mine),
-                       ["Remote access · port 8788", "Calendar: Read only", "Reminders: Off", "Notes: Read only"])
-        // The last check has not seen the server yet, or not since it started again: the port is the switch's.
-        XCTAssertEqual(shown(.known(state(listeners: [])), nil, mine), ["Remote access · port 8788"] + usual)
-        XCTAssertEqual(shown(.checking, nil, mine), ["Remote access · port 8788"] + blank)
+                       ["Remote access on", "Calendar: Read only", "Reminders: Off", "Notes: Read only"])
+        // The last check has not seen the server yet, or not since it started again: the switch's server is on.
+        XCTAssertEqual(shown(.known(state(listeners: [])), nil, mine), ["Remote access on"] + usual)
+        XCTAssertEqual(shown(.checking, nil, mine), ["Remote access on"] + blank)
         let again = RemoteServerStatus(phase: .on(port: 8788), pid: 101, ours: [id(100), id(101)])
-        XCTAssertEqual(shown(.known(state(listeners: [(8788, .changed)])), nil, again), ["Remote access · port 8788"] + usual)
+        XCTAssertEqual(shown(.known(state(listeners: [(8788, .changed)])), nil, again), ["Remote access on"] + usual)
     }
 
     func testOutside() {
-        XCTAssertEqual(shown(.known(state(listeners: [(8788, .current)]))), ["Remote access · port 8788 · run outside Iris"] + usual)
+        XCTAssertEqual(shown(.known(state(listeners: [(8788, .current)]))), ["On · run outside Iris"] + usual)
         // What its settings need is still said, as for the switch's own server.
         XCTAssertEqual(shown(.known(state(listeners: [(8788, .changed)]))),
-                       ["Remote access · port 8788 · run outside Iris · restart to apply changes"] + usual)
+                       ["On · run outside Iris · restart to apply changes"] + usual)
         XCTAssertEqual(shown(.known(state(usable: false, listeners: [(8788, .changed)]))),
-                       ["Remote access · port 8788 · run outside Iris · settings have a problem"] + usual)
+                       ["On · run outside Iris · settings have a problem"] + usual)
         XCTAssertEqual(shown(.known(state(usable: false, calendar: nil, notes: nil, reminders: nil, listeners: [(8788, .unknown)]))),
-                       ["Remote access · port 8788 · run outside Iris · settings have a problem"] + blank)
+                       ["On · run outside Iris · settings have a problem"] + blank)
         // A server on another file: what this file allows is not what it allows, and its problems are not its.
-        XCTAssertEqual(shown(.known(state(listeners: [(8770, .otherFile)]))), ["Remote access · port 8770 · run outside Iris"] + blank)
+        XCTAssertEqual(shown(.known(state(listeners: [(8770, .otherFile)]))), ["On · run outside Iris"] + blank)
         XCTAssertEqual(shown(.known(state(usable: false, listeners: [(8770, .otherFile)]))),
-                       ["Remote access · port 8770 · run outside Iris"] + blank)
+                       ["On · run outside Iris"] + blank)
         XCTAssertEqual(shown(.known(state(listeners: [(8765, .otherFile), (8788, .current)]))),
-                       ["Remote access · 2 servers · run outside Iris"] + usual)
+                       ["On · 2 servers run outside Iris"] + usual)
         XCTAssertEqual(shown(.known(state(listeners: [(8765, .otherFile), (8788, .changed)]))),
-                       ["Remote access · 2 servers · run outside Iris · restart to apply changes"] + usual)
+                       ["On · 2 servers run outside Iris · restart to apply changes"] + usual)
         XCTAssertEqual(shown(.known(state(usable: false, listeners: [(8765, .current), (8788, .changed)]))),
-                       ["Remote access · 2 servers · run outside Iris · settings have a problem"] + usual)
+                       ["On · 2 servers run outside Iris · settings have a problem"] + usual)
         // The switch found them before the check did.
         let found = RemoteServerStatus(phase: .outside([8788]))
-        XCTAssertEqual(shown(.checking, nil, found), ["Remote access · port 8788 · run outside Iris"] + blank)
-        XCTAssertEqual(shown(.known(state(listeners: [])), nil, found), ["Remote access · port 8788 · run outside Iris"] + usual)
+        XCTAssertEqual(shown(.checking, nil, found), ["On · run outside Iris"] + blank)
+        XCTAssertEqual(shown(.known(state(listeners: [])), nil, found), ["On · run outside Iris"] + usual)
     }
 
     func testSeveralServers() {
         XCTAssertEqual(shown(.known(state(listeners: [(8788, .current), (8765, .current)])), nil, mine),
-                       ["Remote access · 2 servers · 1 run outside Iris"] + usual)
+                       ["On · 2 servers · 1 run outside Iris"] + usual)
         // The warning is for every server on this file, the switch's own included.
         XCTAssertEqual(shown(.known(state(listeners: [(8788, .changed), (8765, .current), (8766, .otherFile)])), nil, mine),
-                       ["Remote access · 3 servers · 2 run outside Iris · restart to apply changes"] + usual)
+                       ["On · 3 servers · 2 run outside Iris · restart to apply changes"] + usual)
         XCTAssertEqual(shown(.known(state(listeners: [(8788, .changed), (8765, .current)])), nil, mine),
-                       ["Remote access · 2 servers · 1 run outside Iris · restart to apply changes"] + usual)
+                       ["On · 2 servers · 1 run outside Iris · restart to apply changes"] + usual)
         // A check made before the switch's server was replaced still lists the earlier one (100, changed): it does
         // not count. The current one (102) is not in that check yet.
         let replaced = RemoteServerStatus(phase: .on(port: 8788), pid: 102, ours: [id(100), id(102)])
         XCTAssertEqual(shown(.known(state(listeners: [(8788, .changed), (8765, .current)])), nil, replaced),
-                       ["Remote access · 2 servers · 1 run outside Iris"] + usual)
+                       ["On · 2 servers · 1 run outside Iris"] + usual)
         // The others' settings warning stays beside the switch's own server.
         XCTAssertEqual(shown(.known(state(listeners: [(8788, .current), (8765, .changed)])), nil, mine),
-                       ["Remote access · 2 servers · 1 run outside Iris · restart to apply changes"] + usual)
+                       ["On · 2 servers · 1 run outside Iris · restart to apply changes"] + usual)
         XCTAssertEqual(shown(.known(state(usable: false, listeners: [(8788, .current), (8765, .current)])), nil, mine),
-                       ["Remote access · 2 servers · 1 run outside Iris · settings have a problem"] + usual)
+                       ["On · 2 servers · 1 run outside Iris · settings have a problem"] + usual)
         XCTAssertEqual(shown(.known(state(usable: false, listeners: [(8788, .current), (8765, .otherFile)])), nil, mine),
-                       ["Remote access · 2 servers · 1 run outside Iris · settings have a problem"] + usual)
+                       ["On · 2 servers · 1 run outside Iris · settings have a problem"] + usual)
         // No server on this file, the switch's own on another (as only a test sets up): no warning.
         XCTAssertEqual(shown(.known(state(usable: false, listeners: [(8788, .otherFile), (8765, .otherFile)])), nil, mine),
-                       ["Remote access · 2 servers · 1 run outside Iris"] + blank)
+                       ["On · 2 servers · 1 run outside Iris"] + blank)
     }
 
     /// The header's line, the switch (on or off, then - when it cannot be used) and the reason behind the item
@@ -136,29 +136,29 @@ final class MenuTests: XCTestCase {
         XCTAssertEqual(header(.unknown, RemoteServerStatus()), ["Remote access unknown", "off", "-"])
         XCTAssertEqual(header(none, RemoteServerStatus()), ["Remote access off", "off", "-"])
         for remote in [RemoteAnswer.checking, none] {
-            XCTAssertEqual(header(remote, RemoteServerStatus(phase: .starting, pid: 100, ours: [id(100)])), ["Remote access · starting…", "on", "-"])
-            XCTAssertEqual(header(remote, RemoteServerStatus(phase: .failed(reason))), ["Remote access · couldn't start", "on", reason])
-            XCTAssertEqual(header(remote, RemoteServerStatus(phase: .on(port: 8765), pid: 100, ours: [id(100)])), ["Remote access · port 8765", "on", "-"])
+            XCTAssertEqual(header(remote, RemoteServerStatus(phase: .starting, pid: 100, ours: [id(100)])), ["Starting…", "on", "-"])
+            XCTAssertEqual(header(remote, RemoteServerStatus(phase: .failed(reason))), ["Couldn't start", "on", reason])
+            XCTAssertEqual(header(remote, RemoteServerStatus(phase: .on(port: 8765), pid: 100, ours: [id(100)])), ["Remote access on", "on", "-"])
         }
         // Not started by this Iris: on, and it cannot be turned off here, whether the choice is off or on.
-        XCTAssertEqual(header(foreign, RemoteServerStatus()), ["Remote access · port 8788 · run outside Iris", "on -", "-"])
-        XCTAssertEqual(header(foreign, RemoteServerStatus(phase: .outside([8788]))), ["Remote access · port 8788 · run outside Iris", "on -", "-"])
+        XCTAssertEqual(header(foreign, RemoteServerStatus()), ["On · run outside Iris", "on -", "-"])
+        XCTAssertEqual(header(foreign, RemoteServerStatus(phase: .outside([8788]))), ["On · run outside Iris", "on -", "-"])
         // While left from an earlier run and being stopped, it is not someone else's.
-        XCTAssertEqual(header(foreign, RemoteServerStatus(phase: .starting, ours: [id(100)])), ["Remote access · starting…", "on", "-"])
+        XCTAssertEqual(header(foreign, RemoteServerStatus(phase: .starting, ours: [id(100)])), ["Starting…", "on", "-"])
         XCTAssertEqual(header(foreign, RemoteServerStatus(phase: .off, ours: [id(100)])), ["Remote access off", "off", "-"])
         // With none of its own running (could not start, waiting to start again), another server is what shows.
-        XCTAssertEqual(header(foreign, RemoteServerStatus(phase: .failed(reason))), ["Remote access · port 8788 · run outside Iris", "on -", "-"])
+        XCTAssertEqual(header(foreign, RemoteServerStatus(phase: .failed(reason))), ["On · run outside Iris", "on -", "-"])
         XCTAssertEqual(header(foreign, RemoteServerStatus(phase: .starting, ours: [id(105)])),
-                       ["Remote access · port 8788 · run outside Iris", "on -", "-"])
+                       ["On · run outside Iris", "on -", "-"])
         XCTAssertEqual(header(foreign, RemoteServerStatus(phase: .on(port: 8765), pid: 105, ours: [id(105)])),
-                       ["Remote access · 2 servers · 1 run outside Iris", "on", "-"])
+                       ["On · 2 servers · 1 run outside Iris", "on", "-"])
         // A pid the switch once had, now another process's: that server is someone else's.
         XCTAssertEqual(header(foreign, RemoteServerStatus(phase: .off, ours: [ServerIdentity(pid: 100, started: 5)])),
-                       ["Remote access · port 8788 · run outside Iris", "on -", "-"])
+                       ["On · run outside Iris", "on -", "-"])
         // Beside the switch's own server, the switch turns that one off.
         XCTAssertEqual(header(.known(state(listeners: [(8765, .current), (8788, .current)])),
                               RemoteServerStatus(phase: .on(port: 8765), pid: 100, ours: [id(100)])),
-                       ["Remote access · 2 servers · 1 run outside Iris", "on", "-"])
+                       ["On · 2 servers · 1 run outside Iris", "on", "-"])
     }
 
     func testAccessWords() {
@@ -213,7 +213,7 @@ final class MenuTests: XCTestCase {
         }
         // Each app's problem shows on its own row only.
         let none = Permissions(calendar: .denied, reminders: .denied, notes: "denied")
-        XCTAssertEqual(shown(on, none, mine), ["Remote access · port 8788", "Calendar: Needs access !", "Reminders: Needs access !",
+        XCTAssertEqual(shown(on, none, mine), ["Remote access on", "Calendar: Needs access !", "Reminders: Needs access !",
                                                "Notes: Needs access !"])
     }
 
@@ -252,8 +252,9 @@ final class MenuTests: XCTestCase {
             menu.update()
             return menu.items.filter { !$0.isHidden }.map { item in
                 if item.isSeparatorItem { return "---" }
-                var text = item.view.map { labels($0).joined(separator: " / ") } ?? item.title
-                if let badge = item.badge { text += " [\(badge.stringValue ?? "")]" }
+                // A row's word at the right, after its tab, in brackets.
+                let title = item.title.split(separator: "\t").enumerated().map { $0 == 0 ? String($1) : "[\($1)]" }.joined(separator: " ")
+                var text = item.view.map { labels($0).joined(separator: " / ") } ?? title
                 if item.submenu != nil { text += " >" }
                 if !item.keyEquivalent.isEmpty { text += " ⌘\(item.keyEquivalent.uppercased())" }
                 if item.state == .on { text = "✓ " + text }
@@ -266,17 +267,17 @@ final class MenuTests: XCTestCase {
         let states: [(RemoteAnswer, Permissions, RemoteServerStatus, [String])] = [
             (.checking, fine, off, ["(Iris / Checking…)", "Calendar >", "Reminders >", "Notes >"]),
             (.known(state(listeners: [(8788, .current)])), fine, mine,
-             ["(Iris / Remote access · port 8788)", "Calendar [Read & write] >", "Reminders [Off] >", "Notes [Read only] >"]),
+             ["(Iris / Remote access on)", "Calendar [Read & write] >", "Reminders [Off] >", "Notes [Read only] >"]),
             (.known(state(listeners: [])), fine, off,
              ["(Iris / Remote access off)", "Calendar [Read & write] >", "Reminders [Off] >", "Notes [Read only] >"]),
             (.known(state(listeners: [(8788, .current)])), Permissions(calendar: .denied, reminders: .fullAccess, notes: "granted"), mine,
-             ["(Iris / Remote access · port 8788)", "Calendar [Needs access]", "Reminders [Off] >", "Notes [Read only] >"]),
+             ["(Iris / Remote access on)", "Calendar [Needs access]", "Reminders [Off] >", "Notes [Read only] >"]),
             (.unknown, fine, off, ["(Iris / Remote access unknown)", "Calendar >", "Reminders >", "Notes >"]),
             (.known(state(listeners: [])), fine, failed,
-             ["(Iris / Remote access · couldn't start)", "Why It Couldn't Start…", "Calendar [Read & write] >", "Reminders [Off] >",
+             ["(Iris / Couldn't start)", "Why It Couldn't Start…", "Calendar [Read & write] >", "Reminders [Off] >",
               "Notes [Read only] >"]),
             (.known(state(listeners: [(8788, .current)])), fine, off,
-             ["(Iris / Remote access · port 8788 · run outside Iris)", "Calendar [Read & write] >", "Reminders [Off] >", "Notes [Read only] >"]),
+             ["(Iris / On · run outside Iris)", "Calendar [Read & write] >", "Reminders [Off] >", "Notes [Read only] >"]),
         ]
         let header = menu.items[0]
         let rows = Array(menu.items[3...5])
@@ -322,7 +323,8 @@ final class MenuTests: XCTestCase {
         // version has no action, so it shows as information.
         let settings = menu.items[7].submenu!
         XCTAssertTrue(settings.autoenablesItems)
-        XCTAssertEqual(settings.items.map(\.title), ["Iris 1.0", "Check for Updates…", "Open at Login", "Allow Notes Access…"])
+        XCTAssertEqual(settings.items.map(\.title), ["Iris 1.0", "Check for Updates…", "Open at Login", "Allow Notes Access…", "",
+                                                     "Let Assistants Change Events With Other People"])
         // Offered only while Notes was never asked.
         XCTAssertTrue(settings.items[3].isHidden)
         items.show(menuModel(.checking, Permissions(calendar: .fullAccess, reminders: .fullAccess, notes: "not determined")))
@@ -452,12 +454,11 @@ final class MenuTests: XCTestCase {
         XCTAssertEqual(shareSource(.calendars, Permissions(calendar: .fullAccess, reminders: .notDetermined, notes: "not determined"), nil), .loading)
     }
 
-    /// A submenu as text: ✓ for a tick, () for disabled, -- for a section header, an indent per level.
+    /// A submenu as text: ✓ for a tick, () for disabled, an indent per level.
     private func lines(_ entries: [ShareEntry]) -> [String] {
         entries.map { entry in
             switch entry {
             case .separator: "---"
-            case .section(let title): "-- \(title)"
             case .loading: "(Loading…)"
             case .choice(let title, let on, let enabled, let level, _):
                 (enabled ? "" : "(") + (on ? "✓ " : "  ") + String(repeating: "  ", count: level) + title + (enabled ? "" : ")")
@@ -465,56 +466,95 @@ final class MenuTests: XCTestCase {
         }
     }
 
-    func testShareEntries() {
-        let listed = ShareSource.listed(calendars)
-        let some = ScopeFileState.file(ScopeFile(calendars: ["Work", "c3"], folders: [], writes: true))
-        XCTAssertEqual(lines(shareEntries(.calendars, some, listed)),
-                       ["  All Calendars", "  No Calendars", "---", "-- iCloud", "✓ Work", "  Family", "-- Other", "✓ Birthdays", "---",
-                        "✓ Allow Changes", "  Include Events With Other People"])
-        // Each choice is the tick that turns it the other way.
-        let actions = shareEntries(.calendars, some, listed).compactMap { entry -> ShareAction? in
+    private func actions(_ entries: [ShareEntry]) -> [ShareAction] {
+        entries.compactMap { entry -> ShareAction? in
             if case .choice(_, _, _, _, let action) = entry { action } else { nil }
-        }
-        XCTAssertEqual(actions, [.tick(.all(.calendars, true)), .tick(.all(.calendars, false)), .tick(.item(.calendars, "c1", false)), .tick(.item(.calendars, "c2", true)),
-                                 .tick(.item(.calendars, "c3", false)), .tick(.writes(false)), .tick(.sharedEvents(true))])
-        // "all": every item ticked; one account: no section headers.
-        let one = ShareSource.listed(Array(calendars.prefix(2)))
-        XCTAssertEqual(lines(shareEntries(.calendars, .file(ScopeFile(calendars: nil, folders: nil)), one)),
-                       ["✓ All Calendars", "  No Calendars", "---", "✓ Work", "✓ Family", "---", "  Allow Changes", "(  Include Events With Other People)"])
-        // Nothing shared, or no file yet: changes cannot be turned on.
-        for state in [ScopeFileState.missing, .file(ScopeFile(calendars: [], folders: []))] {
-            XCTAssertEqual(lines(shareEntries(.calendars, state, one)),
-                           ["  All Calendars", "✓ No Calendars", "---", "  Work", "  Family", "---", "(  Allow Changes)", "(  Include Events With Other People)"])
-        }
-        // An entry that names nothing now, ticked at the end, to be unticked.
-        let missing = shareEntries(.calendars, .file(ScopeFile(calendars: ["Old", "c1"], folders: [])), one)
-        XCTAssertEqual(lines(missing), ["  All Calendars", "  No Calendars", "---", "✓ Work", "  Family", "---", "✓ Missing: Old", "---",
-                                        "  Allow Changes", "(  Include Events With Other People)"])
-        XCTAssertTrue(missing.contains(.choice("Missing: Old", on: true, .tick(.remove(.calendars, "Old")))))
-        // Not listed yet, or not to be listed without asking.
-        XCTAssertEqual(lines(shareEntries(.calendars, some, .loading)),
-                       ["  All Calendars", "  No Calendars", "---", "(Loading…)", "---", "✓ Allow Changes", "  Include Events With Other People"])
-        let lists = ScopeFileState.file(ScopeFile(calendars: [], folders: [], lists: nil, reminderWrites: true))
-        XCTAssertEqual(lines(shareEntries(.lists, lists, .ask(.askReminders))),
-                       ["✓ All Lists", "  No Lists", "---", "  Allow Reminders Access…", "---", "✓ Allow Changes"])
-        XCTAssertEqual(lines(shareEntries(.lists, .file(ScopeFile(calendars: [], folders: [])), .listed([]))),
-                       ["  All Lists", "✓ No Lists", "---", "(  Allow Changes)"])
-        // Notes: folders by level, and no changes.
-        let folders = [ShareItem(id: "f1", name: "Recipes", group: "iCloud"), ShareItem(id: "f2", name: "Travel", group: "iCloud"),
-                       ShareItem(id: "f3", name: "Paris", group: "iCloud", level: 1)]
-        XCTAssertEqual(lines(shareEntries(.folders, .file(ScopeFile(calendars: [], folders: ["f3"])), .listed(folders))),
-                       ["  All Folders", "  No Folders", "---", "  Recipes", "  Travel", "✓   Paris"])
-        XCTAssertEqual(lines(shareEntries(.folders, .file(ScopeFile(calendars: [], folders: nil)), .openNotes)),
-                       ["✓ All Folders", "  No Folders", "---", "  Open Notes to Choose Folders"])
-        XCTAssertEqual(lines(shareEntries(.folders, .missing, .ask(.askNotes))), ["  All Folders", "✓ No Folders", "---", "  Allow Notes Access…"])
-        // A file that cannot be read offers only its problem.
-        for kind in [ScopeKind.calendars, .lists, .folders] {
-            XCTAssertEqual(shareEntries(kind, .broken("not a JSON object"), listed),
-                           [.choice("Settings File Has a Problem…", on: false, .fixFile)])
         }
     }
 
-    /// The rows' submenus as AppKit items, changed in place while their shape holds, and none on a row that needs access.
+    func testShareMenu() {
+        let listed = ShareSource.listed(calendars)
+        let some = ScopeFileState.file(ScopeFile(calendars: ["Work", "c3"], folders: [], writes: true))
+        let menu = shareMenu(.calendars, some, listed)
+        XCTAssertEqual(lines(menu.choices), ["  Off", "  Read Only", "✓ Read & Write"])
+        XCTAssertEqual(menu.which, "2 of 3 Calendars")
+        XCTAssertEqual(lines(menu.items), ["  All Calendars", "---", "✓ Work", "  Family", "✓ Birthdays"])
+        // Each choice is its level; each item the tick that turns it the other way.
+        XCTAssertEqual(actions(menu.choices), [.tick(.access(.calendars, .off)), .tick(.access(.calendars, .readOnly)),
+                                               .tick(.access(.calendars, .readWrite))])
+        XCTAssertEqual(actions(menu.items), [.tick(.all(.calendars)), .tick(.item(.calendars, "c1", false)),
+                                             .tick(.item(.calendars, "c2", true)), .tick(.item(.calendars, "c3", false))])
+        // "all": every item ticked.
+        let all = shareMenu(.calendars, .file(ScopeFile(calendars: nil, folders: nil)), listed)
+        XCTAssertEqual(lines(all.choices), ["  Off", "✓ Read Only", "  Read & Write"])
+        XCTAssertEqual(all.which, "All Calendars")
+        XCTAssertEqual(lines(all.items), ["✓ All Calendars", "---", "✓ Work", "✓ Family", "✓ Birthdays"])
+        // Every one named is not all: a calendar made later is not shared.
+        let every = shareMenu(.calendars, .file(ScopeFile(calendars: ["c1", "c2", "c3"], folders: [])), listed)
+        XCTAssertEqual(every.which, "3 of 3 Calendars")
+        XCTAssertEqual(lines(every.items).first, "  All Calendars")
+        // Off: no items line. Also with no file yet, and with writes on and no calendars, which the file allows.
+        for state in [ScopeFileState.missing, .file(ScopeFile(calendars: [], folders: [])), .file(ScopeFile(calendars: [], folders: [], writes: true))] {
+            let off = shareMenu(.calendars, state, listed)
+            XCTAssertEqual(lines(off.choices), ["✓ Off", "  Read Only", "  Read & Write"])
+            XCTAssertNil(off.which)
+        }
+        // Two with one name: each with its account.
+        let twins = calendars + [ShareItem(id: "c4", name: "Work", group: "Other")]
+        XCTAssertEqual(lines(shareMenu(.calendars, .file(ScopeFile(calendars: ["c4"], folders: [])), .listed(twins)).items),
+                       ["  All Calendars", "---", "  Work (iCloud)", "  Family", "  Birthdays", "✓ Work (Other)"])
+        // An entry that names nothing now, ticked at the end, to be unticked.
+        let missing = shareMenu(.calendars, .file(ScopeFile(calendars: ["Old", "c1"], folders: [])), listed)
+        XCTAssertEqual(missing.which, "1 of 3 Calendars")
+        XCTAssertEqual(lines(missing.items), ["  All Calendars", "---", "✓ Work", "  Family", "  Birthdays", "---", "✓ Missing: Old"])
+        XCTAssertEqual(actions(missing.items).last, .tick(.remove(.calendars, "Old")))
+        // Not listed yet, or not to be listed without asking.
+        let loading = shareMenu(.calendars, some, .loading)
+        XCTAssertEqual(loading.which, "Some Calendars")
+        XCTAssertEqual(lines(loading.items), ["  All Calendars", "---", "(Loading…)"])
+        let lists = shareMenu(.lists, .file(ScopeFile(calendars: [], folders: [], lists: nil, reminderWrites: true)), .ask(.askReminders))
+        XCTAssertEqual(lines(lists.choices), ["  Off", "  Read Only", "✓ Read & Write"])
+        XCTAssertEqual(lists.which, "All Lists")
+        XCTAssertEqual(lines(lists.items), ["✓ All Lists", "---", "  Allow Reminders Access…"])
+        XCTAssertEqual(actions(lists.choices).last, .tick(.access(.lists, .readWrite)))
+        // Notes: Off and Read Only, folders by level.
+        let folders = [ShareItem(id: "f1", name: "Recipes", group: "iCloud"), ShareItem(id: "f2", name: "Travel", group: "iCloud"),
+                       ShareItem(id: "f3", name: "Paris", group: "iCloud", level: 1)]
+        let notes = shareMenu(.folders, .file(ScopeFile(calendars: [], folders: ["f3"])), .listed(folders))
+        XCTAssertEqual(lines(notes.choices), ["  Off", "✓ Read Only"])
+        XCTAssertEqual(notes.which, "1 of 3 Folders")
+        XCTAssertEqual(lines(notes.items), ["  All Folders", "---", "  Recipes", "  Travel", "✓   Paris"])
+        let closed = shareMenu(.folders, .file(ScopeFile(calendars: [], folders: nil)), .openNotes)
+        XCTAssertEqual(closed.which, "All Folders")
+        XCTAssertEqual(lines(closed.items), ["✓ All Folders", "---", "  Open Notes to Choose Folders"])
+        let unasked = shareMenu(.folders, .missing, .ask(.askNotes))
+        XCTAssertEqual(lines(unasked.choices), ["✓ Off", "  Read Only"])
+        XCTAssertNil(unasked.which)
+        // A file that cannot be read offers only its problem.
+        for kind in [ScopeKind.calendars, .lists, .folders] {
+            XCTAssertEqual(shareMenu(kind, .broken("not a JSON object"), listed),
+                           ShareMenu(choices: [.choice("Settings File Has a Problem…", on: false, .fixFile)], which: nil, items: []))
+        }
+    }
+
+    /// Events with other people, in Settings: enabled while Calendar is Read & Write, or while ticked.
+    func testSharedEventsEntry() {
+        func shown(_ state: ScopeFileState) -> String {
+            guard case .choice(let title, let on, let enabled, _, let action) = sharedEventsEntry(state) else { return "?" }
+            XCTAssertEqual(title, "Let Assistants Change Events With Other People")
+            return (on ? "on" : "off") + (enabled ? "" : " disabled") + (action == .tick(.sharedEvents(!on)) ? "" : " wrong tick")
+        }
+        XCTAssertEqual(shown(.file(ScopeFile(calendars: ["c1"], folders: [], writes: true))), "off")
+        XCTAssertEqual(shown(.file(ScopeFile(calendars: nil, folders: [], writes: true, sharedEvents: true))), "on")
+        XCTAssertEqual(shown(.file(ScopeFile(calendars: ["c1"], folders: []))), "off disabled")
+        XCTAssertEqual(shown(.file(ScopeFile(calendars: [], folders: [], writes: true))), "off disabled")
+        XCTAssertEqual(shown(.file(ScopeFile(calendars: [], folders: [], writes: true, sharedEvents: true))), "on")
+        XCTAssertEqual(shown(.missing), "off disabled")
+        XCTAssertEqual(shown(.broken("not a JSON object")), "off disabled")
+    }
+
+    /// The rows' submenus as AppKit items, changed in place, and none on a row that needs access; the items line and
+    /// its submenu; the Settings item for events with other people.
     @MainActor
     func testShareMenus() {
         let actions = Actions()
@@ -522,41 +562,75 @@ final class MenuTests: XCTestCase {
         let items = MenuItems(target: actions)
         fill(menu, with: items, version: "1.0", openAtLogin: .off, target: actions, updater: nil)
         items.show(menuModel(.checking, fine))
-        func shares(_ calendars: [ShareEntry]) -> [[ShareEntry]] {
-            [calendars, shareEntries(.lists, .missing, .loading), shareEntries(.folders, .missing, .openNotes)]
+        func show(_ calendars: ScopeFileState, _ source: ShareSource) {
+            items.show(shares: [shareMenu(.calendars, calendars, source), shareMenu(.lists, .missing, .loading),
+                                shareMenu(.folders, .missing, .openNotes)], sharedEvents: sharedEventsEntry(calendars))
         }
         func described(_ menu: NSMenu) -> [String] {
-            menu.items.map { item in
+            menu.items.filter { !$0.isHidden }.map { item in
                 if item.isSeparatorItem { return "---" }
-                if item.isSectionHeader { return "-- \(item.title)" }
                 let text = (item.state == .on ? "✓ " : "  ") + String(repeating: "  ", count: item.indentationLevel) + item.title
+                    + (item.submenu == nil ? "" : " >")
                 return item.isEnabled ? text : "(\(text))"
             }
         }
         let file = ScopeFileState.file(ScopeFile(calendars: ["c1"], folders: [], writes: true))
-        items.show(shares: shares(shareEntries(.calendars, file, .loading)))
+        show(file, .loading)
         XCTAssertTrue(items.rows[0].submenu === items.shares[0])
         XCTAssertFalse(items.shares[0].autoenablesItems)
         XCTAssertTrue(items.shares[0].showsStateColumn)
-        XCTAssertEqual(described(items.shares[0]), ["  All Calendars", "  No Calendars", "---", "(  Loading…)", "---", "✓ Allow Changes", "  Include Events With Other People"])
-        XCTAssertEqual(described(items.shares[1]), ["  All Lists", "✓ No Lists", "---", "(  Loading…)", "---", "(  Allow Changes)"])
-        XCTAssertEqual(described(items.shares[2]), ["  All Folders", "✓ No Folders", "---", "  Open Notes to Choose Folders"])
+        XCTAssertEqual(described(items.shares[0]), ["  Off", "  Read Only", "✓ Read & Write", "---", "  Some Calendars >"])
+        XCTAssertTrue(items.shares[0].items[4] === items.which[0])
+        XCTAssertTrue(items.which[0].submenu === items.itemMenus[0])
+        XCTAssertEqual(described(items.itemMenus[0]), ["  All Calendars", "---", "(  Loading…)"])
+        XCTAssertEqual(described(items.shares[1]), ["✓ Off", "  Read Only", "  Read & Write"])
+        XCTAssertEqual(described(items.shares[2]), ["✓ Off", "  Read Only"])
 
-        // The listing comes in: a new shape, filled again.
-        items.show(shares: shares(shareEntries(.calendars, file, .listed(calendars))))
-        XCTAssertEqual(described(items.shares[0]), ["  All Calendars", "  No Calendars", "---", "-- iCloud", "✓ Work", "  Family", "-- Other", "  Birthdays",
-                                                    "---", "✓ Allow Changes", "  Include Events With Other People"])
-        // A tick keeps the shape: the same items, changed in place.
+        // The listing comes in: the same items, the line's title changed; its submenu filled again for its new shape.
         let before = items.shares[0].items
-        items.show(shares: shares(shareEntries(.calendars, .file(ScopeFile(calendars: ["c1", "c2"], folders: [])), .listed(calendars))))
+        show(file, .listed(calendars))
         XCTAssertTrue(zip(before, items.shares[0].items).allSatisfy { $0 === $1 })
-        XCTAssertEqual(described(items.shares[0]), ["  All Calendars", "  No Calendars", "---", "-- iCloud", "✓ Work", "✓ Family", "-- Other", "  Birthdays",
-                                                    "---", "  Allow Changes", "(  Include Events With Other People)"])
+        XCTAssertEqual(described(items.shares[0]).last, "  1 of 3 Calendars >")
+        XCTAssertEqual(described(items.itemMenus[0]), ["  All Calendars", "---", "✓ Work", "  Family", "  Birthdays"])
+        // A tick keeps the shape: the same items, changed in place.
+        let listedItems = items.itemMenus[0].items
+        show(.file(ScopeFile(calendars: ["c1", "c2"], folders: [])), .listed(calendars))
+        XCTAssertTrue(zip(listedItems, items.itemMenus[0].items).allSatisfy { $0 === $1 })
+        XCTAssertEqual(described(items.shares[0]), ["  Off", "✓ Read Only", "  Read & Write", "---", "  2 of 3 Calendars >"])
+        XCTAssertEqual(described(items.itemMenus[0]), ["  All Calendars", "---", "✓ Work", "✓ Family", "  Birthdays"])
         // A click reaches the target with its tick.
-        let family = items.shares[0].items[5]
+        let family = items.itemMenus[0].items[3]
         XCTAssertTrue(family.target === actions)
         _ = (family.target as? NSObject)?.perform(family.action, with: family)
-        XCTAssertEqual(actions.shared, [.tick(.item(.calendars, "c2", false))])
+        let readWrite = items.shares[0].items[2]
+        _ = (readWrite.target as? NSObject)?.perform(readWrite.action, with: readWrite)
+        XCTAssertEqual(actions.shared, [.tick(.item(.calendars, "c2", false)), .tick(.access(.calendars, .readWrite))])
+        // Off: the line is hidden, the items the same.
+        show(.file(ScopeFile(calendars: [], folders: [])), .listed(calendars))
+        XCTAssertEqual(described(items.shares[0]), ["✓ Off", "  Read Only", "  Read & Write"])
+        XCTAssertTrue(zip(before, items.shares[0].items).allSatisfy { $0 === $1 })
+        // A file that cannot be read: its problem only; read again, the choices and the line are back.
+        show(.broken("not a JSON object"), .listed(calendars))
+        XCTAssertEqual(described(items.shares[0]), ["  Settings File Has a Problem…"])
+        show(.file(ScopeFile(calendars: nil, folders: [])), .listed(calendars))
+        XCTAssertEqual(described(items.shares[0]), ["  Off", "✓ Read Only", "  Read & Write", "---", "  All Calendars >"])
+        XCTAssertTrue(items.shares[0].items[4] === items.which[0])
+
+        // Settings: events with other people, enabled only while Calendar is Read & Write. Settings enables its items
+        // as AppKit validates them: one without an action is disabled.
+        let settings = menu.items[7].submenu!
+        XCTAssertTrue(settings.items.last === items.sharedEvents)
+        XCTAssertEqual(described(settings).suffix(2), ["---", "(  Let Assistants Change Events With Other People)"])
+        show(.file(ScopeFile(calendars: ["c1"], folders: [], writes: true, sharedEvents: true)), .listed(calendars))
+        XCTAssertEqual(items.sharedEvents.state, .on)
+        XCTAssertTrue(items.sharedEvents.target === actions)
+        XCTAssertEqual(items.sharedEvents.action, #selector(MenuActions.chooseShare))
+        XCTAssertEqual(items.sharedEvents.representedObject as? ShareAction, .tick(.sharedEvents(false)))
+        show(.file(ScopeFile(calendars: ["c1"], folders: [])), .listed(calendars))
+        XCTAssertEqual(items.sharedEvents.state, .off)
+        XCTAssertNil(items.sharedEvents.action)
+        show(.file(ScopeFile(calendars: ["c1"], folders: [], writes: true)), .listed(calendars))
+        XCTAssertEqual(items.sharedEvents.action, #selector(MenuActions.chooseShare))
 
         // A row that needs access has no submenu; given access, it has it again.
         items.show(menuModel(.checking, Permissions(calendar: .denied, reminders: .fullAccess, notes: "granted")))
@@ -564,5 +638,35 @@ final class MenuTests: XCTestCase {
         XCTAssertTrue(items.rows[1].submenu === items.shares[1])
         items.show(menuModel(.checking, fine))
         XCTAssertTrue(items.rows[0].submenu === items.shares[0])
+    }
+
+    /// The rows' words at the right: plain grey text at a right tab stop that ends where the arrow's room begins, so
+    /// the rows never make the menu wider; with a longer header line, the stop follows the menu's width.
+    @MainActor
+    func testRowWords() throws {
+        let actions = Actions()
+        let menu = NSMenu()
+        let items = MenuItems(target: actions)
+        fill(menu, with: items, version: "1.0", openAtLogin: .off, target: actions, updater: nil)
+        items.show(menuModel(.known(state(listeners: [])), fine))
+        XCTAssertEqual(menu.minimumWidth, menuWidth)
+        XCTAssertEqual(menu.size.width, menuWidth, accuracy: 1)
+        let title = try XCTUnwrap(items.rows[0].attributedTitle)
+        XCTAssertEqual(title.string, "Calendar\tRead & write")
+        XCTAssertNil(items.rows[0].badge)
+        XCTAssertNil(title.attribute(.foregroundColor, at: 0, effectiveRange: nil))
+        XCTAssertEqual(title.attribute(.foregroundColor, at: 9, effectiveRange: nil) as? NSColor, .secondaryLabelColor)
+        let stop = try XCTUnwrap((title.attribute(.paragraphStyle, at: 9, effectiveRange: nil) as? NSParagraphStyle)?.tabStops.first)
+        XCTAssertEqual(stop.alignment, .right)
+        // The longest header line there is: the menu as wide as the header, the stop moved with it.
+        let long = menuModel(.known(state(usable: false, listeners: [(8788, .current), (8765, .current), (8766, .current)])), fine, mine)
+        items.show(long)
+        let wider = try XCTUnwrap((items.rows[0].attributedTitle?.attribute(.paragraphStyle, at: 9, effectiveRange: nil) as? NSParagraphStyle)?.tabStops.first)
+        XCTAssertEqual(menu.size.width, max(menuWidth, items.headerView.frame.width), accuracy: 1)
+        XCTAssertEqual(wider.location - stop.location, max(menuWidth, items.headerView.frame.width) - menuWidth, accuracy: 0.5)
+        // Needs access is in the same place, and a row with nothing known has no word.
+        items.show(menuModel(.checking, Permissions(calendar: .denied, reminders: .fullAccess, notes: "granted")))
+        XCTAssertEqual(items.rows[0].attributedTitle?.string, "Calendar\tNeeds access")
+        XCTAssertEqual(items.rows[1].attributedTitle?.string, "Reminders")
     }
 }
