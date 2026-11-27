@@ -55,7 +55,7 @@ Iris reads your calendars, notes and reminders on this Mac and never uploads the
     iris reminders update <id> --due 2026-10-15 --notes ""          # only what you name changes; "" clears
     iris reminders complete <id>                                    # --undo opens it again; a repeat once more changes nothing
     iris reminders complete <id> --occurrence 2026-10-14            # a repeating one: its current due date; it moves to the next
-    iris reminders delete <id>                                      # a repeating reminder is deleted whole; --not-repeating refuses it
+    iris reminders delete <id>                                      # a repeating reminder is deleted whole; --not-repeating refuses it unless it has ended
     iris mcp                                                        # MCP server over stdio; hosts start it, see below
     iris mcp --http                                                 # over HTTP on 127.0.0.1:8765, behind a token: reads, writes if turned on
 
@@ -139,7 +139,7 @@ Reminder writes are off unless the scope file says `"reminderWrites": true`, whi
       "lists": ["Errands"], "reminderWrites": true}' \
       > ~/Library/Application\ Support/Iris/http-scope)
 
-Then `add_reminder`, `update_reminder`, `complete_reminder` and `delete_reminder` are offered too, in the scope's lists only: any other list, and any reminder in one, answers as one that does not exist, and nothing is changed. They pass the same guards as the calendar writes, with one count and one record for both. `delete_reminder` refuses a repeating reminder, which would be deleted whole: every call carries `--not-repeating`, which the caller cannot remove; delete it on the Mac, or complete its occurrences one at a time.
+Then `add_reminder`, `update_reminder`, `complete_reminder` and `delete_reminder` are offered too, in the scope's lists only: any other list, and any reminder in one, answers as one that does not exist, and nothing is changed. They pass the same guards as the calendar writes, with one count and one record for both. `delete_reminder` refuses a repeating reminder, which would be deleted whole: every call carries `--not-repeating`, which the caller cannot remove; delete it on the Mac, or complete its occurrences one at a time. A series that has ended, its last occurrence completed, has nothing left to lose and is deleted.
 
 `iris remote status` (with `--scope-file` and `--token-file` as the server takes them) shows, as one JSON object, what a server started now would allow: per app, none, read, or read and write, with the calendars, folders and lists in scope by their current names; the tools it would offer; whether the scope file and token file would do, and if not, the message the server would stop with; and every `iris mcp --http` running as you, with its port and whether it started after the scope file last changed or needs a restart to take a change. It changes nothing, never shows the token, never shows a permission dialog, and is not offered as a tool, over stdio or HTTP.
 

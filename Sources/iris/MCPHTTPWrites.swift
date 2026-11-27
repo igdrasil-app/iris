@@ -2,7 +2,7 @@ import Foundation
 
 // The writes of `iris mcp --http`: the calendar writes, offered only when the scope file says "writes": true,
 // and the reminder writes, only when it says "reminderWrites": true; and the guards around both: delete_event
-// reaches one occurrence at most, delete_reminder never a repeating reminder (its command carries
+// reaches one occurrence at most, delete_reminder never a repeating reminder but a finished one (its command carries
 // --not-repeating), one write of either kind runs at a time, at most `writesPerHour` write calls of both kinds
 // together reach their command in any rolling hour, counted across restarts, and every write that reached its
 // command is recorded. The scope itself is enforced by the commands.
