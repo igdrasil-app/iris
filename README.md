@@ -26,11 +26,11 @@ While it runs, the menu bar app updates Iris itself: it checks once a day, offer
 
 ## What Iris sends
 
-Your calendars, notes and reminders stay on this Mac, except what an assistant you connect asks for. Iris itself makes only these requests, and none of them carries anything about you:
+Your calendars, notes and reminders stay on this Mac, except what an assistant you connect asks for. Iris itself makes only the requests below. None carries an account, an install id or anything from your calendars, notes or reminders. Like any request, each one reveals your IP address to the server, and macOS adds your preferred languages (`Accept-Language`).
 
-- **The menu bar app's update check**, once a day and on Check for Updates…. It asks `https://updates.igdrasil.app/iris/appcast.xml` for the latest version, sending `User-Agent: Iris/<version> Sparkle/<version>` and nothing else: no install id, no system profile. To know how many copies are in use, that server adds 1 to the day's count for the version and the country Cloudflare derives from the connection. It keeps no IP address and no request log, so no one can be told apart. Its code is public, in [homebrew-tap/stats](https://github.com/igdrasil-app/homebrew-tap/tree/main/stats).
-- **An update you accept** is downloaded from the tap's GitHub releases, like `brew install`.
-- **`iris doctor`** asks GitHub's API for the latest release, sending `User-Agent: iris`.
+- **The menu bar app's update check**, once a day and on Check for Updates…. It asks `https://updates.igdrasil.app/iris/appcast.xml` for the latest version, identified as `User-Agent: Iris/<version> Sparkle/<version>`, with no system profile. To know how many copies are in use, that server adds 1 to the day's count for the version and the country Cloudflare derives from the connection. It stores nothing else: no IP address, no request log. Its code is public, in [homebrew-tap/stats](https://github.com/igdrasil-app/homebrew-tap/tree/main/stats).
+- **An update** is downloaded from the tap's GitHub releases, like `brew install`. That happens when you accept it, or by itself if you chose to download and install updates automatically.
+- **`iris doctor`** asks GitHub's API for the latest release, as `User-Agent: iris`.
 
 ## Use
 
