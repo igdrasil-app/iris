@@ -711,7 +711,8 @@ final class ScopeTests: XCTestCase {
         let memory = path + ".shared-before"
         let unrelated = folder + "/unrelated"
         try writeScopeFile(ScopeFile(calendars: [], folders: ["f1"]), to: path)
-        let bytes = Data("private, not Iris's\n".utf8)
+        // A memory Iris could read, were the link followed.
+        let bytes = Data(#"{"calendars": "all"}"#.utf8)
         XCTAssertTrue(FileManager.default.createFile(atPath: unrelated, contents: bytes, attributes: [.posixPermissions: 0o600]))
         try FileManager.default.createSymbolicLink(atPath: memory, withDestinationPath: unrelated)
         XCTAssertNil(loadSharedBefore(memory))

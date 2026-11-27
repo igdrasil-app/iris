@@ -338,8 +338,8 @@ final class MenuTests: XCTestCase {
     }
 
     /// The header's switch: read by VoiceOver as a switch, turned by a click or VoiceOver's press, each sending the
-    /// action once; disabled, neither. Drawn in a window that is not key, as a menu's is, it shows the accent colour
-    /// when on, and not when off.
+    /// action once; disabled, neither. Drawn in a window that is not key, as a menu's is, its track is the system's
+    /// accent colour when on and its light fill when off, whatever the accent, at half opacity when disabled.
     @MainActor
     func testMenuSwitch() throws {
         let actions = Actions()
@@ -367,31 +367,38 @@ final class MenuTests: XCTestCase {
         XCTAssertFalse(toggle.isAccessibilityEnabled())
 
         /// The most saturated colour drawn, in a borderless window never made key.
-        func saturation(on: Bool, enabled: Bool, _ name: NSAppearance.Name) throws -> CGFloat {
-            let window = NSWindow(contentRect: NSRect(x: -10000, y: -10000, width: 80, height: 40), styleMask: [.borderless],
+        /// How far the track's colour, beside the knob, is from the system's colour for it (the accent colour on, the
+        /// light fill off, at half opacity disabled), in a borderless window never made key, as a menu's is.
+        func trackError(on: Bool, enabled: Bool, _ name: NSAppearance.Name) throws -> CGFloat {
+            let window = NSWindow(contentRect: NSRect(x: -10000, y: -10000, width: 160, height: 40), styleMask: [.borderless],
                                   backing: .buffered, defer: false)
+            window.appearance = NSAppearance(named: name)
             let drawn = MenuSwitch(frame: NSRect(origin: .zero, size: toggle.frame.size))
             drawn.state = on ? .on : .off
             drawn.isEnabled = enabled
+            // The system's colour, filled beside it in the same window, so both go through the same colour matching.
+            let swatch = Swatch(frame: drawn.frame.offsetBy(dx: drawn.frame.width, dy: 0))
+            swatch.color = on ? .controlAccentColor : .quaternaryLabelColor
             window.contentView?.addSubview(drawn)
-            window.appearance = NSAppearance(named: name)
+            window.contentView?.addSubview(swatch)
             XCTAssertFalse(window.isKeyWindow)
-            let rep = try XCTUnwrap(drawn.bitmapImageRepForCachingDisplay(in: drawn.bounds))
-            drawn.cacheDisplay(in: drawn.bounds, to: rep)
-            var most: CGFloat = 0
-            for x in 0..<rep.pixelsWide {
-                for y in 0..<rep.pixelsHigh {
-                    guard let color = rep.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
-                    most = max(most, color.saturationComponent * color.alphaComponent)
-                }
+            func pixel(_ view: NSView, x: (Int) -> Int) throws -> NSColor {
+                let rep = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+                view.cacheDisplay(in: view.bounds, to: rep)
+                return try XCTUnwrap(rep.colorAt(x: x(rep.pixelsWide), y: rep.pixelsHigh / 2))
             }
-            return most
+            let actual = try pixel(drawn) { on ? 3 : $0 - 4 }
+            let expected = try pixel(swatch) { $0 / 2 }
+            return [abs(actual.redComponent - expected.redComponent), abs(actual.greenComponent - expected.greenComponent),
+                    abs(actual.blueComponent - expected.blueComponent),
+                    abs(actual.alphaComponent - expected.alphaComponent * (enabled ? 1 : 0.5))].max()!
         }
         for name in [NSAppearance.Name.aqua, .darkAqua] {
-            XCTAssertGreaterThan(try saturation(on: true, enabled: true, name), 0.6, name.rawValue)
-            XCTAssertLessThan(try saturation(on: false, enabled: true, name), 0.1, name.rawValue)
-            let dimmed = try saturation(on: true, enabled: false, name)
-            XCTAssertTrue(dimmed > 0.2 && dimmed < 0.6, "\(name.rawValue) \(dimmed)")
+            for on in [false, true] {
+                for enabled in [false, true] {
+                    XCTAssertLessThan(try trackError(on: on, enabled: enabled, name), 0.03, "\(name.rawValue) on \(on) enabled \(enabled)")
+                }
+            }
         }
     }
 
@@ -752,5 +759,15 @@ final class MenuTests: XCTestCase {
         items.show(menuModel(.checking, Permissions(calendar: .denied, reminders: .fullAccess, notes: "granted")))
         XCTAssertEqual(items.rows[0].attributedTitle?.string, "Calendar\tNeeds Access")
         XCTAssertEqual(items.rows[1].attributedTitle?.string, "Reminders")
+    }
+}
+
+/// A view filled with one colour, as a reference drawn the way the menu's views are.
+private final class Swatch: NSView {
+    var color = NSColor.clear
+
+    override func draw(_ dirtyRect: NSRect) {
+        color.setFill()
+        bounds.fill()
     }
 }
