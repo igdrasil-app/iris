@@ -247,8 +247,14 @@ func withScopeLock<T>(_ path: String, wait: Double = 2, _ body: () throws -> T) 
     } catch {
         throw IrisError("cannot create \(directory): \(error.localizedDescription)")
     }
+    // Nothing is made in a folder others can write in, the lock file included.
+    let folder = open(directory, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+    guard folder >= 0 else { throw IrisError("cannot open \(directory): \(String(cString: strerror(errno)))") }
+    defer { close(folder) }
+    try checkFolder(folder, directory, "the folder", forbidden: 0o022, only: "writable by you only", fix: "chmod go-w")
     let lockPath = target + ".lock"
-    let lock = open(lockPath, O_RDONLY | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0o600)
+    // Non-blocking: something that is not a file at that path is refused below, not waited on.
+    let lock = open(lockPath, O_RDONLY | O_CREAT | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC, 0o600)
     guard lock >= 0 else { throw IrisError("cannot open \(lockPath): \(String(cString: strerror(errno)))") }
     // Closing it releases the lock.
     defer { close(lock) }
@@ -256,9 +262,9 @@ func withScopeLock<T>(_ path: String, wait: Double = 2, _ body: () throws -> T) 
     guard fstat(lock, &info) == 0, info.st_mode & S_IFMT == S_IFREG, info.st_uid == getuid() else {
         throw IrisError("\(lockPath) must be a file of yours")
     }
-    let deadline = Date().addingTimeInterval(wait)
+    let deadline = DispatchTime.now() + wait
     while flock(lock, LOCK_EX | LOCK_NB) != 0 {
-        guard errno == EWOULDBLOCK, Date() < deadline else {
+        guard errno == EWOULDBLOCK, DispatchTime.now() < deadline else {
             throw IrisError("Another copy of Iris is changing what is shared; try again.")
         }
         usleep(10_000)

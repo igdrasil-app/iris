@@ -243,7 +243,9 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate, MenuAction
             sender.reply(toApplicationShouldTerminate: true)
         }
         scopeChanges.whenDrained(reply)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { reply() }
+        // A timer in the common modes: it also fires while an alert about a failed tick is up.
+        let timeout = Timer(timeInterval: 5, repeats: false) { _ in MainActor.assumeIsolated { reply() } }
+        RunLoop.main.add(timeout, forMode: .common)
         return .terminateLater
     }
 
