@@ -403,17 +403,16 @@ final class RemoteServer {
     }
 }
 
-/// The menu's ticks and resets, one at a time in the order made, none of it on the main thread but the answers. A
-/// tick that changes which items are shared, or turns an app on again with what it shared before, first lists that
-/// app again and is applied against that answer, never an older one: decided when its turn comes, after the ticks
-/// before it have answered; a listing that fails or takes longer than `listingDeadline` changes nothing and says so, and an answer
-/// after that is ignored. Each change is made to the scope file as it is on disk then, under the lock every copy of
-/// Iris takes, and written at once. The switch's server is restarted once the changes have stopped for `quiet`
-/// seconds and none is waiting: so once, after the last of them has been written, and the server reads it.
+/// The menu's ticks and resets, one at a time in the order made, none of it on the main thread but the answers. Each
+/// change is made to the scope file as it is on disk then, under the lock every copy of Iris takes, and written at
+/// once. A tick that needs its app's items as they are now, as that change finds the files under the lock, changes
+/// nothing then: its app is listed and the change made again with that answer, never an older one, and once only.
+/// A listing that fails or takes longer than `listingDeadline` changes nothing and says so, and an answer after that
+/// is ignored. The switch's server is restarted once the changes have stopped for `quiet` seconds and none is
+/// waiting: so once, after the last of them has been written, and the server reads it.
 @MainActor
 final class ScopeChanges {
     let path: String
-    private let remembered: UserDefaults  // what each app shared before it was turned off
     private let quiet: Double
     private let listingDeadline: Double
     private let listing: @Sendable (ScopeKind) -> [Named]?
@@ -425,16 +424,14 @@ final class ScopeChanges {
     private var drained: [() -> Void] = []
 
     private struct Job {
-        let listing: () -> ScopeKind?  // listed first, asked when its turn comes
-        let change: @Sendable ([Named]) throws -> (file: ScopeFile?, written: Bool)  // under the lock
+        let change: @Sendable ([Named]?) throws -> (file: ScopeFile?, written: Bool)  // under the lock
         let done: (Result<ScopeFile?, Error>) -> Void
     }
 
     /// `listing` lists one app's items now, nil when it cannot without asking for a permission or opening Notes.
-    init(path: String, remembered: UserDefaults, quiet: Double = 0.5, listingDeadline: Double = 15,
+    init(path: String, quiet: Double = 0.5, listingDeadline: Double = 15,
          listing: @escaping @Sendable (ScopeKind) -> [Named]?, restart: @escaping () -> Void) {
         self.path = path
-        self.remembered = remembered
         self.quiet = quiet
         self.listingDeadline = listingDeadline
         self.listing = listing
@@ -447,11 +444,8 @@ final class ScopeChanges {
     /// Queues the tick; `done` gets the file after it, or why nothing changed.
     func submit(_ tick: ScopeTick, done: @escaping (Result<ScopeFile, Error>) -> Void) {
         let path = self.path
-        // UserDefaults may be used from any thread.
-        nonisolated(unsafe) let remembered = self.remembered
-        enqueue(Job(listing: { tick.needsListing(sharedBefore(remembered)) ? tick.kind : nil },
-                    change: { items in
-                        let (file, written) = try changeScopeFile(path, tick, items: items, remembering: remembered)
+        enqueue(Job(change: { items in
+                        let (file, written) = try changeScopeFile(path, tick, items: items)
                         return (file, written)
                     },
                     done: { done($0.map { $0! }) }))
@@ -461,8 +455,7 @@ final class ScopeChanges {
     /// gets whether it was done; not when the file was fixed meanwhile.
     func reset(done: @escaping (Result<Bool, Error>) -> Void) {
         let path = self.path
-        enqueue(Job(listing: { nil },
-                    change: { _ in
+        enqueue(Job(change: { _ in
                         try withScopeLock(path) {
                             guard case .broken = loadScopeFile(path) else { return (nil, false) }
                             _ = try resetScopeFile(path)
@@ -491,8 +484,10 @@ final class ScopeChanges {
             return
         }
         busy = true
-        let job = queue.removeFirst()
-        guard let kind = job.listing() else { return run(job, items: []) }
+        run(queue.removeFirst(), items: nil)
+    }
+
+    private func list(_ kind: ScopeKind, _ job: Job) {
         let request = UUID()
         waiting = request
         Task.detached { [weak self, listing] in
@@ -522,15 +517,18 @@ final class ScopeChanges {
         run(job, items: items)
     }
 
-    private func run(_ job: Job, items: [Named]) {
+    private func run(_ job: Job, items: [Named]?) {
         let change = job.change
         Task.detached { [weak self] in
             let result = Result { try change(items) }
-            await self?.ran(result, job)
+            await self?.ran(result, job, listed: items != nil)
         }
     }
 
-    private func ran(_ result: Result<(file: ScopeFile?, written: Bool), Error>, _ job: Job) {
+    private func ran(_ result: Result<(file: ScopeFile?, written: Bool), Error>, _ job: Job, listed: Bool) {
+        if case .failure(let error) = result, let needed = error as? ScopeListingNeeded, !listed {
+            return list(needed.kind, job)
+        }
         if case .success(let outcome) = result, outcome.written { restartSoon() }
         job.done(result.map(\.file))
         next()

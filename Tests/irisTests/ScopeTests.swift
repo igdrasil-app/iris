@@ -481,7 +481,7 @@ final class ScopeTests: XCTestCase {
         }
         let cleared = try checkedApplying(.access(.calendars, .off), to: both, items: stuck)
         XCTAssertEqual(cleared.file, ScopeFile(calendars: [], folders: []))
-        XCTAssertEqual(cleared.remembered, [.calendars: ["a", "b"]])
+        XCTAssertEqual(cleared.remembered, [.calendars: .entries(["a", "b"])])
         let withC = try checkedApplying(.item(.calendars, "c", true), to: cleared.file, items: stuck)
         XCTAssertEqual(withC.file, ScopeFile(calendars: ["c"], folders: []))
         // An id another item is named after can be shared only beside that other item.
@@ -489,9 +489,13 @@ final class ScopeTests: XCTestCase {
         XCTAssertEqual(try checkedApplying(.item(.calendars, "a", true), to: withC.file, items: stuck).file,
                        ScopeFile(calendars: ["c", "a"], folders: []))
         // Turned on again, the stuck selection is not restored as it was, which would be refused: what would be
-        // refused is dropped, and with nothing left, everything is shared.
-        XCTAssertEqual(try checkedApplying(.access(.calendars, .readOnly), to: cleared.file, items: stuck, remembered: cleared.remembered).file,
-                       ScopeFile(calendars: nil, folders: []))
+        // refused is dropped, and with nothing left, it stays off and says so; never everything.
+        XCTAssertThrowsError(try checkedApplying(.access(.calendars, .readOnly), to: cleared.file, items: stuck, remembered: cleared.remembered)) {
+            XCTAssertEqual("\($0)", "None of the calendars shared before can be shared again, so nothing was changed. "
+                + "Choose which to share under Choose Calendars.")
+        }
+        XCTAssertEqual(applying(.access(.calendars, .readWrite), to: cleared.file, items: stuck, remembered: cleared.remembered).file,
+                       cleared.file)
         // An entry that was there already and names nothing does not stop another change.
         XCTAssertEqual(try checkedApplying(.item(.calendars, "c2", true), to: ScopeFile(calendars: ["Old"], folders: []), items: named).file,
                        ScopeFile(calendars: ["Old", "c2"], folders: []))
@@ -560,71 +564,142 @@ final class ScopeTests: XCTestCase {
         XCTAssertEqual(applying(.access(.calendars, .readOnly), to: shared, items: named).file, ScopeFile(calendars: ["c1"], folders: []))
     }
 
-    /// Off remembers what an app shared, and turning it on shares that again: "all", ids, names as they read now,
-    /// without what was deleted since; nothing remembered, or nothing left, is everything.
+    /// Off remembers what an app shared, and turning it on shares that again, worked out here by hand: "all", ids, names
+    /// as they read now, without what was deleted or cannot be told apart since; nothing ever remembered is everything,
+    /// and a selection of which nothing is left stays off, never everything.
     func testOffAndOnAgain() throws {
         func turn(_ level: ShareLevel, _ file: ScopeFile, _ remembered: SharedBefore = [:], items: [Named]? = nil) -> (file: ScopeFile, remembered: SharedBefore) {
             applying(.access(.calendars, level), to: file, items: items ?? named, remembered: remembered)
         }
-        let all = ScopeFile(calendars: nil, folders: [], writes: true)
-        let offFromAll = turn(.off, all)
-        XCTAssertEqual(offFromAll.file, ScopeFile(calendars: [], folders: []))
-        XCTAssertEqual(offFromAll.remembered, [:])
+        let none = ScopeFile(calendars: [], folders: [])
+        // "all" is remembered as "all", and shared again as "all".
+        let offFromAll = turn(.off, ScopeFile(calendars: nil, folders: [], writes: true))
+        XCTAssertEqual(offFromAll.file, none)
+        XCTAssertEqual(offFromAll.remembered, [.calendars: .all])
         XCTAssertEqual(turn(.readOnly, offFromAll.file, offFromAll.remembered).file, ScopeFile(calendars: nil, folders: []))
+        // Nothing ever remembered, as on a first run or after a hand edit to []: everything.
+        XCTAssertEqual(turn(.readOnly, none).file, ScopeFile(calendars: nil, folders: []))
 
         let some = ScopeFile(calendars: ["c1", "c3"], folders: [])
-        let offFromSome = turn(.off, some, [.lists: ["l1"]])
-        XCTAssertEqual(offFromSome.remembered, [.calendars: ["c1", "c3"], .lists: ["l1"]])
+        let offFromSome = turn(.off, some, [.lists: .entries(["l1"])])
+        XCTAssertEqual(offFromSome.remembered, [.calendars: .entries(["c1", "c3"]), .lists: .entries(["l1"])])
         let onAgain = turn(.readWrite, offFromSome.file, offFromSome.remembered)
         XCTAssertEqual(onAgain.file, ScopeFile(calendars: ["c1", "c3"], folders: [], writes: true))
-        // Turned on, it forgets; the other apps' are kept.
-        XCTAssertEqual(onAgain.remembered, [.lists: ["l1"]])
-        // One deleted since: the rest. All deleted: everything.
-        let withoutC3 = Array(named.prefix(2))
-        XCTAssertEqual(turn(.readOnly, offFromSome.file, offFromSome.remembered, items: withoutC3).file, ScopeFile(calendars: ["c1"], folders: []))
-        XCTAssertEqual(turn(.readOnly, offFromSome.file, offFromSome.remembered, items: [Named(id: "c9", name: "New")]).file,
-                       ScopeFile(calendars: nil, folders: []))
-        // A file that named calendars by name: restored by what the names name now, by id, never everything.
-        let byName = turn(.off, ScopeFile(calendars: ["Work", "Old"], folders: []))
-        XCTAssertEqual(byName.remembered, [.calendars: ["Work", "Old"]])
-        XCTAssertEqual(turn(.readOnly, byName.file, byName.remembered, items: named + [Named(id: "c4", name: "Work")]).file,
+        XCTAssertEqual(onAgain.remembered, [.lists: .entries(["l1"])])
+        // Deleted since: the rest; all of it: it stays off.
+        let remembered: SharedBefore = [.calendars: .entries(["c1", "c3"])]
+        XCTAssertEqual(turn(.readOnly, none, remembered, items: [Named(id: "c1", name: "Work"), Named(id: "c2", name: "Family")]).file,
+                       ScopeFile(calendars: ["c1"], folders: []))
+        let gone = turn(.readWrite, none, remembered, items: [Named(id: "c9", name: "New")])
+        XCTAssertEqual(gone.file, none)
+        XCTAssertEqual(gone.remembered, remembered)
+        // Listed and empty is no listing to share from: it stays off.
+        XCTAssertEqual(turn(.readOnly, none, remembered, items: []).file, none)
+        // Names, as they read now, by id: a name two calendars share now names both; an entry naming nothing is dropped.
+        XCTAssertEqual(turn(.readOnly, none, [.calendars: .entries(["Work", "Old"])],
+                            items: [Named(id: "c1", name: "Work"), Named(id: "c2", name: "Family"), Named(id: "c4", name: "Work")]).file,
                        ScopeFile(calendars: ["c1", "c4"], folders: []))
-        // A file that says [] by hand, nothing remembered: everything.
-        XCTAssertEqual(turn(.readOnly, ScopeFile(calendars: [], folders: [])).file, ScopeFile(calendars: nil, folders: []))
+        // An ambiguity chain: "a" is x's id and y's name, "x" is a's... each dropped in turn until none is left.
+        let chain = [Named(id: "a", name: "x"), Named(id: "x", name: "a"), Named(id: "b", name: "Home")]
+        XCTAssertEqual(turn(.readOnly, none, [.calendars: .entries(["a"])], items: chain).file, none)
+        XCTAssertEqual(turn(.readOnly, none, [.calendars: .entries(["a", "b"])], items: chain).file, ScopeFile(calendars: ["b"], folders: []))
+        XCTAssertEqual(turn(.readOnly, none, [.calendars: .entries(["a", "x"])], items: chain).file, ScopeFile(calendars: ["a", "x"], folders: []))
+        // A memory that cannot be read: nothing to share again, so it stays off.
+        XCTAssertEqual(turn(.readOnly, none, unreadableSharedBefore).file, none)
         // The last item unticked remembers that item, as Off does; Off when already off remembers nothing new.
         let last = applying(.item(.calendars, "c2", false), to: ScopeFile(calendars: ["c2"], folders: [], writes: true), items: named)
-        XCTAssertEqual(last.file, ScopeFile(calendars: [], folders: []))
-        XCTAssertEqual(last.remembered, [.calendars: ["c2"]])
-        XCTAssertEqual(turn(.off, last.file, last.remembered).remembered, [.calendars: ["c2"]])
+        XCTAssertEqual(last.file, none)
+        XCTAssertEqual(last.remembered, [.calendars: .entries(["c2"])])
+        XCTAssertEqual(turn(.off, last.file, last.remembered).remembered, [.calendars: .entries(["c2"])])
         XCTAssertEqual(turn(.readOnly, last.file, last.remembered).file, ScopeFile(calendars: ["c2"], folders: []))
-        // Read Only to Read & Write and back changes only writes, and remembers nothing.
-        XCTAssertEqual(turn(.readWrite, some, [.calendars: ["c2"]]).file, ScopeFile(calendars: ["c1", "c3"], folders: [], writes: true))
-        XCTAssertEqual(turn(.readWrite, some, [.calendars: ["c2"]]).remembered, [.calendars: ["c2"]])
-        // Only an app turned on with something remembered needs its items listed first.
-        XCTAssertTrue(ScopeTick.access(.calendars, .readOnly).needsListing([.calendars: ["c1"]]))
-        XCTAssertFalse(ScopeTick.access(.calendars, .readOnly).needsListing([.lists: ["l1"]]))
-        XCTAssertFalse(ScopeTick.access(.calendars, .off).needsListing([.calendars: ["c1"]]))
-        XCTAssertFalse(ScopeTick.all(.calendars).needsListing([:]))
-        XCTAssertTrue(ScopeTick.item(.calendars, "c1", true).needsListing([:]))
+        // The last Missing entry removed: remembered as written, so nothing can be shared again from it.
+        let missing = applying(.remove(.calendars, "Old"), to: ScopeFile(calendars: ["Old"], folders: []), items: named)
+        XCTAssertEqual(missing.file, none)
+        XCTAssertEqual(missing.remembered, [.calendars: .entries(["Old"])])
+        XCTAssertEqual(turn(.readOnly, missing.file, missing.remembered).file, none)
+        // All, or an item, from a hand-written [] with writes on: Read Only.
+        let handWritten = ScopeFile(calendars: [], folders: [], writes: true, sharedEvents: true)
+        XCTAssertEqual(applying(.item(.calendars, "c1", true), to: handWritten, items: named).file, ScopeFile(calendars: ["c1"], folders: []))
+        XCTAssertEqual(applying(.all(.calendars), to: handWritten, items: named).file, ScopeFile(calendars: nil, folders: []))
+        XCTAssertEqual(applying(.all(.calendars), to: ScopeFile(calendars: ["c1"], folders: [], writes: true), items: named).file,
+                       ScopeFile(calendars: nil, folders: [], writes: true))
+        // An item ticked while off shares it, and forgets.
+        XCTAssertEqual(applying(.item(.calendars, "c3", true), to: none, items: named, remembered: [.calendars: .entries(["Gone"])]).remembered, [:])
+        // An app that shares remembers nothing, however it came to share: what was, for any app, is forgotten.
+        XCTAssertEqual(turn(.readWrite, some, [.calendars: .entries(["c2"])]).remembered, [:])
+        XCTAssertEqual(applying(.access(.lists, .readOnly), to: some, items: lists, remembered: [.calendars: .entries(["c2"])]).remembered, [:])
+        // Only an app that shares none, turned on with entries remembered, needs its items listed first.
+        XCTAssertTrue(ScopeTick.access(.calendars, .readOnly).needsListing(none, [.calendars: .entries(["c1"])]))
+        XCTAssertFalse(ScopeTick.access(.calendars, .readOnly).needsListing(some, [.calendars: .entries(["c1"])]))
+        XCTAssertFalse(ScopeTick.access(.calendars, .readOnly).needsListing(none, [.calendars: .all]))
+        XCTAssertFalse(ScopeTick.access(.calendars, .readOnly).needsListing(none, unreadableSharedBefore))
+        XCTAssertFalse(ScopeTick.access(.calendars, .readOnly).needsListing(none, [.lists: .entries(["l1"])]))
+        XCTAssertFalse(ScopeTick.access(.calendars, .off).needsListing(none, [.calendars: .entries(["c1"])]))
+        XCTAssertFalse(ScopeTick.all(.calendars).needsListing(none, [:]))
+        XCTAssertTrue(ScopeTick.item(.calendars, "c1", true).needsListing(some, [:]))
     }
 
-    /// What is remembered is kept in the defaults given, by changes to the file on disk, and only there.
-    func testRememberedOnDisk() throws {
+    /// The memory beside the scope file: owner-only, read and written under the lock, saved before Off is written and
+    /// cleared only after the app shares again, so a crash at either point leaves nothing that shares more.
+    func testMemoryOnDisk() throws {
         let folder = NSTemporaryDirectory() + "iris-remembered-" + UUID().uuidString
         defer { try? FileManager.default.removeItem(atPath: folder) }
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: folder + "/defaults"))
-        defer { defaults.removePersistentDomain(forName: folder + "/defaults") }
         let path = folder + "/http-scope"
+        let memory = path + ".shared-before"
+        func mode(_ path: String) -> Int? { try? FileManager.default.attributesOfItem(atPath: path)[.posixPermissions] as? Int }
+        struct Crash: Error {}
         try writeScopeFile(ScopeFile(calendars: ["c1"], folders: nil, lists: ["l2"]), to: path)
-        _ = try changeScopeFile(path, .access(.calendars, .off), items: [], remembering: defaults)
-        _ = try changeScopeFile(path, .access(.folders, .off), items: [], remembering: defaults)
-        XCTAssertEqual(sharedBefore(defaults), [.calendars: ["c1"]])
-        XCTAssertEqual(defaults.stringArray(forKey: "sharedBeforeOff.calendars"), ["c1"])
-        XCTAssertEqual(try changeScopeFile(path, .access(.calendars, .readOnly), items: named, remembering: defaults).file,
+        // Turned on and off with nothing remembered and nothing to remember: no file.
+        _ = try changeScopeFile(path, .access(.calendars, .readWrite), items: nil)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: memory))
+        _ = try changeScopeFile(path, .access(.calendars, .off), items: nil)
+        _ = try changeScopeFile(path, .access(.folders, .off), items: nil)
+        XCTAssertEqual(loadSharedBefore(memory), [.calendars: .entries(["c1"]), .folders: .all])
+        XCTAssertEqual(mode(memory), 0o600)
+        XCTAssertEqual(String(decoding: try Data(contentsOf: URL(fileURLWithPath: memory)), as: UTF8.self),
+                       "{\n  \"calendars\" : [\n    \"c1\"\n  ],\n  \"folders\" : \"all\"\n}\n")
+        // Not listed, it asks for a listing and changes nothing.
+        XCTAssertThrowsError(try changeScopeFile(path, .access(.calendars, .readOnly), items: nil)) { XCTAssertTrue($0 is ScopeListingNeeded) }
+        XCTAssertEqual(try changeScopeFile(path, .access(.calendars, .readOnly), items: named).file,
                        ScopeFile(calendars: ["c1"], folders: [], lists: ["l2"]))
-        XCTAssertEqual(sharedBefore(defaults), [:])
-        XCTAssertEqual(try changeScopeFile(path, .access(.folders, .readOnly), items: [], remembering: defaults).file,
-                       ScopeFile(calendars: ["c1"], folders: nil, lists: ["l2"]))
+        XCTAssertEqual(loadSharedBefore(memory), [.folders: .all])
+
+        // A crash after the memory is saved, before Off is written: the app still shares, with a memory it does not
+        // need, which the next change drops; turned off then, it remembers what it shared.
+        XCTAssertThrowsError(try changeScopeFile(path, .access(.lists, .off), items: nil, stop: { if $0 == .remembered { throw Crash() } }))
+        XCTAssertEqual(try readScopeFile(path).lists, ["l2"])
+        XCTAssertEqual(loadSharedBefore(memory), [.folders: .all, .lists: .entries(["l2"])])
+        _ = try changeScopeFile(path, .sharedEvents(false), items: nil)
+        XCTAssertEqual(loadSharedBefore(memory), [.folders: .all])
+        // A crash after Off is written and before anything is forgotten: off, remembered; turned on, the same lists.
+        try writeScopeFile(ScopeFile(calendars: ["c1"], folders: [], lists: ["l2"]), to: path)
+        XCTAssertThrowsError(try changeScopeFile(path, .access(.lists, .off), items: nil, stop: { if $0 == .written { throw Crash() } }))
+        XCTAssertEqual(try readScopeFile(path).lists, [])
+        XCTAssertEqual(loadSharedBefore(memory), [.folders: .all, .lists: .entries(["l2"])])
+        // A crash after the app is turned on and before its memory is cleared: on, with a memory the next change drops.
+        XCTAssertThrowsError(try changeScopeFile(path, .access(.lists, .readOnly), items: lists, stop: { if $0 == .written { throw Crash() } }))
+        XCTAssertEqual(try readScopeFile(path).lists, ["l2"])
+        XCTAssertEqual(loadSharedBefore(memory), [.folders: .all, .lists: .entries(["l2"])])
+        _ = try changeScopeFile(path, .access(.folders, .readOnly), items: nil)
+        XCTAssertEqual(loadSharedBefore(memory), [:])
+        XCTAssertEqual(try readScopeFile(path), ScopeFile(calendars: ["c1"], folders: nil, lists: ["l2"]))
+
+        // A memory that cannot be read, or that others can read: an app off stays off, never everything.
+        _ = try changeScopeFile(path, .access(.calendars, .off), items: nil)
+        for broken in ["not json", #"{"calendars": 1}"#, #"{"other": "all"}"#] {
+            try Data(broken.utf8).write(to: URL(fileURLWithPath: memory))
+            chmod(memory, 0o600)
+            XCTAssertNil(loadSharedBefore(memory), broken)
+            XCTAssertThrowsError(try changeScopeFile(path, .access(.calendars, .readOnly), items: nil), broken)
+            XCTAssertEqual(try readScopeFile(path).calendars, [], broken)
+        }
+        try writeSharedBefore([.calendars: .all], to: memory)
+        chmod(memory, 0o644)
+        XCTAssertNil(loadSharedBefore(memory))
+        XCTAssertThrowsError(try changeScopeFile(path, .access(.calendars, .readOnly), items: nil))
+        // No memory at all, as on a first run: everything.
+        try FileManager.default.removeItem(atPath: memory)
+        XCTAssertEqual(try changeScopeFile(path, .access(.calendars, .readOnly), items: nil).file.calendars, nil)
     }
 
     func testEncodedFileReadsBack() throws {
@@ -724,7 +799,7 @@ final class ScopeTests: XCTestCase {
         let broken = Data("{\"calendars\": [\"c1\"".utf8)
         try broken.write(to: URL(fileURLWithPath: path))
         guard case .broken = loadScopeFile(path) else { return XCTFail("a broken file reads as broken") }
-        XCTAssertThrowsError(try changeScopeFile(path, .all(.calendars), items: []))
+        XCTAssertThrowsError(try changeScopeFile(path, .all(.calendars), items: nil))
         XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: path)), broken)
         let copy = try resetScopeFile(path, now: Date(timeIntervalSince1970: 0))
         XCTAssertTrue(copy.hasPrefix(path + ".broken-19"))
@@ -736,7 +811,7 @@ final class ScopeTests: XCTestCase {
         chmod(path, 0o644)
         guard case .broken = loadScopeFile(path) else { return XCTFail("a file others can read reads as broken") }
         let loose = try Data(contentsOf: URL(fileURLWithPath: path))
-        XCTAssertThrowsError(try changeScopeFile(path, .all(.calendars), items: []))
+        XCTAssertThrowsError(try changeScopeFile(path, .all(.calendars), items: nil))
         XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: path)), loose)
         XCTAssertEqual(mode(path), 0o644)
 
@@ -744,7 +819,7 @@ final class ScopeTests: XCTestCase {
         chmod(path, 0o600)
         try FileManager.default.createDirectory(atPath: folder + "/links", withIntermediateDirectories: true)
         try FileManager.default.createSymbolicLink(atPath: folder + "/links/http-scope", withDestinationPath: path)
-        _ = try changeScopeFile(folder + "/links/http-scope", .all(.folders), items: [])
+        _ = try changeScopeFile(folder + "/links/http-scope", .all(.folders), items: nil)
         XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: folder + "/links/http-scope"), path)
         XCTAssertEqual(loadScopeFile(path), .file(ScopeFile(calendars: [], folders: nil)))
         // The lock is a file of its own beside the target, owner-only and empty; nothing beside the link.
@@ -764,11 +839,11 @@ final class ScopeTests: XCTestCase {
         defer { close(state) }
         XCTAssertEqual(flock(state, LOCK_EX | LOCK_NB), 0)
         let begun = Date()
-        let changed = try changeScopeFile(folder + "/http-scope", .sharedEvents(true), items: []).file
+        let changed = try changeScopeFile(folder + "/http-scope", .sharedEvents(true), items: nil).file
         XCTAssertEqual(changed, ScopeFile(calendars: [], folders: []))
-        XCTAssertEqual(try changeScopeFile(folder + "/http-scope", .all(.calendars), items: []).file,
+        XCTAssertEqual(try changeScopeFile(folder + "/http-scope", .all(.calendars), items: nil).file,
                        ScopeFile(calendars: nil, folders: []))
-        XCTAssertEqual(try changeScopeFile(folder + "/http-scope", .access(.calendars, .readWrite), items: []).file,
+        XCTAssertEqual(try changeScopeFile(folder + "/http-scope", .access(.calendars, .readWrite), items: nil).file,
                        ScopeFile(calendars: nil, folders: [], writes: true))
         XCTAssertLessThan(Date().timeIntervalSince(begun), 0.5)
         // And the server's own lock is still its own.
@@ -800,15 +875,22 @@ final class ScopeTests: XCTestCase {
         XCTAssertNoThrow(try withScopeLock(path, wait: 2) {})
     }
 
-    /// Ticks against listings that change between them: items deleted, renamed, named like another's id, added, and a
-    /// menu that still shows a deleted one. After each tick that is not refused, the file reads back as itself; a file a
-    /// server would start with still is; and nothing is shared that was not before the tick, ticked by it, or, for an
-    /// app turned on again, named by what it shared before it was turned off (everything when none of that is left).
+    /// Two copies of Iris on one scope file and one memory, through `changeScopeFile` as the menu makes changes (not
+    /// listed first; listed when it asks), against listings that change between ticks, with hand edits between them,
+    /// and each copy ticking items it listed some ticks ago. After each change that is not refused, the file reads back
+    /// as itself and a server would still start with it; and nothing is shared that was not before the change, ticked
+    /// by it, or, for an app turned on again, exactly what a memory entry names in the fresh listing, worked out here
+    /// independently; everything only when nothing was remembered, or "all" was. A refused change changes nothing.
     func testTicksAgainstChangingListings() throws {
-        var random = SplitMix(seed: 126)
+        let folder = NSTemporaryDirectory() + "iris-walk-" + UUID().uuidString
+        defer { try? FileManager.default.removeItem(atPath: folder) }
+        let path = folder + "/http-scope"
+        let memory = path + ".shared-before"
+        var random = SplitMix(seed: 127)
         var items = named
         var added = 10
         var deleted: [String] = []
+        var seen = [named, named]  // what each copy listed last
         func pinned(_ file: ScopeFile) -> Set<String>?? {
             let listing = { (_: [String]) throws -> Data in
                 try JSONSerialization.data(withJSONObject: items.map { ["id": $0.id, "title": $0.name] })
@@ -816,24 +898,42 @@ final class ScopeTests: XCTestCase {
             guard let scope = try? pinScope(file, "/x/scope", listing: listing) else { return nil }
             return .some(scope.calendars.map { Set($0.map(\.id)) })
         }
-        /// What remembered entries share again now, as `restored` works it out, independently.
-        func restoring(_ entries: [String]) -> Set<String> {
-            var shared = Set(entries.flatMap { pick([$0], from: items, allowed: nil, id: \.id, name: \.name).found ?? [] }.map(\.id))
-            while let confusing = shared.first(where: { id in items.contains { $0.name == id && !shared.contains($0.id) } }) {
-                shared.remove(confusing)
+        /// What remembered entries share again, written apart from `restored`: an entry is the item with that id, or
+        /// else every item with that name; then an id that is the name of an item not shared is dropped, until none is.
+        func expectedRestore(_ entries: [String]) -> Set<String> {
+            var ids = Set<String>()
+            for entry in entries {
+                if items.contains(where: { $0.id == entry }) {
+                    ids.insert(entry)
+                } else {
+                    for item in items where item.name == entry { ids.insert(item.id) }
+                }
             }
-            return shared
+            var changed = true
+            while changed {
+                changed = false
+                for id in ids.sorted() where items.contains(where: { $0.name == id && !ids.contains($0.id) }) {
+                    ids.remove(id)
+                    changed = true
+                    break
+                }
+            }
+            return ids
         }
         var refused = 0
         var accepted = 0
         var restores = 0
+        var stayedOff = 0
+        var handEdits = 0
+        var exactRestores = 0
+        var interleaved = 0
         for start in [ScopeFile(calendars: [], folders: []), ScopeFile(calendars: nil, folders: []),
                       ScopeFile(calendars: ["Work", "c2"], folders: [], writes: true)] {
-            var file = start
-            var remembered: SharedBefore = [:]
+            try writeScopeFile(start, to: path)
+            try? FileManager.default.removeItem(atPath: memory)
             for _ in 0..<300 {
                 let index = Int(random.next() % UInt64(items.count))
-                switch random.next() % 8 {
+                switch random.next() % 9 {
                 case 0 where items.count > 1:
                     deleted.append(items.remove(at: index).id)
                 case 1:
@@ -843,12 +943,24 @@ final class ScopeTests: XCTestCase {
                 case 3:
                     added += 1
                     items.append(Named(id: "c\(added)", name: ["Work", "Family", "Trips", "c1"][Int(random.next() % 4)]))
+                case 4:
+                    // A hand edit: none, or one item, by id or name.
+                    let item = items[Int(random.next() % UInt64(items.count))]
+                    let calendars: [String] = [[], [item.id], [item.name]][Int(random.next() % 3)]
+                    var file = try readScopeFile(path)
+                    file.calendars = calendars
+                    if calendars == [] { file.writes = false; file.sharedEvents = false }
+                    try writeScopeFile(file, to: path)
+                    handEdits += 1
                 default:
                     break
                 }
+                let copy = Int(random.next() % 2)
+                if random.next() % 3 == 0 { seen[copy] = items }
                 let stale = deleted.isEmpty ? nil : deleted[Int(random.next() % UInt64(deleted.count))]
-                let current = items[Int(random.next() % UInt64(items.count))].id
-                let id = random.next() % 6 == 0 ? stale ?? current : current
+                let shown = seen[copy][Int(random.next() % UInt64(seen[copy].count))].id
+                let id = random.next() % 6 == 0 ? stale ?? shown : shown
+                var file = try readScopeFile(path)
                 let missing = (file.calendars ?? []).first { entry in !items.contains { $0.id == entry || $0.name == entry } }
                 let on = random.next() % 2 == 0
                 let level = [ShareLevel.off, .readOnly, .readWrite][Int(random.next() % 3)]
@@ -858,42 +970,71 @@ final class ScopeTests: XCTestCase {
                 case 2, 3: .access(.calendars, level)
                 default: .item(.calendars, id, on)
                 }
-                let before = pinned(file)
-                let after: (file: ScopeFile, remembered: SharedBefore)
+                var before = pinned(file)
+                var remembered = loadSharedBefore(memory) ?? unreadableSharedBefore
+                let after: ScopeFile
                 do {
-                    after = try checkedApplying(tick, to: file, items: items, remembered: remembered)
+                    do {
+                        after = try changeScopeFile(path, tick, items: nil).file
+                    } catch is ScopeListingNeeded {
+                        // While this copy lists, the other turns Calendar off, or a hand edit changes it.
+                        switch random.next() % 4 {
+                        case 0:
+                            _ = try? changeScopeFile(path, .access(.calendars, .off), items: nil)
+                            interleaved += 1
+                        case 1:
+                            var edited = try readScopeFile(path)
+                            edited.calendars = [items[Int(random.next() % UInt64(items.count))].id]
+                            try writeScopeFile(edited, to: path)
+                            interleaved += 1
+                        default:
+                            break
+                        }
+                        file = try readScopeFile(path)
+                        before = pinned(file)
+                        remembered = loadSharedBefore(memory) ?? unreadableSharedBefore
+                        after = try changeScopeFile(path, tick, items: items).file
+                    }
                 } catch {
                     refused += 1
+                    XCTAssertEqual(try readScopeFile(path), file, "\(tick) refused but changed the file")
+                    if case .access(_, let level) = tick, level != .off, file.calendars == [] { stayedOff += 1 }
                     continue
                 }
-                XCTAssertEqual(try parseScopeFile(encodeScopeFile(after.file)), after.file, "\(tick)")
-                if let shared = before {
-                    let now = try XCTUnwrap(pinned(after.file), "a file a server took is refused after \(tick)")
-                    accepted += 1
-                    if case .all = tick {
-                    } else if case .access(_, let level) = tick, level != .off, file.calendars == [] {
-                        restores += 1
-                        let again = remembered[.calendars].map(restoring)
-                        if let now {
-                            XCTAssertTrue(now.isSubset(of: again ?? []), "\(tick) shared more than it shared before")
-                        } else {
-                            XCTAssertTrue(again?.isEmpty ?? true, "\(tick) turned what it shared before into all")
-                        }
-                    } else if let now, let shared {
-                        let ticked: Set<String> = if case .item(_, let id, true) = tick { [id] } else { [] }
-                        XCTAssertTrue(now.isSubset(of: shared.union(ticked)), "\(tick) shared more than it was given")
-                    } else if now == nil {
-                        XCTAssertNil(shared, "\(tick) turned a list into all")
+                XCTAssertEqual(try parseScopeFile(encodeScopeFile(after)), after, "\(tick)")
+                // Nothing is remembered for an app that shares.
+                if after.calendars != [] { XCTAssertNil(loadSharedBefore(memory)?[.calendars], "\(tick)") }
+                guard let shared = before else { continue }
+                let now = try XCTUnwrap(pinned(after), "a file a server took is refused after \(tick)")
+                accepted += 1
+                if case .all = tick {
+                } else if case .access(_, let level) = tick, level != .off, file.calendars == [] {
+                    restores += 1
+                    switch remembered[.calendars] {
+                    case nil, .all:
+                        XCTAssertNil(now, "\(tick) from nothing remembered, or all")
+                    case .entries(let entries):
+                        exactRestores += 1
+                        let expected = expectedRestore(entries)
+                        XCTAssertFalse(expected.isEmpty, "\(tick) turned on with nothing to share again")
+                        XCTAssertEqual(now, expected, "\(tick) shared other than what it shared before")
                     }
+                } else if let now, let shared {
+                    let ticked: Set<String> = if case .item(_, let id, true) = tick { [id] } else { [] }
+                    XCTAssertTrue(now.isSubset(of: shared.union(ticked)), "\(tick) shared more than it was given")
+                } else if now == nil {
+                    XCTAssertNil(shared, "\(tick) turned a list into all")
                 }
-                file = after.file
-                remembered = after.remembered
             }
         }
         // Each happens often enough to mean something.
         XCTAssertGreaterThan(refused, 20)
         XCTAssertGreaterThan(accepted, 300)
         XCTAssertGreaterThan(restores, 20)
+        XCTAssertGreaterThan(stayedOff, 3)
+        XCTAssertGreaterThan(handEdits, 50)
+        XCTAssertGreaterThan(exactRestores, 10)
+        XCTAssertGreaterThan(interleaved, 20)
     }
 
     func testOnlyMineIsTheCallersWithSharedEvents() throws {

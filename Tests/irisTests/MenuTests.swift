@@ -33,7 +33,7 @@ final class MenuTests: XCTestCase {
         return [model.status] + model.rows.map { "\($0.title): \($0.detail ?? "-")\($0.problem ? " !" : "")" }
     }
 
-    private let usual = ["Calendar: Read & write", "Reminders: Off", "Notes: Read only"]
+    private let usual = ["Calendar: Read & Write", "Reminders: Off", "Notes: Read Only"]
     private let blank = ["Calendar: -", "Reminders: -", "Notes: -"]
 
     func testBeforeAnAnswer() {
@@ -56,7 +56,7 @@ final class MenuTests: XCTestCase {
                        ["Remote access on · restart to apply changes"] + usual)
         // A name that matches nothing: the access stands.
         XCTAssertEqual(shown(.known(state(usable: false, calendar: AppAccess(access: "read", items: .unknown), listeners: [(8788, .current)])), nil, mine),
-                       ["Remote access on · settings have a problem", "Calendar: Read only", "Reminders: Off", "Notes: Read only"])
+                       ["Remote access on · settings have a problem", "Calendar: Read Only", "Reminders: Off", "Notes: Read Only"])
         // A problem outweighs a change: a restart would not start. A file that cannot be read says nothing of what runs.
         XCTAssertEqual(shown(.known(state(usable: false, calendar: nil, notes: nil, reminders: nil, listeners: [(8788, .changed)])), nil, mine),
                        ["Remote access on · settings have a problem"] + blank)
@@ -64,7 +64,7 @@ final class MenuTests: XCTestCase {
                        ["Remote access on · settings have a problem"] + blank)
         // Not checked, since checking would ask for a permission: no problem known.
         XCTAssertEqual(shown(.known(state(usable: nil, calendar: AppAccess(access: "read", items: .unknown), listeners: [(8788, .current)])), nil, mine),
-                       ["Remote access on", "Calendar: Read only", "Reminders: Off", "Notes: Read only"])
+                       ["Remote access on", "Calendar: Read Only", "Reminders: Off", "Notes: Read Only"])
         // The last check has not seen the server yet, or not since it started again: the switch's server is on.
         XCTAssertEqual(shown(.known(state(listeners: [])), nil, mine), ["Remote access on"] + usual)
         XCTAssertEqual(shown(.checking, nil, mine), ["Remote access on"] + blank)
@@ -166,7 +166,7 @@ final class MenuTests: XCTestCase {
                                       notes: AppAccess(access: "none", items: .named([])),
                                       reminders: AppAccess(access: "read and write", items: .named(["A"])),
                                       listeners: [(8788, .current)])))
-        XCTAssertEqual(rows.dropFirst(), ["Calendar: Read only", "Reminders: Read & write", "Notes: Off"])
+        XCTAssertEqual(rows.dropFirst(), ["Calendar: Read Only", "Reminders: Read & Write", "Notes: Off"])
     }
 
     func testPermissions() {
@@ -174,7 +174,7 @@ final class MenuTests: XCTestCase {
         let off = RemoteAnswer.known(state(listeners: []))
         func rows(_ permissions: Permissions, _ remote: RemoteAnswer) -> [AppRow] { menuModel(remote, permissions).rows }
         func needs(_ title: String, _ action: RowAction) -> AppRow {
-            AppRow(title: title, detail: "Needs access", problem: true, action: action)
+            AppRow(title: title, detail: "Needs Access", problem: true, action: action)
         }
 
         let others: [RemoteAnswer] = [.known(state(listeners: [(8788, .changed)])),
@@ -205,16 +205,16 @@ final class MenuTests: XCTestCase {
         }
 
         let undecided = Permissions(calendar: .fullAccess, reminders: .notDetermined, notes: "not determined")
-        XCTAssertEqual(rows(undecided, on), [AppRow(title: "Calendar", detail: "Read & write", problem: false, action: nil),
+        XCTAssertEqual(rows(undecided, on), [AppRow(title: "Calendar", detail: "Read & Write", problem: false, action: nil),
                                              AppRow(title: "Reminders", detail: "Off", problem: false, action: nil),
-                                             AppRow(title: "Notes", detail: "Read only", problem: false, action: nil)])
+                                             AppRow(title: "Notes", detail: "Read Only", problem: false, action: nil)])
         for notes in ["unknown (Notes not running)", "unknown (-1)"] {
             XCTAssertEqual(rows(Permissions(calendar: .fullAccess, reminders: .fullAccess, notes: notes), on), rows(fine, on))
         }
         // Each app's problem shows on its own row only.
         let none = Permissions(calendar: .denied, reminders: .denied, notes: "denied")
-        XCTAssertEqual(shown(on, none, mine), ["Remote access on", "Calendar: Needs access !", "Reminders: Needs access !",
-                                               "Notes: Needs access !"])
+        XCTAssertEqual(shown(on, none, mine), ["Remote access on", "Calendar: Needs Access !", "Reminders: Needs Access !",
+                                               "Notes: Needs Access !"])
     }
 
     func testPanes() {
@@ -267,17 +267,17 @@ final class MenuTests: XCTestCase {
         let states: [(RemoteAnswer, Permissions, RemoteServerStatus, [String])] = [
             (.checking, fine, off, ["(Iris / Checking…)", "Calendar >", "Reminders >", "Notes >"]),
             (.known(state(listeners: [(8788, .current)])), fine, mine,
-             ["(Iris / Remote access on)", "Calendar [Read & write] >", "Reminders [Off] >", "Notes [Read only] >"]),
+             ["(Iris / Remote access on)", "Calendar [Read & Write] >", "Reminders [Off] >", "Notes [Read Only] >"]),
             (.known(state(listeners: [])), fine, off,
-             ["(Iris / Remote access off)", "Calendar [Read & write] >", "Reminders [Off] >", "Notes [Read only] >"]),
+             ["(Iris / Remote access off)", "Calendar [Read & Write] >", "Reminders [Off] >", "Notes [Read Only] >"]),
             (.known(state(listeners: [(8788, .current)])), Permissions(calendar: .denied, reminders: .fullAccess, notes: "granted"), mine,
-             ["(Iris / Remote access on)", "Calendar [Needs access]", "Reminders [Off] >", "Notes [Read only] >"]),
+             ["(Iris / Remote access on)", "Calendar [Needs Access]", "Reminders [Off] >", "Notes [Read Only] >"]),
             (.unknown, fine, off, ["(Iris / Remote access unknown)", "Calendar >", "Reminders >", "Notes >"]),
             (.known(state(listeners: [])), fine, failed,
-             ["(Iris / Couldn't start)", "Why It Couldn't Start…", "Calendar [Read & write] >", "Reminders [Off] >",
-              "Notes [Read only] >"]),
+             ["(Iris / Couldn't start)", "Why It Couldn't Start…", "Calendar [Read & Write] >", "Reminders [Off] >",
+              "Notes [Read Only] >"]),
             (.known(state(listeners: [(8788, .current)])), fine, off,
-             ["(Iris / On · run outside Iris)", "Calendar [Read & write] >", "Reminders [Off] >", "Notes [Read only] >"]),
+             ["(Iris / On · run outside Iris)", "Calendar [Read & Write] >", "Reminders [Off] >", "Notes [Read Only] >"]),
         ]
         let header = menu.items[0]
         let rows = Array(menu.items[3...5])
@@ -287,7 +287,7 @@ final class MenuTests: XCTestCase {
             items.show(model)
             let under = top.count == 5 ? 2 : 1
             XCTAssertEqual(described(menu), Array(top.prefix(under)) + ["---"] + top.dropFirst(under)
-                           + ["---", "Settings >", "---", "Quit Iris ⌘Q"])
+                           + ["---", "Settings >", "---", "Quit Iris"])
             XCTAssertEqual(toggle.state, model.switchOn ? .on : .off)
             XCTAssertEqual(toggle.isEnabled, model.switchEnabled)
             // The same items, changed in place.
@@ -499,6 +499,19 @@ final class MenuTests: XCTestCase {
             XCTAssertEqual(lines(off.choices), ["✓ Off", "  Read Only", "  Read & Write"])
             XCTAssertNil(off.which)
         }
+        // Off, and nothing remembered can be shared again (deleted, or not listed yet to tell, or a memory that cannot
+        // be read): the items are offered to choose from, none ticked. Not while Read Only can turn it on.
+        let none = ScopeFileState.file(ScopeFile(calendars: [], folders: []))
+        let gone = shareMenu(.calendars, none, listed, remembered: .entries(["c9"]))
+        XCTAssertEqual(lines(gone.choices), ["✓ Off", "  Read Only", "  Read & Write"])
+        XCTAssertEqual(gone.which, "Choose Calendars")
+        XCTAssertEqual(lines(gone.items), ["  All Calendars", "---", "  Work", "  Family", "  Birthdays"])
+        XCTAssertEqual(shareMenu(.calendars, none, .loading, remembered: .entries(["c1"])).which, "Choose Calendars")
+        XCTAssertEqual(shareMenu(.folders, .missing, .openNotes, remembered: .entries([])).which, "Choose Folders")
+        XCTAssertNil(shareMenu(.calendars, none, listed, remembered: .entries(["c1", "c9"])).which)
+        XCTAssertNil(shareMenu(.calendars, none, listed, remembered: .all).which)
+        XCTAssertNil(shareMenu(.calendars, none, listed).which)
+        XCTAssertEqual(shareMenu(.calendars, some, listed, remembered: .entries(["c9"])).which, "2 of 3 Calendars")
         // Two with one name: each with its account.
         let twins = calendars + [ShareItem(id: "c4", name: "Work", group: "Other")]
         XCTAssertEqual(lines(shareMenu(.calendars, .file(ScopeFile(calendars: ["c4"], folders: [])), .listed(twins)).items),
@@ -609,6 +622,13 @@ final class MenuTests: XCTestCase {
         show(.file(ScopeFile(calendars: [], folders: [])), .listed(calendars))
         XCTAssertEqual(described(items.shares[0]), ["✓ Off", "  Read Only", "  Read & Write"])
         XCTAssertTrue(zip(before, items.shares[0].items).allSatisfy { $0 === $1 })
+        // Off with nothing to share again: the line is back, to choose from, the same items.
+        items.show(shares: [shareMenu(.calendars, .file(ScopeFile(calendars: [], folders: [])), .listed(calendars), remembered: .entries(["c9"])),
+                            shareMenu(.lists, .missing, .loading), shareMenu(.folders, .missing, .openNotes)],
+                   sharedEvents: sharedEventsEntry(.missing))
+        XCTAssertEqual(described(items.shares[0]), ["✓ Off", "  Read Only", "  Read & Write", "---", "  Choose Calendars >"])
+        XCTAssertTrue(zip(before, items.shares[0].items).allSatisfy { $0 === $1 })
+        XCTAssertEqual(described(items.itemMenus[0]), ["  All Calendars", "---", "  Work", "  Family", "  Birthdays"])
         // A file that cannot be read: its problem only; read again, the choices and the line are back.
         show(.broken("not a JSON object"), .listed(calendars))
         XCTAssertEqual(described(items.shares[0]), ["  Settings File Has a Problem…"])
@@ -650,9 +670,15 @@ final class MenuTests: XCTestCase {
         fill(menu, with: items, version: "1.0", openAtLogin: .off, target: actions, updater: nil)
         items.show(menuModel(.known(state(listeners: [])), fine))
         XCTAssertEqual(menu.minimumWidth, menuWidth)
+        // ⌘Q from an item not shown, so no row keeps room for a key.
+        let quit = try XCTUnwrap(menu.items.last)
+        XCTAssertTrue(quit.isHidden && quit.allowsKeyEquivalentWhenHidden)
+        XCTAssertEqual(quit.keyEquivalent, "q")
+        XCTAssertEqual(quit.action, #selector(NSApplication.terminate))
+        XCTAssertTrue(menu.items.filter { !$0.isHidden }.allSatisfy { $0.keyEquivalent.isEmpty })
         XCTAssertEqual(menu.size.width, menuWidth, accuracy: 1)
         let title = try XCTUnwrap(items.rows[0].attributedTitle)
-        XCTAssertEqual(title.string, "Calendar\tRead & write")
+        XCTAssertEqual(title.string, "Calendar\tRead & Write")
         XCTAssertNil(items.rows[0].badge)
         XCTAssertNil(title.attribute(.foregroundColor, at: 0, effectiveRange: nil))
         XCTAssertEqual(title.attribute(.foregroundColor, at: 9, effectiveRange: nil) as? NSColor, .secondaryLabelColor)
@@ -664,9 +690,9 @@ final class MenuTests: XCTestCase {
         let wider = try XCTUnwrap((items.rows[0].attributedTitle?.attribute(.paragraphStyle, at: 9, effectiveRange: nil) as? NSParagraphStyle)?.tabStops.first)
         XCTAssertEqual(menu.size.width, max(menuWidth, items.headerView.frame.width), accuracy: 1)
         XCTAssertEqual(wider.location - stop.location, max(menuWidth, items.headerView.frame.width) - menuWidth, accuracy: 0.5)
-        // Needs access is in the same place, and a row with nothing known has no word.
+        // Needs Access is in the same place, and a row with nothing known has no word.
         items.show(menuModel(.checking, Permissions(calendar: .denied, reminders: .fullAccess, notes: "granted")))
-        XCTAssertEqual(items.rows[0].attributedTitle?.string, "Calendar\tNeeds access")
+        XCTAssertEqual(items.rows[0].attributedTitle?.string, "Calendar\tNeeds Access")
         XCTAssertEqual(items.rows[1].attributedTitle?.string, "Reminders")
     }
 }

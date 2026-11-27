@@ -18,6 +18,20 @@ enum ScopeKind {
         case .lists: "--allowed-lists"
         }
     }
+
+    /// Its key in the scope file.
+    var key: String {
+        switch self {
+        case .calendars: "calendars"
+        case .folders: "folders"
+        case .lists: "lists"
+        }
+    }
+
+    init?(key: String) {
+        guard let kind = [ScopeKind.calendars, .folders, .lists].first(where: { $0.key == key }) else { return nil }
+        self = kind
+    }
 }
 
 /// The scope file as written: names or ids per kind, nil where it says "all", and no lists where it has
@@ -131,9 +145,18 @@ func encodeScopeFile(_ file: ScopeFile) -> Data {
     return data + Data("\n".utf8)
 }
 
-/// What a remote assistant may do in one app, as a row's submenu offers it. Notes has no Read & Write.
+/// What a remote assistant may do in one app, as a row and its submenu show it. Notes has no Read & Write.
 enum ShareLevel {
     case off, readOnly, readWrite
+
+    /// The menu's words for it, the same in a row and in its submenu.
+    var title: String {
+        switch self {
+        case .off: "Off"
+        case .readOnly: "Read Only"
+        case .readWrite: "Read & Write"
+        }
+    }
 }
 
 /// One click in the menu bar: a row's submenu, its items submenu, or Settings.
@@ -151,46 +174,65 @@ enum ScopeTick: Equatable {
         }
     }
 
-    /// Whether the tick needs the kind's items as they are now: it changes which items are shared, by id, or turns
-    /// the app on again with what it shared before it was turned off.
-    func needsListing(_ remembered: SharedBefore) -> Bool {
+    /// Whether the tick needs the kind's items as they are now, with the file and what is remembered as they are:
+    /// it changes which items are shared, by id, or turns an app that shares none on again with entries it shared
+    /// before.
+    func needsListing(_ file: ScopeFile, _ remembered: SharedBefore) -> Bool {
         switch self {
-        case .item, .remove: true
-        case .access(let kind, let level): level != .off && remembered[kind] != nil
-        default: false
+        case .item, .remove:
+            return true
+        case .access(let kind, let level):
+            guard level != .off, file[kind] == [], case .entries(let entries) = remembered[kind] else { return false }
+            return !entries.isEmpty
+        default:
+            return false
         }
     }
 }
 
-/// What each app shared before it was last turned off, as its key was written; an app not here shared "all", or
-/// nothing is remembered, and is turned on with everything.
-typealias SharedBefore = [ScopeKind: [String]]
+/// What an app shared when it was last turned off.
+enum Remembered: Equatable {
+    case all
+    case entries([String])  // as the scope file had them; none when what was remembered cannot be read
+}
+
+/// What each app turned off shared before; an app not here has nothing remembered.
+typealias SharedBefore = [ScopeKind: Remembered]
 
 /// The scope file after one tick, `items` being the kind's calendars, lists or folders as they are now, and what
 /// is remembered of the apps turned off.
 ///
-/// Off shares none. Read Only and Read & Write leave what an app shares as it is, or, for an app that shares none,
-/// share again what it shared before it was turned off (`restored`), and set its writes (Calendar's or Reminders')
-/// off or on. All is "all". An item ticked while the file says "all" leaves every other item shared; otherwise it
-/// is added or taken out. A key an item tick or a removal changes is written by id: each entry that names items
-/// becomes their ids, and one that names nothing stays as written, until it is removed on its own.
+/// Off shares none. Read Only and Read & Write leave what an app shares as it is, and set its writes (Calendar's or
+/// Reminders') off or on. An app that shares none is turned on with everything when nothing is remembered for it, or
+/// "all" is; otherwise with the remembered entries that still name items (`restored`), and when none does, it stays
+/// off: a remembered selection may shrink, never grow to everything. All is "all". An item ticked while the file
+/// says "all" leaves every other item shared; otherwise it is added or taken out. All, or an item, from none turns the
+/// app on Read Only. A key an item tick
+/// or a removal changes is written by id: each entry that names items becomes their ids, and one that names nothing
+/// stays as written, until it is removed on its own.
 ///
 /// The file's rules hold after every tick, and changes need something shared: a tick of Calendar that leaves no
 /// calendars turns writes and events with other people off, one of Reminders that leaves no lists turns reminder
 /// writes off. A tick the rules do not allow changes nothing; one app's tick leaves the others' keys as written.
 ///
-/// Any tick that leaves an app sharing none, Off or its last item unticked, remembers its key as it was; one that
-/// makes it share something again forgets it.
+/// A tick that leaves an app sharing none (Off, its last item unticked, its last Missing entry removed) remembers its
+/// key as it was. Nothing is remembered for an app that shares: what was is forgotten, for every app.
 func applying(_ tick: ScopeTick, to file: ScopeFile, items: [Named],
               remembered: SharedBefore = [:]) -> (file: ScopeFile, remembered: SharedBefore) {
     let kind = tick.kind
+    var remembered = remembered.filter { file[$0.key] == [] }
     var changed = file
     switch tick {
     case .access(_, let level):
         if level == .off {
             changed[kind] = []
         } else if file[kind] == [] {
-            changed[kind] = restored(remembered[kind], items)
+            switch remembered[kind] {
+            case nil, .all:
+                changed[kind] = nil
+            case .entries(let entries):
+                changed[kind] = restored(entries, items)
+            }
         }
         switch kind {
         case .calendars: changed.writes = level == .readWrite
@@ -209,6 +251,17 @@ func applying(_ tick: ScopeTick, to file: ScopeFile, items: [Named],
     case .sharedEvents(let on):
         changed.sharedEvents = on
     }
+    // An app turned on by its items is Read Only, whatever writes a file that shared none said.
+    switch tick {
+    case .all where file[kind] == [], .item where file[kind] == []:
+        switch kind {
+        case .calendars: changed.writes = false
+        case .lists: changed.reminderWrites = false
+        case .folders: break
+        }
+    default:
+        break
+    }
     switch kind {
     case .calendars:
         if changed.calendars == [] { changed.writes = false }
@@ -218,26 +271,24 @@ func applying(_ tick: ScopeTick, to file: ScopeFile, items: [Named],
     case .folders:
         break
     }
-    var remembered = remembered
-    if file[kind] != [] && changed[kind] == [] {
-        remembered[kind] = file[kind]
-    } else if file[kind] == [] && changed[kind] != [] {
+    if changed[kind] != [] {
         remembered[kind] = nil
+    } else if file[kind] != [] {
+        remembered[kind] = file[kind].map(Remembered.entries) ?? .all
     }
     return (changed, remembered)
 }
 
-/// What an app turned on again shares: the entries it shared before, read as the file would have been, as the ids
-/// of the items they name now; dropped, those that name nothing now, and those `checkedApplying` would refuse as
-/// one item's id and another's name. Everything when nothing was remembered, or nothing of it is left.
-private func restored(_ entries: [String]?, _ items: [Named]) -> [String]? {
-    guard let entries else { return nil }
+/// What an app turned on again shares: the remembered entries, read as the file would have been, as the ids of the
+/// items they name now; dropped, those that name nothing now, and those `checkedApplying` would refuse as one item's
+/// id and another's name. None when nothing is left.
+func restored(_ entries: [String], _ items: [Named]) -> [String] {
     let ids = Set(items.map(\.id))
     var shared = asIds(entries, items).filter(ids.contains)
     while let confusing = shared.first(where: { id in items.contains { $0.name == id && !shared.contains($0.id) } }) {
         shared.removeAll { $0 == confusing }
     }
-    return shared.isEmpty ? nil : shared
+    return shared
 }
 
 /// The entries as the ids of the items they name, each once; one that names nothing stays as written.
@@ -253,17 +304,22 @@ private func asIds(_ entries: [String], _ items: [Named]) -> [String] {
 /// `applying`, refused when the key it changes would not mean to a server what the menu showed, `items` being the
 /// kind's items listed just now: an entry it adds that names nothing (an item deleted since the menu listed it), or
 /// an entry that is one item's id and another's name while that other is not shared, which a server would take
-/// for the other should the first be deleted. Refused, nothing is written and the error says why.
+/// for the other should the first be deleted; and an app turned on that stays off, as nothing it shared before can
+/// be shared again. Refused, nothing is written and the error says why.
 func checkedApplying(_ tick: ScopeTick, to file: ScopeFile, items: [Named],
                      remembered: SharedBefore = [:]) throws -> (file: ScopeFile, remembered: SharedBefore) {
     let changed = applying(tick, to: file, items: items, remembered: remembered)
     let kind = tick.kind
-    guard let entries = changed.file[kind], entries != file[kind] else { return changed }
-    let (noun, app) = switch kind {
-    case .calendars: ("calendar", "Calendar")
-    case .lists: ("reminder list", "Reminders")
-    case .folders: ("folder", "Notes")
+    let (noun, things, app) = switch kind {
+    case .calendars: ("calendar", "Calendars", "Calendar")
+    case .lists: ("reminder list", "Lists", "Reminders")
+    case .folders: ("folder", "Folders", "Notes")
     }
+    if case .access(_, let level) = tick, level != .off, changed.file[kind] == [] {
+        throw IrisError("None of the \(things.lowercased()) shared before can be shared again, so nothing was changed. "
+            + "Choose which to share under Choose \(things).")
+    }
+    guard let entries = changed.file[kind], entries != file[kind] else { return changed }
     let ids = Set(items.map(\.id))
     let before = Set(file[kind] ?? [])
     if entries.contains(where: { !ids.contains($0) && !before.contains($0) }) {
@@ -316,12 +372,26 @@ func withScopeLock<T>(_ path: String, wait: Double = 2, _ body: () throws -> T) 
     return try body()
 }
 
+/// The tick needs the kind's items listed, as it found the files under the lock; nothing was changed.
+struct ScopeListingNeeded: Error {
+    let kind: ScopeKind
+}
+
+/// The points between the writes of a change, where a test can stop it as a crash would.
+enum ScopeWriteStep {
+    case remembered, written
+}
+
 /// One tick to the scope file at `path`, under the lock: the file after it, and whether it was written. A missing
 /// file starts from one that shares nothing; a file that cannot be read is never written over, and its problem is
-/// the error. `items` are the kind's items as listed just now. What the apps turned off shared is kept in
-/// `remembering`, read and saved under the same lock, after the file.
-func changeScopeFile(_ path: String, _ tick: ScopeTick, items: [Named],
-                     remembering defaults: UserDefaults? = nil) throws -> (file: ScopeFile, written: Bool) {
+/// the error. `items` are the kind's items as listed just now, nil when not listed: a tick that needs them, as the
+/// files are under the lock, throws `ScopeListingNeeded` and changes nothing.
+///
+/// What the apps turned off shared is kept beside the scope file (`sharedBeforePath`), read and written under the
+/// same lock: what a tick remembers is saved before the scope file is written, and what it forgets only after, so a
+/// crash between leaves at most a memory for an app that shares, which the next change drops.
+func changeScopeFile(_ path: String, _ tick: ScopeTick, items: [Named]?,
+                     stop: (ScopeWriteStep) throws -> Void = { _ in }) throws -> (file: ScopeFile, written: Bool) {
     try withScopeLock(path) {
         let current: ScopeFile
         switch loadScopeFile(path) {
@@ -329,35 +399,64 @@ func changeScopeFile(_ path: String, _ tick: ScopeTick, items: [Named],
         case .file(let file): current = file
         case .broken(let problem): throw IrisError(problem)
         }
-        let remembered = defaults.map(sharedBefore) ?? [:]
-        let changed = try checkedApplying(tick, to: current, items: items, remembered: remembered)
+        let memoryPath = sharedBeforePath(path)
+        let saved = loadSharedBefore(memoryPath)
+        let remembered = saved ?? unreadableSharedBefore
+        if items == nil && tick.needsListing(current, remembered) { throw ScopeListingNeeded(kind: tick.kind) }
+        let changed = try checkedApplying(tick, to: current, items: items ?? [], remembered: remembered)
+        let kept = remembered.merging(changed.remembered) { $1 }
+        if kept != saved { try writeSharedBefore(kept, to: memoryPath) }
+        try stop(.remembered)
         if changed.file != current { try writeScopeFile(changed.file, to: path) }
-        if let defaults, changed.remembered != remembered { save(changed.remembered, to: defaults) }
+        try stop(.written)
+        // Best effort: what is left is for an app that shares, which the next change drops.
+        if changed.remembered != kept { try? writeSharedBefore(changed.remembered, to: memoryPath) }
         return (changed.file, changed.file != current)
     }
 }
 
-/// The app's defaults keys for what each app shared before it was turned off.
-private func sharedBeforeKey(_ kind: ScopeKind) -> String {
-    switch kind {
-    case .calendars: "sharedBeforeOff.calendars"
-    case .lists: "sharedBeforeOff.lists"
-    case .folders: "sharedBeforeOff.folders"
-    }
+/// The file beside the scope file's target that keeps what each app shared before it was turned off.
+func sharedBeforePath(_ scopePath: String) -> String {
+    URL(fileURLWithPath: scopePath).resolvingSymlinksInPath().path + ".shared-before"
 }
 
-func sharedBefore(_ defaults: UserDefaults) -> SharedBefore {
+/// What a memory that cannot be read stands for: something remembered for every app, of which nothing can be shared
+/// again, so an app that is off stays off until its items are chosen, never turned on with everything.
+let unreadableSharedBefore: SharedBefore = [.calendars: .entries([]), .lists: .entries([]), .folders: .entries([])]
+
+/// What is remembered: nothing when there is no file, as on a first run; nil when the file cannot be read, or is
+/// not one Iris writes. Read without the lock by the menu, which only shows it: each write replaces the file whole.
+func loadSharedBefore(_ path: String) -> SharedBefore? {
+    var info = stat()
+    if lstat(path, &info) != 0 && errno == ENOENT { return [:] }
+    guard let data = try? readPrivateFile(path, noun: "memory", recipe: "", limit: scopeFileLimit),
+          let keys = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return nil }
     var remembered: SharedBefore = [:]
-    for kind in [ScopeKind.calendars, .lists, .folders] {
-        remembered[kind] = defaults.stringArray(forKey: sharedBeforeKey(kind))
+    for (key, value) in keys {
+        guard let kind = ScopeKind(key: key) else { return nil }
+        if value as? String == "all" {
+            remembered[kind] = .all
+        } else if let list = value as? [Any], let entries = list as? [String], list.allSatisfy({ $0 is String }) {
+            remembered[kind] = .entries(entries)
+        } else {
+            return nil
+        }
     }
     return remembered
 }
 
-private func save(_ remembered: SharedBefore, to defaults: UserDefaults) {
-    for kind in [ScopeKind.calendars, .lists, .folders] {
-        defaults.set(remembered[kind], forKey: sharedBeforeKey(kind))
+/// Replaces the memory whole, owner-only, as the scope file is written.
+func writeSharedBefore(_ remembered: SharedBefore, to path: String) throws {
+    var keys: [String: Any] = [:]
+    for (kind, value) in remembered {
+        switch value {
+        case .all: keys[kind.key] = "all"
+        case .entries(let entries): keys[kind.key] = entries
+        }
     }
+    let data = try JSONSerialization.data(withJSONObject: keys, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
+    guard data.count < scopeFileLimit else { throw IrisError("what Iris remembers would be too long to read back") }
+    try replacePrivateFile(path, data + Data("\n".utf8))
 }
 
 /// The scope file at a path as the menu bar finds it.

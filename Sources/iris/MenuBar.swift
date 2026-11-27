@@ -41,11 +41,11 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate, MenuAction
     // What the rows' submenus show: the scope file as last read, and each app's items as last listed. Only shown: a
     // tick lists its app again before it is applied.
     private lazy var scopeChanges = ScopeChanges(path: (defaultScopeFile as NSString).expandingTildeInPath,
-                                                 remembered: .standard,
                                                  listing: { listShareItems($0)?.map { Named(id: $0.id, name: $0.name) } }) {
         [weak self] in self?.server.restart()
     }
     private var scopeFile = ScopeFileState.missing
+    private var remembered: SharedBefore = [:]  // what the apps turned off shared before, as last read
     private var listed: [ScopeKind: [ShareItem]] = [:]
     // One for each app, so a slow one (Notes) holds up only its own submenu.
     private lazy var listings = [ScopeKind.calendars, .lists, .folders].map { kind in
@@ -98,7 +98,7 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate, MenuAction
         shown?.show(model())
         let permissions = self.permissions
         shown?.show(shares: [ScopeKind.calendars, .lists, .folders].map { kind in
-            shareMenu(kind, scopeFile, shareSource(kind, permissions, listed[kind]))
+            shareMenu(kind, scopeFile, shareSource(kind, permissions, listed[kind]), remembered: remembered[kind])
         }, sharedEvents: sharedEventsEntry(scopeFile))
     }
 
@@ -153,7 +153,7 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate, MenuAction
         case .requiresApproval: .mixed
         default: .off
         }
-        scopeFile = loadScopeFile(scopeChanges.path)
+        readScopeFile()
         let items = MenuItems(target: self)
         fill(menu, with: items, version: version, openAtLogin: login, target: self, updater: updater)
         shown = items
@@ -200,15 +200,21 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate, MenuAction
         scopeChanges.submit(tick) { [weak self] result in
             guard let self else { return }
             switch result {
-            case .success(let file):
-                scopeFile = .file(file)
+            case .success:
+                readScopeFile()
             case .failure(let error):
-                scopeFile = loadScopeFile(scopeChanges.path)
+                readScopeFile()
                 showProblem("Couldn't change what is shared", "\(error)")
             }
             showMenu()
             remoteCheck.start()
         }
+    }
+
+    /// The scope file and what is remembered beside it, as the submenus show them.
+    private func readScopeFile() {
+        scopeFile = loadScopeFile(scopeChanges.path)
+        remembered = loadSharedBefore(sharedBeforePath(scopeChanges.path)) ?? unreadableSharedBefore
     }
 
     /// The problem, and a choice: Reset, after keeping the file beside it, or leave it to be fixed by hand.
@@ -227,7 +233,7 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate, MenuAction
         scopeChanges.reset { [weak self] result in
             guard let self else { return }
             if case .failure(let error) = result { showProblem("Couldn't reset the settings file", "\(error)") }
-            scopeFile = loadScopeFile(scopeChanges.path)
+            readScopeFile()
             showMenu()
             remoteCheck.start()
         }
@@ -475,19 +481,21 @@ enum ShareEntry: Equatable {
     case loading
 }
 
-/// A row's submenu: Off, Read Only and, for Calendar and Reminders, Read & Write, one of them ticked; then, while
-/// the app shares something, a line that says which items, opening `items`. A file that cannot be read offers only
-/// its problem, never a tick that would write over it.
+/// A row's submenu: Off, Read Only and, for Calendar and Reminders, Read & Write, one of them ticked; then a line
+/// that says which items, opening `items`: while the app shares something, and while it is off and Read Only could
+/// not turn it on, as nothing it shared before can be shared again. A file that cannot be read offers only its
+/// problem, never a tick that would write over it.
 struct ShareMenu: Equatable {
     let choices: [ShareEntry]
-    let which: String?  // the items line: All Calendars, 3 of 7 Calendars; nil while the app is off
+    let which: String?  // the items line: All Calendars, 3 of 7 Calendars, Choose Calendars; nil when there is none
     let items: [ShareEntry]
 }
 
 /// The submenu for one app. Its items submenu has All, ticked while the file says "all", then each item in the
 /// order of `shareItems`, with its account after its name where another item has the same name, ticked when shared;
-/// then each entry of the file that names nothing now, ticked, to be unticked.
-func shareMenu(_ kind: ScopeKind, _ state: ScopeFileState, _ source: ShareSource) -> ShareMenu {
+/// then each entry of the file that names nothing now, ticked, to be unticked. `remembered` is what the app shared
+/// before it was turned off.
+func shareMenu(_ kind: ScopeKind, _ state: ScopeFileState, _ source: ShareSource, remembered: Remembered? = nil) -> ShareMenu {
     let file: ScopeFile
     switch state {
     case .broken: return ShareMenu(choices: [.choice("Settings File Has a Problem…", on: false, .fixFile)], which: nil, items: [])
@@ -502,10 +510,14 @@ func shareMenu(_ kind: ScopeKind, _ state: ScopeFileState, _ source: ShareSource
     case .folders: false
     }
     // As the system's radio items: choosing the one ticked changes nothing.
-    var choices: [ShareEntry] = [.choice("Off", on: !shared, .tick(.access(kind, .off))),
-                                 .choice("Read Only", on: shared && !writes, .tick(.access(kind, .readOnly)))]
-    if kind != .folders {
-        choices.append(.choice("Read & Write", on: shared && writes, .tick(.access(kind, .readWrite))))
+    let levels: [ShareLevel] = kind == .folders ? [.off, .readOnly] : [.off, .readOnly, .readWrite]
+    let choices = levels.map { level in
+        let on = switch level {
+        case .off: !shared
+        case .readOnly: shared && !writes
+        case .readWrite: shared && writes
+        }
+        return ShareEntry.choice(level.title, on: on, .tick(.access(kind, level)))
     }
     let noun = switch kind {
     case .calendars: "Calendars"
@@ -544,7 +556,15 @@ func shareMenu(_ kind: ScopeKind, _ state: ScopeFileState, _ source: ShareSource
             items.append(.choice("Missing: \(entry)", on: true, .tick(.remove(kind, entry))))
         }
     }
-    return ShareMenu(choices: choices, which: shared ? which : nil, items: items)
+    // Not known to be possible until listed.
+    var choose: String?
+    if !shared, case .entries(let entries) = remembered {
+        let restorable = if case .listed(let listed) = source {
+            !restored(entries, listed.map { Named(id: $0.id, name: $0.name) }).isEmpty
+        } else { false }
+        if !restorable { choose = "Choose \(noun)" }
+    }
+    return ShareMenu(choices: choices, which: shared ? which : choose, items: items)
 }
 
 let sharedEventsTitle = "Let Assistants Change Events With Other People"
@@ -599,7 +619,7 @@ func menuModel(_ remote: RemoteAnswer, _ permissions: Permissions, _ server: Rem
     }
 
     func row(_ title: String, _ access: AppAccess?, problem fix: RowAction?) -> AppRow {
-        if let fix { return AppRow(title: title, detail: "Needs access", problem: true, action: fix) }
+        if let fix { return AppRow(title: title, detail: needsAccess, problem: true, action: fix) }
         return AppRow(title: title, detail: allows(access), problem: false, action: nil)
     }
     let calendarFix: RowAction? = switch permissions.calendar {
@@ -644,11 +664,14 @@ private func settingsWarning(_ remote: RemoteAnswer, _ states: [ListenerState?])
     return onThisFile.contains(.changed) ? " · restart to apply changes" : ""
 }
 
+let needsAccess = "Needs Access"
+
+/// The words of the submenu's choice that is ticked; `iris remote status` keeps its own.
 private func accessWords(_ access: AppAccess) -> String {
     switch access.access {
-    case "none": "Off"
-    case "read": "Read only"
-    default: "Read & write"
+    case "none": ShareLevel.off.title
+    case "read": ShareLevel.readOnly.title
+    default: ShareLevel.readWrite.title
     }
 }
 
@@ -841,9 +864,8 @@ func rowTitle(_ title: String, _ detail: String?, stop: CGFloat) -> NSAttributed
     return text
 }
 
-/// How much wider than its title's tab stop AppKit makes the main menu for an item with a submenu: the title's
-/// start, and the room after it for the arrow and for Quit's key equivalent, which every item keeps. AppKit does not
-/// say; this measures it.
+/// How much wider than its title's tab stop AppKit makes a menu for an item with a submenu: the title's start, and
+/// the room after it for the arrow, the least AppKit leaves. AppKit does not say; this measures it.
 @MainActor
 func rowTitleEnd() -> CGFloat {
     let menu = NSMenu()
@@ -852,7 +874,6 @@ func rowTitleEnd() -> CGFloat {
     item.attributedTitle = rowTitle("M", "M", stop: 100)
     item.submenu = NSMenu()
     menu.addItem(item)
-    menu.addItem(withTitle: "M", action: nil, keyEquivalent: "q")
     return menu.size.width - 100
 }
 
@@ -888,7 +909,13 @@ func fill(_ menu: NSMenu, with items: MenuItems, version: String?, openAtLogin: 
     menu.addItem(settingsItem)
 
     menu.addItem(.separator())
-    menu.addItem(withTitle: "Quit Iris", action: #selector(NSApplication.terminate), keyEquivalent: "q")
+    menu.addItem(withTitle: "Quit Iris", action: #selector(NSApplication.terminate), keyEquivalent: "")
+    // ⌘Q quits all the same, from an item that is not shown: one shown would make every row keep room for its key,
+    // which pushes the rows' words away from their arrows.
+    let quit = NSMenuItem(title: "Quit Iris", action: #selector(NSApplication.terminate), keyEquivalent: "q")
+    quit.isHidden = true
+    quit.allowsKeyEquivalentWhenHidden = true
+    menu.addItem(quit)
 }
 
 /// The menu's first item, not a row: Iris, and under it the state of remote access in grey, with the remote
