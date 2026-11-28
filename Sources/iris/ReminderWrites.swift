@@ -38,8 +38,9 @@ struct AddReminder: AsyncParsableCommand {
             needs --due with a time. Each is kept as the moment it fires, not as an offset from the due, so \
             it notifies on the Mac, iPhone and Watch alike, and reads back in alarms as minutes before the \
             due. Without --alarm no alarm is set, and a reminder with a time but no alarm does not notify: \
-            --alarm 0 is how to be notified at the due time. Alarms on a repeating reminder are not offered: \
-            --alarm is refused with --repeat. Not offered: URL, location, start date, completed.
+            --alarm 0 is how to be notified at the due time. With --repeat, one --alarm at most: completing an \
+            occurrence moves it on to the next one, keeping its time before the due, but Reminders keeps \
+            only the earliest alarm when it does, so a second is refused. Not offered: URL, location, start date, completed.
             """
     )
 
@@ -73,7 +74,7 @@ struct AddReminder: AsyncParsableCommand {
     @Option(help: "With --repeat: stop after this many occurrences, the first included. Not with --until. Default: no limit.")
     var count: Int?
 
-    @Option(name: .customLong("alarm"), help: "Alarm this many minutes before the due time, 0 at it; repeat for several. Needs --due with a time. Not with --repeat. Read back in the reminder's alarms. Default: no alarms, and no notification.")
+    @Option(name: .customLong("alarm"), help: "Alarm this many minutes before the due time, 0 at it; repeat for several. Needs --due with a time. With --repeat, one at most, and it moves on to each next occurrence. Read back in the reminder's alarms. Default: no alarms, and no notification.")
     var alarms: [Int] = []
 
     @Option(help: allowedHelp(.lists))
@@ -88,9 +89,7 @@ struct AddReminder: AsyncParsableCommand {
         _ = try repeatEnd(dueParts)
         if alarms.contains(where: { $0 < 0 }) { throw ValidationError("--alarm takes minutes of 0 or more") }
         if !alarms.isEmpty, dueParts?.hour == nil { throw ValidationError("--alarm needs --due with a time") }
-        if !alarms.isEmpty, repeatFrequency != nil {
-            throw ValidationError("--alarm is not offered with --repeat: alarms on a repeating reminder are not offered yet")
-        }
+        if alarms.count > 1, repeatFrequency != nil { throw ValidationError(oneAlarmWhenRepeating) }
     }
 
     func run() async throws {
@@ -169,9 +168,9 @@ struct UpdateReminder: AsyncParsableCommand {
             --due, a current due that is missing or date only refuses --alarm.
             --no-alarms removes every timed alarm.
             Every alarm written, moved ones too, is kept as the moment it fires, so it notifies on the Mac, \
-            iPhone and Watch alike; Reminders does the same when a time is changed there. --alarm and \
-            --no-alarms on a reminder that repeats are refused: alarms on a repeating reminder are not \
-            offered yet. An alarm on arriving at or leaving a place is never touched.
+            iPhone and Watch alike; Reminders does the same when a time is changed there. On a reminder that \
+            repeats, one --alarm at most, counted from the occurrence due now; completing it moves the alarm \
+            on to the next one, and Reminders keeps only the earliest alarm when it does. An alarm on arriving at or leaving a place is never touched.
 
             completed stays as it is. Not offered: URL, location, repeating, start date, completed.
             """
@@ -195,10 +194,10 @@ struct UpdateReminder: AsyncParsableCommand {
     @Option(help: "Move the reminder to this list: id or title, from `iris reminders lists`. Must name one list, and it must be writable.")
     var list: String?
 
-    @Option(name: .customLong("alarm"), help: "Alarm this many minutes before the due time, 0 at it; repeat for several. Replaces every timed alarm. Counted from --due, else the current due, which needs a time. Refused when the reminder repeats. Default: alarms unchanged, or moved with --due.")
+    @Option(name: .customLong("alarm"), help: "Alarm this many minutes before the due time, 0 at it; repeat for several. Replaces every timed alarm. Counted from --due, else the current due, which needs a time. Default: alarms unchanged, or moved with --due.")
     var alarms: [Int] = []
 
-    @Flag(help: "Remove every timed alarm. Refused when the reminder repeats. Default: alarms unchanged, or moved with --due.")
+    @Flag(help: "Remove every timed alarm. Default: alarms unchanged, or moved with --due.")
     var noAlarms = false
 
     @Option(help: allowedHelp(.lists))
@@ -234,14 +233,11 @@ struct UpdateReminder: AsyncParsableCommand {
             throw IrisError("this reminder repeats, and iris does not change the due date of a repeating reminder, so "
                 + "nothing was changed. Change it in Reminders.")
         }
-        if repeats, !alarms.isEmpty || noAlarms {
-            throw IrisError("this reminder repeats, and alarms on a repeating reminder are not offered yet, so nothing "
-                + "was changed. Change them in Reminders.")
-        }
+        if repeats, alarms.count > 1 { throw IrisError(oneAlarmWhenRepeating + ", so nothing was changed") }
         // Worked out before anything changes, so a refusal leaves the reminder as it was.
         let timed = (reminder.alarms ?? []).filter(isTimedAlarm)
         let newTimed = try newTimedAlarms(timed, currentDue: reminderDue(reminder.dueDateComponents, mac: mac)?.at,
-                                          dueParts: dueParts, mac: mac)
+                                          dueParts: dueParts, repeats: repeats, mac: mac)
 
         if let title { reminder.title = title }
         if let notes { reminder.notes = notes.isEmpty ? nil : notes }
@@ -272,14 +268,14 @@ struct UpdateReminder: AsyncParsableCommand {
 
     /// The timed alarms that take the place of `timed`, or nil to leave them as they are.
     private func newTimedAlarms(_ timed: [EKAlarm], currentDue: Date?, dueParts: DateComponents?,
-                                mac: Calendar) throws -> [EKAlarm]? {
+                                repeats: Bool, mac: Calendar) throws -> [EKAlarm]? {
         if noAlarms { return [] }
         let newDue = due == nil ? currentDue : dueParts.flatMap { reminderDue($0, mac: mac)?.at }
         if !alarms.isEmpty {
             // validate() refused a --due without a time, so only the current due can lack one here.
             guard let newDue else {
                 throw IrisError("this reminder's due has no time, so --alarm has nothing to count from, and nothing "
-                    + "was changed. Pass --due with a time too.")
+                    + "was changed. " + (repeats ? "Give it a time in Reminders first." : "Pass --due with a time too."))
             }
             return reminderAlarms(alarms, due: newDue)
         }
@@ -488,6 +484,11 @@ func isDay(_ text: String) -> Bool {
     let parts = utc.dateComponents([.year, .month, .day], from: day)
     return String(format: "%04ld-%02ld-%02ld", parts.year ?? 0, parts.month ?? 0, parts.day ?? 0) == text
 }
+
+/// Reminders keeps only the earliest alarm of a repeating reminder when it moves on to the next occurrence
+/// (measured, IGD-133), so iris sets one at most.
+let oneAlarmWhenRepeating = "a repeating reminder takes one alarm at most: Reminders keeps only the earliest when it "
+    + "moves on to the next occurrence"
 
 /// Alarms `minutes` before `due`, each kept as the moment it fires: a relative offset notifies on the Mac only.
 func reminderAlarms(_ minutes: [Int], due: Date) -> [EKAlarm] {

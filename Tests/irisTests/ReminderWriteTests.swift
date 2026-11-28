@@ -141,6 +141,7 @@ final class ReminderWriteTests: XCTestCase {
             (["--due", "2030-03-04", "--repeat", "hourly"], "--repeat must be"),
             (["--due", "2030-03-04", "--repeat", "weekly", "--on", "mo,xx"], "--on takes"),
             (["--due", "2030-03-04", "--repeat", "daily", "--until", "soon"], "unrecognised date"),
+            (["--due", "2030-03-04T09:00", "--repeat", "daily", "--alarm", "10", "--alarm", "0"], "one alarm at most"),
         ]
         for (args, words) in refused {
             let message = addRefusal(args)
@@ -148,6 +149,7 @@ final class ReminderWriteTests: XCTestCase {
         }
         let accepted = [
             ["--due", "2030-03-04", "--repeat", "daily"],
+            ["--due", "2030-03-04T09:00", "--repeat", "weekly", "--alarm", "10"],
             ["--due", "2030-03-04T09:30", "--repeat", "weekly", "--every", "2", "--on", "we,fr", "--count", "3"],
             ["--due", "2030-03-04", "--repeat", "monthly", "--until", "2030-12-31"],
             ["--due", "2030-03-04", "--repeat", "yearly", "--count", "1"],
