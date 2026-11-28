@@ -54,6 +54,7 @@ Iris reads your calendars, notes and reminders on this Mac and never uploads the
     iris reminders add --list Errands --title Call --due 2026-10-14T09:00 --alarm 10 --alarm 0   # minutes before; needs a time; without one it does not notify
     iris reminders add --list Errands --title Bins --due 2026-10-14 --repeat weekly --until 2026-12-31   # repeats; needs --due
     iris reminders update <id> --due 2026-10-15 --notes ""          # only what you name changes; "" clears
+    iris reminders update <id> --due 2026-10-15T10:00 --alarm 5     # replaces timed alarms; without --alarm they move with --due
     iris reminders complete <id>                                    # --undo opens it again; a repeat once more changes nothing
     iris reminders complete <id> --occurrence 2026-10-14            # a repeating one: its current due date; it moves to the next
     iris reminders delete <id>                                      # a repeating reminder is deleted whole; --not-repeating refuses it unless it has ended
@@ -64,7 +65,7 @@ Dates in are `2026-10-13`, `2026-10-13T09:00` (local time) or ISO 8601 with an o
 
 `iris reminders add --repeat` takes the repeat options of `iris calendar add` and needs `--due`, its first occurrence, which counts toward `--count` even off the days of `--on`. Monthly from the 29th to 31st and yearly from 29 February fall on the last day of a shorter month, as in Reminders. A date-only occurrence counts as due at the start of its day, so `--until` with a bare date still allows an occurrence due that day.
 
-`iris reminders update` changes only the fields named and never an alarm or whether it is completed. It refuses `--due` on a reminder that has an alarm, which would stay at its old time, or that repeats: change those in Reminders.
+`iris reminders update` changes only the fields named and never whether it is completed. Timed alarms move with `--due`, keeping their time before it; `--alarm` replaces them and `--no-alarms` removes them. Each is written as the moment it fires, so it notifies on the Mac, iPhone and Watch; an alarm at a place is never touched. It refuses `--due`, `--alarm` and `--no-alarms` on a reminder that repeats (change those in Reminders), and a `--due` with no time on a reminder with timed alarms unless `--no-alarms` comes with it.
 
 `iris reminders complete` completes a repeating reminder one occurrence at a time, as Reminders does: `--occurrence` names its current due date, and the reminder keeps its id, stays open and moves to its next occurrence, while the occurrence completed becomes a separate completed reminder, printed as `completedOccurrence`. The same call sent twice is refused the second time, since the date no longer matches. The last occurrence of a series that ends completes the reminder itself.
 
@@ -152,7 +153,7 @@ Assistants that run in a vendor's cloud, such as Grok Bot, the Meta Muse app and
 
     make app                     # universal swift build, bundle as build/Iris.app, codesign; needs a Developer ID certificate
     build/Iris.app/Contents/MacOS/iris status
-    swift test                   # the HTTP gate (token, Origin, path, method, body framing), scope (who sees what), write guards, events with other people on them, alarm minutes, availability, attendees, the Reminders prompt time limit, how a reminder's due and priority read and are written, when an update may change the due and the start date that follows it, the due filter and the order of reminders, what complete does with a reminder and which reminder is the occurrence it completed, the repeat options add takes and the rule they make, what remote status reads from a scope file and a server's arguments, and what the menu's ticks write to the scope file
+    swift test                   # the HTTP gate (token, Origin, path, method, body framing), scope (who sees what), write guards, events with other people on them, alarm minutes, availability, attendees, the Reminders prompt time limit, how a reminder's due and priority read and are written, the start date that follows an update's due, how alarms move with the due, the due filter and the order of reminders, what complete does with a reminder and which reminder is the occurrence it completed, the repeat options add takes and the rule they make, what remote status reads from a scope file and a server's arguments, and what the menu's ticks write to the scope file
     ./release.sh                 # the version in Info.plist: notarize, tar, GitHub release, bump the cask and the Sparkle appcast
                                  # bump CFBundleVersion with the version; Sparkle compares only that, and release.sh refuses a repeat
                                  # over SSH or from an agent, where the keychain cannot prompt: NOTARY_KEY=<p8> NOTARY_KEY_ID=<id> NOTARY_ISSUER=<uuid> SPARKLE_KEY=<file> ./release.sh

@@ -66,8 +66,8 @@ struct ReminderList: AsyncParsableCommand {
             none. due: below. priority: none, high, medium or low (Reminders keeps 0 to 9: 0 is none, 1 to 4 \
             high, 5 medium, 6 to 9 low). completed: true or false. completedAt, created, modified: ISO 8601 in \
             this Mac's zone, or null. recurring: the reminder repeats. alarms: always there; one entry per \
-            timed alarm, in whole minutes before due.at as `iris reminders add --alarm` takes them, in the \
-            order Reminders keeps them; negative is after it. An alarm at a set time is counted from due.at, \
+            timed alarm, in whole minutes before due.at as `iris reminders add --alarm` takes them, largest \
+            first, as Reminders keeps no order; negative is after it. An alarm at a set time is counted from due.at, \
             and seconds round to the nearest minute; when due.at is null (no due, date only, or a date that \
             is no moment) such an alarm cannot be counted and is left out. An alarm on arriving at or leaving \
             a place is left out too, so [] is no timed alarm that can be counted.
@@ -214,13 +214,16 @@ extension Reminder {
     }
 }
 
-/// A reminder's timed alarms in whole minutes before its due moment, in the order Reminders keeps them. An
+/// A reminder's timed alarms in whole minutes before its due moment, largest first, as Reminders keeps no order. An
 /// alarm at a set time needs that moment to count from, so without one (no due, date only, or a date that is
 /// no moment) it is left out; so is an alarm on arriving at or leaving a place.
 func reminderAlarmMinutes(_ alarms: [EKAlarm], due: Date?) -> [Int] {
-    alarms
-        .filter { $0.structuredLocation == nil && $0.proximity == .none }
-        .compactMap { minutesBefore($0, start: due) }
+    alarms.filter(isTimedAlarm).compactMap { minutesBefore($0, start: due) }.sorted(by: >)
+}
+
+/// An alarm that fires at a time, not on arriving at or leaving a place.
+func isTimedAlarm(_ alarm: EKAlarm) -> Bool {
+    alarm.structuredLocation == nil && alarm.proximity == .none
 }
 
 /// When a reminder is due. date and time are as kept in the reminder; at is the moment, nil for date only.
