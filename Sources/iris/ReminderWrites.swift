@@ -237,7 +237,7 @@ struct UpdateReminder: AsyncParsableCommand {
         // Worked out before anything changes, so a refusal leaves the reminder as it was.
         let timed = (reminder.alarms ?? []).filter(isTimedAlarm)
         let newTimed = try newTimedAlarms(timed, currentDue: reminderDue(reminder.dueDateComponents, mac: mac)?.at,
-                                          dueParts: dueParts, mac: mac)
+                                          dueParts: dueParts, repeats: repeats, mac: mac)
 
         if let title { reminder.title = title }
         if let notes { reminder.notes = notes.isEmpty ? nil : notes }
@@ -268,14 +268,14 @@ struct UpdateReminder: AsyncParsableCommand {
 
     /// The timed alarms that take the place of `timed`, or nil to leave them as they are.
     private func newTimedAlarms(_ timed: [EKAlarm], currentDue: Date?, dueParts: DateComponents?,
-                                mac: Calendar) throws -> [EKAlarm]? {
+                                repeats: Bool, mac: Calendar) throws -> [EKAlarm]? {
         if noAlarms { return [] }
         let newDue = due == nil ? currentDue : dueParts.flatMap { reminderDue($0, mac: mac)?.at }
         if !alarms.isEmpty {
             // validate() refused a --due without a time, so only the current due can lack one here.
             guard let newDue else {
                 throw IrisError("this reminder's due has no time, so --alarm has nothing to count from, and nothing "
-                    + "was changed. Pass --due with a time too.")
+                    + "was changed. " + (repeats ? "Give it a time in Reminders first." : "Pass --due with a time too."))
             }
             return reminderAlarms(alarms, due: newDue)
         }
